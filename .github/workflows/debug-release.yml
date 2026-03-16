@@ -1,0 +1,57 @@
+name: Build and Release Debug APK
+
+on:
+  push:
+    branches:
+      - main # Change this if your primary branch has a different name (e.g., 'master')
+
+permissions:
+  contents: write # Required to allow the action to create a GitHub Release
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17' # Ensure this matches the Java version used in your project
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Extract Version from Manifest
+        id: extract_version
+        run: |
+          # Grabs the versionName attribute from the standard app manifest location
+          MANIFEST_PATH="app/src/main/AndroidManifest.xml"
+          
+          if [ -f "$MANIFEST_PATH" ]; then
+            VERSION_NAME=$(grep -oP 'versionName="\K[^"]+' "$MANIFEST_PATH" | head -1)
+          fi
+          
+          # Fallback in case the file is missing or the attribute isn't found
+          if [ -z "$VERSION_NAME" ]; then
+            VERSION_NAME="Unknown"
+          fi
+          
+          echo "version=$VERSION_NAME" >> $GITHUB_OUTPUT
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Create or Update Debug Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: debug
+          name: ForgeApp
+          body: "Version: ${{ steps.extract_version.outputs.version }}"
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
