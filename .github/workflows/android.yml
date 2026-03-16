@@ -1,0 +1,46 @@
+name: Android Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # This triggers the action ONLY when you push a tag starting with 'v' (e.g., v1.0.0)
+
+jobs:
+  build-and-release:
+    name: Build APK and Create Release
+    runs-on: ubuntu-latest
+
+    # This permission block is required so GitHub Actions can create the release
+    permissions:
+      contents: write 
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Gradle packages
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build APK (Debug)
+        # Note: We build 'assembleDebug' because it signs the APK automatically with a debug key,
+        # making it instantly installable. If you use 'assembleRelease', you must configure Keystore secrets.
+        run: ./gradlew assembleDebug
+
+      - name: Rename APK file
+        # Optional: Renames the file so it looks professional in the release page
+        run: mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/ForgeGen-${{ github.ref_name }}.apk
+
+      - name: Create GitHub Release and Upload APK
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/ForgeGen-${{ github.ref_name }}.apk
+          generate_release_notes: true # Automatically lists PRs and commits in the release body
