@@ -52,7 +52,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
-    private var client = createClient(_config.value.connectionTimeout)
+    private var client = createClient(_config.value.connectionTimeout, _config.value)
 
     private val _appState = MutableStateFlow(loadState())
     val appState: StateFlow<AppState> = _appState.asStateFlow()
@@ -138,7 +138,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
-    private fun createClient(timeoutSeconds: Int): OkHttpClient {
+    private fun createClient(timeoutSeconds: Int, currentConfig: AppConfig): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
@@ -146,12 +146,14 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
 
-                val isGalleryCall = originalRequest.url.encodedPath.contains("infinite_image_browsing")
+                if (currentConfig.serverUsername.isNotEmpty() && currentConfig.serverPassword.isNotEmpty()) {
+                    val credentials = "${currentConfig.serverUsername}:${currentConfig.serverPassword}"
+                    val basicAuth = "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
+                    requestBuilder.header("Authorization", basicAuth)
+                }
 
                 // Inject Hardcoded IIB Secret Key specifically for gallery endpoints as a Cookie
-                if (isGalleryCall) {
-                    requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                }
+                requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
 
                 val finalRequest = requestBuilder.build()
                 chain.proceed(finalRequest)
@@ -168,6 +170,8 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             galleryPath = parsed?.galleryPath ?: "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
+            serverUsername = parsed?.serverUsername ?: "",
+            serverPassword = parsed?.serverPassword ?: "",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
             silentNotifications = parsed?.silentNotifications ?: false,
@@ -193,7 +197,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         val updatedConfig = newConfig.copy(apiUrl = cleanUrl)
         _config.value = updatedConfig
         prefs.edit().putString("config", gson.toJson(updatedConfig)).apply()
-        client = createClient(updatedConfig.connectionTimeout)
+        client = createClient(updatedConfig.connectionTimeout, updatedConfig)
     }
 
     fun getPreviewUrl(path: String): String {

@@ -11,6 +11,8 @@ data class ServerProfile(
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
+    var serverUsername: String = "",
+    var serverPassword: String = "",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
     var silentNotifications: Boolean = false,
@@ -37,7 +39,7 @@ data class AppState(
     var height: Int = 512,
     var batchSize: Int = 1,
     var clipSkip: Int = 1,
-    var seed: Long = -1,
+    var seed: Long = -1L,
     var sampler: String = "Euler a",
     var scheduler: String = "Automatic",
     var hiresFix: Boolean = false,

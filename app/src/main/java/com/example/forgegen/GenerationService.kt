@@ -41,8 +41,15 @@ class GenerationService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == "ACTION_EXIT") {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
             stopSelf()
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.cancel(notificationId)
             android.os.Process.killProcess(android.os.Process.myPid())
             return START_NOT_STICKY
         }
@@ -152,8 +159,10 @@ class GenerationService : Service() {
         }
         val openPendingIntent = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val exitIntent = Intent("ACTION_EXIT_APP").setPackage(this.packageName)
-        val exitPendingIntent = PendingIntent.getBroadcast(this, 1, exitIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val exitIntent = Intent(this, GenerationService::class.java).apply {
+            action = "ACTION_EXIT"
+        }
+        val exitPendingIntent = PendingIntent.getService(this, 1, exitIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
         val settingsIntent = Intent(this, MainActivity::class.java).apply {
             action = "ACTION_OPEN_SETTINGS"

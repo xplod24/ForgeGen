@@ -675,6 +675,8 @@ fun SetupScreen(
 
     var url by remember(config.apiUrl) { mutableStateOf(config.apiUrl) }
     var path by remember(config.galleryPath) { mutableStateOf(config.galleryPath) }
+    var username by remember(config.serverUsername) { mutableStateOf(config.serverUsername) }
+    var password by remember(config.serverPassword) { mutableStateOf(config.serverPassword) }
     var timeout by remember(config.connectionTimeout) { mutableStateOf(config.connectionTimeout.toString()) }
 
     var apiTestStatus by remember { mutableStateOf<String?>(null) }
@@ -762,7 +764,21 @@ fun SetupScreen(
                             }
                         }
                     )
-
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("Gradio Username (Optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Gradio Password (Optional)") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Gallery Server Path") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
@@ -944,7 +960,18 @@ fun SetupScreen(
                         apiTestResults = emptyList()
 
                         scope.launch(Dispatchers.IO) {
-                            val client = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).build()
+                            val testClientBuilder = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS)
+                            testClientBuilder.addInterceptor { chain ->
+                                val reqBuilder = chain.request().newBuilder()
+                                if (username.isNotEmpty() && password.isNotEmpty()) {
+                                    val creds = "$username:$password"
+                                    val basic = "Basic " + Base64.encodeToString(creds.toByteArray(), Base64.NO_WRAP)
+                                    reqBuilder.header("Authorization", basic)
+                                }
+                                reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                                chain.proceed(reqBuilder.build())
+                            }
+                            val testClient = testClientBuilder.build()
                             val endpoints = listOf("sd-models", "samplers", "schedulers", "upscalers", "loras", "options")
                             val results = mutableListOf<Pair<String, String>>()
                             var allSuccess = true
@@ -956,7 +983,7 @@ fun SetupScreen(
                                     if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) cleanUrl = "http://$cleanUrl"
 
                                     val req = Request.Builder().url("$cleanUrl/sdapi/v1/$ep").build()
-                                    client.newCall(req).execute().use { res ->
+                                    testClient.newCall(req).execute().use { res ->
                                         val time = System.currentTimeMillis() - start
                                         if (res.isSuccessful) {
                                             results.add(ep to "${time}ms \u2714")
@@ -990,6 +1017,8 @@ fun SetupScreen(
                         val updateObj = config.copy(
                             apiUrl = url,
                             galleryPath = path,
+                            serverUsername = username,
+                            serverPassword = password,
                             connectionTimeout = timeout.toIntOrNull() ?: 10
                         )
                         viewModel.saveConfig(updateObj)
