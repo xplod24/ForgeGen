@@ -3,13 +3,28 @@ package com.yourname.forgegen
 import com.google.gson.annotations.SerializedName
 
 // --- CORE CONFIGURATION ---
+data class ServerProfile(
+    val name: String,
+    val url: String
+)
+
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
-    var updateServerUrl: String = "http://localhost/update",
-    var silentNotifications: Boolean = false
+    var silentNotifications: Boolean = false,
+    var notificationVerbosity: String = "Full",
+    var keepScreenOn: Boolean = false,
+    var useDynamicColor: Boolean = true,
+    var swipeToBrowseGallery: Boolean = true,
+    var galleryGridColumns: Int = 3,
+    var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
+    var livePreviews: Boolean = false,
+    var useBiometricLock: Boolean = false,
+    var overnightMode: Boolean = false,
+    var autoIndexGallery: Boolean = false,
+    var showGridAfterGeneration: Boolean = true
 )
 
 // --- GENERATION STATE ---
@@ -31,7 +46,20 @@ data class AppState(
     var upscaler: String = "Latent"
 )
 
+// --- PROMPT HISTORY ---
+data class PromptHistoryItem(
+    val positivePrompt: String,
+    val negativePrompt: String,
+    val timestamp: Long
+)
+
 // --- API PAYLOADS ---
+data class ApiResource(
+    val title: String,
+    val path: String,
+    val name: String
+)
+
 data class OverrideSettings(
     @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int
 )

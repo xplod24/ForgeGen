@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -34,8 +35,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import org.luaj.vm2.lib.jse.CoerceJavaToLua
-import org.luaj.vm2.lib.jse.JsePlatform
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -49,13 +48,17 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
     private val prefs = application.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE)
     private val gson = Gson()
-    private var client = createClient(10)
 
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
+    private var client = createClient(_config.value.connectionTimeout)
+
     private val _appState = MutableStateFlow(loadState())
     val appState: StateFlow<AppState> = _appState.asStateFlow()
+
+    private val _promptHistory = MutableStateFlow(loadPromptHistory())
+    val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
 
     val activeLoras: StateFlow<List<ActiveLora>> = _appState.map { state ->
         val regex = Regex("<lora:([^:]+):([0-9.]+)>")
@@ -94,11 +97,15 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     private val _selectedModel = MutableStateFlow("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
 
+    private val _selectedVae = MutableStateFlow("")
+    val selectedVae: StateFlow<String> = _selectedVae.asStateFlow()
+
     val samplers = MutableStateFlow<List<String>>(emptyList())
     val schedulers = MutableStateFlow<List<String>>(emptyList())
-    val models = MutableStateFlow<List<String>>(emptyList())
+    val vaes = MutableStateFlow<List<String>>(emptyList())
+    val models = MutableStateFlow<List<ApiResource>>(emptyList())
     val upscalers = MutableStateFlow<List<String>>(emptyList())
-    val availableLoras = MutableStateFlow<List<String>>(emptyList())
+    val availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
 
     private val _galleryFiles = MutableStateFlow<List<GalleryItem>>(emptyList())
     val galleryFiles: StateFlow<List<GalleryItem>> = _galleryFiles.asStateFlow()
@@ -118,57 +125,16 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     private val _currentImageMetadata = MutableStateFlow<String?>(null)
     val currentImageMetadata: StateFlow<String?> = _currentImageMetadata.asStateFlow()
 
-    // Lua Plugins State
-    private val _plugins = MutableStateFlow<List<String>>(emptyList())
-    val plugins: StateFlow<List<String>> = _plugins.asStateFlow()
-
-    private var activeLuaGlobals: org.luaj.vm2.Globals? = null
-    private var activeLuaChunk: org.luaj.vm2.LuaValue? = null
-
-    private val _loadedPluginName = MutableStateFlow<String?>(null)
-    val loadedPluginName: StateFlow<String?> = _loadedPluginName.asStateFlow()
-
-    // Logcat State
-    private val _appLogs = MutableStateFlow<List<String>>(emptyList())
-    val appLogs: StateFlow<List<String>> = _appLogs.asStateFlow()
-
     init {
         updateDispatcher()
         ForgeState.logServer("Initializing ForgeGen App...")
         startBackgroundPing()
-        startLogcatReader()
         fetchApiData()
         loadTags()
         startQueueManager()
-        refreshPlugins()
-    }
 
-    private fun startLogcatReader() {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val pid = android.os.Process.myPid()
-                val process = Runtime.getRuntime().exec("logcat -v time --pid=$pid")
-                val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
-                var line: String?
-                val logBuffer = java.util.LinkedList<String>()
-
-                while (isActive) {
-                    line = reader.readLine()
-                    if (line != null) {
-                        logBuffer.add(line)
-                        if (logBuffer.size > 200) {
-                            logBuffer.removeFirst()
-                        }
-                        // Update UI seamlessly
-                        _appLogs.value = ArrayList(logBuffer)
-                    } else {
-                        delay(100)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Logcat Error", e)
-                _appLogs.value = listOf("Failed to read logcat: ${e.message}")
-            }
+        if (_config.value.autoIndexGallery) {
+            startIndexer()
         }
     }
 
@@ -176,19 +142,46 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         return OkHttpClient.Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
+            .addInterceptor { chain ->
+                val originalRequest = chain.request()
+                val requestBuilder = originalRequest.newBuilder()
+
+                val isGalleryCall = originalRequest.url.encodedPath.contains("infinite_image_browsing")
+
+                // Inject Hardcoded IIB Secret Key specifically for gallery endpoints as a Cookie
+                if (isGalleryCall) {
+                    requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                }
+
+                val finalRequest = requestBuilder.build()
+                chain.proceed(finalRequest)
+            }
             .build()
     }
 
     private fun loadConfig(): AppConfig {
         val json = prefs.getString("config", null)
-        val parsed = if (json != null) gson.fromJson(json, AppConfig::class.java) else null
+        val parsed = if (json != null) {
+            try { gson.fromJson(json, AppConfig::class.java) } catch(e: Exception) { null }
+        } else null
+
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             galleryPath = parsed?.galleryPath ?: "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
-            updateServerUrl = parsed?.updateServerUrl ?: "http://localhost/update",
-            silentNotifications = parsed?.silentNotifications ?: false
+            silentNotifications = parsed?.silentNotifications ?: false,
+            notificationVerbosity = parsed?.notificationVerbosity ?: "Full",
+            keepScreenOn = parsed?.keepScreenOn ?: false,
+            useDynamicColor = parsed?.useDynamicColor ?: true,
+            swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
+            galleryGridColumns = parsed?.galleryGridColumns ?: 3,
+            serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
+            livePreviews = parsed?.livePreviews ?: false,
+            useBiometricLock = parsed?.useBiometricLock ?: false,
+            overnightMode = parsed?.overnightMode ?: false,
+            autoIndexGallery = parsed?.autoIndexGallery ?: false,
+            showGridAfterGeneration = parsed?.showGridAfterGeneration ?: true
         )
     }
 
@@ -201,8 +194,31 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         _config.value = updatedConfig
         prefs.edit().putString("config", gson.toJson(updatedConfig)).apply()
         client = createClient(updatedConfig.connectionTimeout)
-        ForgeState.logServer("Configuration saved. API URL: $cleanUrl")
-        fetchApiData()
+    }
+
+    fun getPreviewUrl(path: String): String {
+        if (path.isEmpty()) return ""
+        val previewPath = path.substringBeforeLast(".") + ".png"
+        return "${config.value.apiUrl.trimEnd('/')}/file=$previewPath"
+    }
+
+    fun updateGalleryGridColumns(cols: Int) {
+        val newConfig = _config.value.copy(galleryGridColumns = cols)
+        _config.value = newConfig
+        prefs.edit().putString("config", gson.toJson(newConfig)).apply()
+    }
+
+    fun addServerProfile(name: String, url: String) {
+        val currentProfiles = _config.value.serverProfiles.toMutableList()
+        currentProfiles.removeAll { it.name == name } // Prevent duplicates by name
+        currentProfiles.add(ServerProfile(name, url))
+        saveConfig(_config.value.copy(serverProfiles = currentProfiles))
+    }
+
+    fun removeServerProfile(name: String) {
+        val currentProfiles = _config.value.serverProfiles.toMutableList()
+        currentProfiles.removeAll { it.name == name }
+        saveConfig(_config.value.copy(serverProfiles = currentProfiles))
     }
 
     private fun loadState(): AppState {
@@ -233,6 +249,40 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         prefs.edit().putString("last_state", gson.toJson(newState)).apply()
     }
 
+    private fun loadPromptHistory(): List<PromptHistoryItem> {
+        val json = prefs.getString("prompt_history", null)
+        if (json.isNullOrEmpty()) return emptyList()
+        return try {
+            val type = object : TypeToken<List<PromptHistoryItem>>() {}.type
+            gson.fromJson(json, type)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveToPromptHistory(positive: String, negative: String) {
+        if (positive.isBlank() && negative.isBlank()) return
+
+        val currentList = _promptHistory.value.toMutableList()
+        // Prevent duplicate consecutive histories
+        if (currentList.isNotEmpty() && currentList.first().positivePrompt == positive && currentList.first().negativePrompt == negative) {
+            return
+        }
+
+        val newItem = PromptHistoryItem(positive, negative, System.currentTimeMillis())
+        currentList.add(0, newItem)
+
+        // Keep max 20 items
+        val trimmedList = currentList.take(20)
+        _promptHistory.value = trimmedList
+        prefs.edit().putString("prompt_history", gson.toJson(trimmedList)).apply()
+    }
+
+    fun clearPromptHistory() {
+        _promptHistory.value = emptyList()
+        prefs.edit().remove("prompt_history").apply()
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun updateDispatcher() {
         workerDispatcher = if (_useMultiThreading.value) {
@@ -248,6 +298,122 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         updateDispatcher()
     }
 
+    fun resumeQueue() {
+        ForgeState.isQueuePaused.value = false
+        ForgeState.oomAlert.value = false
+        ForgeState.statusText.value = "Queue Resumed"
+        ForgeState.logServer("Queue manually resumed by user.")
+    }
+
+    fun startIndexer() {
+        if (ForgeState.indexerStatus.value.contains("Indexing")) return
+
+        viewModelScope.launch(workerDispatcher) {
+            ForgeState.indexerStatus.value = "Indexing Gallery..."
+            ForgeState.logServer("Started Background Metadata Indexer...")
+            try {
+                val urlStr = _config.value.apiUrl.trimEnd('/')
+                val rootPath = _config.value.galleryPath
+
+                fun fetchFiles(folder: String): List<GalleryItem> {
+                    val builder = urlStr.toHttpUrlOrNull()?.newBuilder()
+                        ?.addPathSegments("infinite_image_browsing/files")
+                    if (folder.isNotEmpty() && folder != "Root") {
+                        builder?.addQueryParameter("folder_path", folder)
+                    }
+                    val url = builder?.build() ?: return emptyList()
+
+                    client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                        val responseBody = response.body?.string() ?: ""
+
+                        if (response.isSuccessful) {
+                            return parseGalleryItems(responseBody)
+                        } else if (response.code == 400 && folder.isNotEmpty() && folder != "Root") {
+                            // Invalid path gracefully falls back to API root without crashing
+                            return fetchFiles("Root")
+                        } else {
+                            ForgeState.logServer("Indexer API failed: ${response.code}")
+                        }
+                    }
+                    return emptyList()
+                }
+
+                val rootItems = fetchFiles(rootPath)
+
+                val images = rootItems.filter { !it.isDir }
+                var addedCount = 0
+
+                for (item in images) {
+                    if (!isActive) break
+
+                    val imageUrl = getGalleryImageUrl(item)
+                    if (imageUrl.isEmpty()) continue
+
+                    // Parse the top 30 images to keep the indexer light
+                    if (images.indexOf(item) > 30) break
+
+                    var base64Img = ""
+                    client.newCall(Request.Builder().url(imageUrl).build()).execute().use { res ->
+                        if (res.isSuccessful) {
+                            val bytes = res.body?.bytes()
+                            if (bytes != null) base64Img = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                        }
+                    }
+
+                    if (base64Img.isNotEmpty()) {
+                        val payload = JSONObject().apply { put("image", "data:image/png;base64,$base64Img") }
+                        val body = payload.toString().toRequestBody("application/json".toMediaType())
+                        val infoReq = Request.Builder().url("$urlStr/sdapi/v1/png-info").post(body).build()
+
+                        client.newCall(infoReq).execute().use { infoRes ->
+                            if (infoRes.isSuccessful) {
+                                val infoJson = JSONObject(infoRes.body?.string() ?: "{}")
+                                val infoStr = infoJson.optString("info", "")
+
+                                var pos = ""
+                                var neg = ""
+                                var currentMode = 0
+                                for (line in infoStr.split("\n")) {
+                                    if (line.startsWith("Negative prompt:")) {
+                                        currentMode = 1
+                                        neg += line.substringAfter("Negative prompt:").trim() + "\n"
+                                    } else if (line.startsWith("Steps:")) {
+                                        break
+                                    } else {
+                                        if (currentMode == 0) pos += line + "\n"
+                                        else if (currentMode == 1) neg += line + "\n"
+                                    }
+                                }
+
+                                pos = pos.trim()
+                                neg = neg.trim()
+
+                                if (pos.isNotEmpty()) {
+                                    val history = _promptHistory.value
+                                    val isDuplicate = history.any { it.positivePrompt == pos && it.negativePrompt == neg }
+                                    if (!isDuplicate) {
+                                        val newItem = PromptHistoryItem(pos, neg, System.currentTimeMillis())
+                                        val updatedList = (listOf(newItem) + history).take(50)
+                                        withContext(Dispatchers.Main) {
+                                            _promptHistory.value = updatedList
+                                            prefs.edit().putString("prompt_history", gson.toJson(updatedList)).apply()
+                                        }
+                                        addedCount++
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    delay(500) // Sleep to prevent hammering
+                }
+                ForgeState.indexerStatus.value = "Idle (Added $addedCount new)"
+                ForgeState.logServer("Indexer finished. Added $addedCount unique prompts to history.")
+            } catch (e: Exception) {
+                ForgeState.indexerStatus.value = "Error: ${e.message}"
+            }
+        }
+    }
+
     // --- QUEUE MANAGER ---
     private fun startQueueManager() {
         viewModelScope.launch(workerDispatcher) {
@@ -256,8 +422,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     val queue = ForgeState.generationQueue.value
                     val isBusy = ForgeState.isServerBusy.value
                     val isGeneratingLocally = ForgeState.isGenerating.value
+                    val isPaused = ForgeState.isQueuePaused.value
 
-                    if (queue.isNotEmpty() && !isBusy && !isGeneratingLocally) {
+                    if (queue.isNotEmpty() && !isBusy && !isGeneratingLocally && !isPaused) {
                         val nextJob = queue.first()
                         ForgeState.isGenerating.value = true
                         executeGeneration(nextJob)
@@ -289,6 +456,8 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         ForgeState.generationQueue.update { it + item }
         ForgeState.logServer("Queued generation added: ${item.id}")
 
+        saveToPromptHistory(state.positivePrompt, state.negativePrompt)
+
         if (ForgeState.isServerBusy.value && !ForgeState.isGenerating.value) {
             Toast.makeText(application, "External generation active. Added to queue.", Toast.LENGTH_SHORT).show()
         } else if (ForgeState.isGenerating.value) {
@@ -306,7 +475,10 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         withContext(Dispatchers.Main) {
             _lastPromptState.value = _appState.value.copy()
             ForgeState.progress.value = 0f
-            // Verbose status text for the notification
+            ForgeState.currentEta.value = 0.0
+            ForgeState.livePreviewImage.value = null
+            ForgeState.isShowingGridPreview.value = false
+
             val previewText = job.positivePrompt.take(30).replace("\n", " ")
             ForgeState.statusText.value = "Generating: \"$previewText...\""
 
@@ -327,8 +499,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             ForgeState.logServer("Starting generation request (Payload ID: ${job.id}) to $url...")
 
             client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: "{}"
                 if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "{}")
+                    val json = JSONObject(responseBody)
                     val imagesArray = json.optJSONArray("images")
 
                     if (imagesArray != null && imagesArray.length() > 0) {
@@ -353,23 +526,51 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                             ForgeState.currentBatchEndIndex.value = endIndex
                             ForgeState.currentSessionIndex.value = endIndex
                             ForgeState.statusText.value = "Generation Complete"
+                            ForgeState.livePreviewImage.value = null
+
+                            if (_config.value.showGridAfterGeneration && imagesArray.length() > 1) {
+                                ForgeState.isShowingGridPreview.value = true
+                            }
                         }
                     } else {
                         ForgeState.logServer("API succeeded but returned no images.")
                     }
+
+                    withContext(Dispatchers.Main) { removeFromQueue(job.id) }
+
                 } else {
-                    ForgeState.logServer("Generation Failed: API returned code ${response.code}.")
-                    withContext(Dispatchers.Main) { ForgeState.statusText.value = "Error: ${response.code}" }
+                    if (response.code == 500 || responseBody.contains("OutOfMemoryError", true) || responseBody.contains("CUDA out of memory", true)) {
+                        ForgeState.logServer("CRITICAL OOM ERROR: Server ran out of memory. Pausing queue.")
+                        withContext(Dispatchers.Main) {
+                            ForgeState.statusText.value = "OOM Error - Queue Paused"
+                            ForgeState.isQueuePaused.value = true
+                            ForgeState.oomAlert.value = true
+                            removeFromQueue(job.id)
+                        }
+                    } else {
+                        ForgeState.logServer("Generation Failed: API returned code ${response.code}.")
+                        withContext(Dispatchers.Main) {
+                            ForgeState.statusText.value = "Error: ${response.code}"
+                            removeFromQueue(job.id)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
             ForgeState.logServer("Generation Exception: ${e.localizedMessage}")
-            withContext(Dispatchers.Main) { ForgeState.statusText.value = "Failed: ${e.localizedMessage}" }
+            withContext(Dispatchers.Main) {
+                ForgeState.statusText.value = "Failed: ${e.localizedMessage}"
+                if (!_config.value.overnightMode) {
+                    removeFromQueue(job.id)
+                } else {
+                    ForgeState.logServer("Overnight Mode Active: Kept failed job in queue to retry.")
+                }
+            }
         } finally {
             withContext(Dispatchers.Main) {
                 ForgeState.isGenerating.value = false
                 ForgeState.progress.value = 1f
-                removeFromQueue(job.id)
+                ForgeState.currentEta.value = 0.0
             }
         }
     }
@@ -382,7 +583,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     val url = _config.value.apiUrl.trimEnd('/')
                     if (url.isNotEmpty()) {
                         val start = System.currentTimeMillis()
-                        val request = Request.Builder().url("$url/sdapi/v1/progress?skip_current_image=true").build()
+                        val skipImage = !(_config.value.livePreviews)
+                        val request = Request.Builder().url("$url/sdapi/v1/progress?skip_current_image=$skipImage").build()
+
                         client.newCall(request).execute().use { response ->
                             if (response.isSuccessful) {
                                 _pingMs.value = System.currentTimeMillis() - start
@@ -393,13 +596,21 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                 if (body != null) {
                                     val json = JSONObject(body)
                                     val progressVal = json.optDouble("progress", 0.0).toFloat()
+                                    val etaVal = json.optDouble("eta_relative", 0.0)
                                     val stateObj = json.optJSONObject("state")
                                     val jobCount = stateObj?.optInt("job_count", 0) ?: 0
 
+                                    val currentImageStr = json.optString("current_image", "")
+                                    if (currentImageStr.isNotEmpty()) {
+                                        ForgeState.livePreviewImage.value = currentImageStr
+                                    } else {
+                                        if (!ForgeState.isGenerating.value) ForgeState.livePreviewImage.value = null
+                                    }
+
                                     val busy = progressVal > 0.001f || jobCount > 0
                                     ForgeState.isServerBusy.value = busy
-
                                     ForgeState.progress.value = progressVal
+                                    ForgeState.currentEta.value = etaVal
 
                                     if (busy && !ForgeState.isGenerating.value) {
                                         ForgeState.statusText.value = "External Task: ${(progressVal * 100).toInt()}%"
@@ -407,12 +618,19 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                         ForgeState.statusText.value = "Ready"
                                     }
                                 }
+                            } else if (response.code == 401 || response.code == 403) {
+                                _isConnected.value = false
+                                ForgeState.isServerBusy.value = false
+                                ForgeState.currentEta.value = 0.0
+                                failCount = 0
+                                ForgeState.statusText.value = "Auth Required (Check Settings)"
                             } else throw Exception("Bad Status")
                         }
                     }
                 } catch (e: Exception) {
                     _isConnected.value = false
                     ForgeState.isServerBusy.value = false
+                    ForgeState.currentEta.value = 0.0
                     failCount++
                     if (failCount == _config.value.connectionTimeout) {
                         ForgeState.logServer("Connection lost to server.")
@@ -530,6 +748,24 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
+    fun changeVae(vaeName: String) {
+        _selectedVae.value = vaeName
+        viewModelScope.launch(workerDispatcher) {
+            try {
+                val url = _config.value.apiUrl.trimEnd('/')
+                val payload = JSONObject().apply { put("sd_vae", vaeName) }
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val req = Request.Builder().url("$url/sdapi/v1/options").post(body).build()
+                client.newCall(req).execute().use { res ->
+                    if (res.isSuccessful) ForgeState.logServer("Successfully switched VAE to $vaeName")
+                    else ForgeState.logServer("Failed to switch VAE (Error: ${res.code})")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to switch VAE", e)
+            }
+        }
+    }
+
     fun appendLora(name: String) {
         val current = _appState.value.positivePrompt
         if (!current.contains("<lora:$name:")) {
@@ -591,115 +827,6 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
-    // --- LUA PLUGIN ENGINE ---
-
-    inner class ForgeLuaApi {
-        fun toast(msg: String) {
-            viewModelScope.launch(Dispatchers.Main) { Toast.makeText(application, msg, Toast.LENGTH_SHORT).show() }
-        }
-        fun setPositivePrompt(prompt: String) { updateState { it.copy(positivePrompt = prompt) } }
-        fun getPositivePrompt(): String = _appState.value.positivePrompt
-        fun setNegativePrompt(prompt: String) { updateState { it.copy(negativePrompt = prompt) } }
-        fun getNegativePrompt(): String = _appState.value.negativePrompt
-        fun setSteps(s: Int) { updateState { it.copy(steps = s) } }
-        fun queue() { viewModelScope.launch(Dispatchers.Main) { queueGeneration() } }
-    }
-
-    fun refreshPlugins() {
-        val pluginsDir = File(application.filesDir, "plugins")
-        if (pluginsDir.exists()) {
-            _plugins.value = pluginsDir.listFiles()?.filter { it.extension == "lua" }?.map { it.name } ?: emptyList()
-        }
-    }
-
-    fun importPlugin(uri: android.net.Uri, context: Context) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val pluginsDir = File(context.filesDir, "plugins")
-                if (!pluginsDir.exists()) pluginsDir.mkdirs()
-
-                var fileName = "plugin_${System.currentTimeMillis()}.lua"
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val displayNameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        if (displayNameIndex != -1) {
-                            val name = cursor.getString(displayNameIndex)
-                            if (name != null && name.endsWith(".lua")) fileName = name
-                        }
-                    }
-                }
-
-                val destFile = File(pluginsDir, fileName)
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    destFile.outputStream().use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                refreshPlugins()
-                ForgeState.logServer("Successfully imported Plugin: $fileName")
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Imported $fileName", Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) {
-                ForgeState.logServer("Failed to import plugin: ${e.message}")
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Failed to import plugin", Toast.LENGTH_SHORT).show() }
-            }
-        }
-    }
-
-    fun loadPluginIntoMemory(pluginName: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val pluginsDir = File(application.filesDir, "plugins")
-                val file = File(pluginsDir, pluginName)
-                if (!file.exists()) return@launch
-
-                val script = file.readText()
-                val globals = JsePlatform.standardGlobals()
-                val api = CoerceJavaToLua.coerce(ForgeLuaApi())
-                globals.set("forge", api)
-
-                val chunk = globals.load(script)
-
-                activeLuaGlobals = globals
-                activeLuaChunk = chunk
-                _loadedPluginName.value = pluginName
-
-                ForgeState.logServer("Plugin '$pluginName' loaded directly into engine memory.")
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Loaded $pluginName into memory", Toast.LENGTH_SHORT).show() }
-            } catch (e: Exception) {
-                Log.e(TAG, "Lua Load Error", e)
-                ForgeState.logServer("Lua Syntax/Load Error inside '$pluginName': ${e.message}")
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Lua Error: ${e.message}", Toast.LENGTH_LONG).show() }
-            }
-        }
-    }
-
-    fun executeLoadedPlugin() {
-        if (activeLuaChunk != null) {
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    activeLuaChunk?.call()
-                    ForgeState.logServer("Executed Lua Plugin: ${_loadedPluginName.value}")
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Executed ${_loadedPluginName.value}", Toast.LENGTH_SHORT).show() }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Lua Execution Error", e)
-                    ForgeState.logServer("Lua Exception during Execution: ${e.message}")
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Lua Execution Error: ${e.message}", Toast.LENGTH_LONG).show() }
-                }
-            }
-        } else {
-            Toast.makeText(application, "No script is currently loaded!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun unloadPlugin() {
-        val pluginStr = _loadedPluginName.value ?: "unknown"
-        activeLuaGlobals = null
-        activeLuaChunk = null
-        _loadedPluginName.value = null
-        ForgeState.logServer("Plugin '$pluginStr' unloaded from memory.")
-        Toast.makeText(application, "Plugin unloaded from memory", Toast.LENGTH_SHORT).show()
-    }
-
     private fun parseGalleryItems(json: String): List<GalleryItem> {
         val list = mutableListOf<GalleryItem>()
         if (json.isEmpty()) return list
@@ -711,7 +838,8 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 val fileList = gson.fromJson(json, GalleryFileList::class.java)
                 if (fileList?.files != null) list.addAll(fileList.files)
             } catch (e2: Exception) {
-                Log.e(TAG, "Failed to parse gallery items", e2)
+                Log.e(TAG, "Failed to parse gallery items. JSON: $json", e2)
+                ForgeState.logServer("Gallery Parsing Error: ${e2.localizedMessage}")
             }
         }
         return list
@@ -725,52 +853,66 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             try {
                 val urlStr = _config.value.apiUrl.trimEnd('/')
                 val rootPath = _config.value.galleryPath
+
+                fun fetchFiles(folder: String): List<GalleryItem> {
+                    val builder = urlStr.toHttpUrlOrNull()?.newBuilder()
+                        ?.addPathSegments("infinite_image_browsing/files")
+                    if (folder.isNotEmpty() && folder != "Root") {
+                        builder?.addQueryParameter("folder_path", folder)
+                    }
+                    val url = builder?.build() ?: return emptyList()
+
+                    client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                        val responseBody = response.body?.string() ?: ""
+                        if (response.isSuccessful) {
+                            return parseGalleryItems(responseBody)
+                        } else if (response.code == 400 && folder.isNotEmpty() && folder != "Root") {
+                            return fetchFiles("Root")
+                        } else {
+                            ForgeState.logServer("Recover API failed: ${response.code}")
+                        }
+                    }
+                    return emptyList()
+                }
+
+                val rootItems = fetchFiles(rootPath)
+                val currentDateStr = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+
                 var targetFile: GalleryItem? = null
+                val candidateImages = mutableListOf<GalleryItem>()
 
-                val rootUrl = urlStr.toHttpUrlOrNull()?.newBuilder()
-                    ?.addPathSegments("infinite_image_browsing/files")
-                    ?.addQueryParameter("folder_path", rootPath)
-                    ?.build() ?: throw Exception("Invalid URL")
-
-                var rootItems = emptyList<GalleryItem>()
-                client.newCall(Request.Builder().url(rootUrl).build()).execute().use { response ->
-                    if (response.isSuccessful) rootItems = parseGalleryItems(response.body?.string() ?: "")
+                // 1. Try to fetch images from today's folder
+                val todayFolder = rootItems.find { it.isDir && it.name == currentDateStr }
+                if (todayFolder != null) {
+                    candidateImages.addAll(fetchFiles(todayFolder.fullpath).filter { !it.isDir })
                 }
 
-                val rootImages = rootItems.filter { !it.isDir }
-                if (rootImages.isNotEmpty()) {
-                    targetFile = rootImages.maxWithOrNull(
-                        compareBy<GalleryItem> { it.name.substringBefore("-").toLongOrNull() ?: -1L }
-                            .thenBy { it.createdTime?.toDoubleOrNull() ?: 0.0 }
-                    )
-                }
-
-                if (targetFile == null) {
+                // 2. If today's folder doesn't exist or is empty, fallback to the most recent folder available
+                if (candidateImages.isEmpty()) {
                     val dateFolders = rootItems.filter { it.isDir }.sortedByDescending { it.name }
                     for (folder in dateFolders) {
-                        val folderUrl = urlStr.toHttpUrlOrNull()?.newBuilder()
-                            ?.addPathSegments("infinite_image_browsing/files")
-                            ?.addQueryParameter("folder_path", folder.fullpath)
-                            ?.build() ?: continue
-
-                        var folderItems = emptyList<GalleryItem>()
-                        client.newCall(Request.Builder().url(folderUrl).build()).execute().use { response ->
-                            if (response.isSuccessful) folderItems = parseGalleryItems(response.body?.string() ?: "")
-                        }
-
-                        val folderImages = folderItems.filter { !it.isDir }
+                        val folderImages = fetchFiles(folder.fullpath).filter { !it.isDir }
                         if (folderImages.isNotEmpty()) {
-                            targetFile = folderImages.maxWithOrNull(
-                                compareBy<GalleryItem> { it.name.substringBefore("-").toLongOrNull() ?: -1L }
-                                    .thenBy { it.createdTime?.toDoubleOrNull() ?: 0.0 }
-                            )
+                            candidateImages.addAll(folderImages)
                             break
                         }
                     }
                 }
 
+                // 3. If there are no folders at all, fallback to root images
+                if (candidateImages.isEmpty()) {
+                    candidateImages.addAll(rootItems.filter { !it.isDir })
+                }
+
+                // 4. Finally, select the image with the highest number in the first 5 characters of its name
+                if (candidateImages.isNotEmpty()) {
+                    targetFile = candidateImages.maxByOrNull { item ->
+                        item.name.take(5).toIntOrNull() ?: -1
+                    }
+                }
+
                 if (targetFile != null) {
-                    val imageUrl = getGalleryImageUrl(targetFile!!)
+                    val imageUrl = getGalleryImageUrl(targetFile)
                     if (imageUrl.isNotEmpty()) {
                         val imgReq = Request.Builder().url(imageUrl).build()
                         var base64Img = ""
@@ -929,22 +1071,55 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             val url = _config.value.apiUrl.trimEnd('/')
             if (url.isEmpty()) return@launch
             try {
-                listOf(
-                    Pair("samplers", samplers),
-                    Pair("schedulers", schedulers),
-                    Pair("sd-models", models),
-                    Pair("upscalers", upscalers),
-                    Pair("loras", availableLoras)
-                ).forEach { (endpoint, stateFlow) ->
+                listOf("samplers", "schedulers", "upscalers").forEach { endpoint ->
                     val request = Request.Builder().url("$url/sdapi/v1/$endpoint").build()
                     client.newCall(request).execute().use { res ->
                         if (res.isSuccessful) {
                             val array = JSONArray(res.body?.string() ?: "[]")
                             val list = mutableListOf<String>()
-                            val key = if (endpoint == "sd-models") "title" else "name"
-                            for (i in 0 until array.length()) list.add(array.getJSONObject(i).getString(key))
-                            stateFlow.value = list
+                            for (i in 0 until array.length()) list.add(array.getJSONObject(i).getString("name"))
+                            when(endpoint) {
+                                "samplers" -> samplers.value = list
+                                "schedulers" -> schedulers.value = list
+                                "upscalers" -> upscalers.value = list
+                            }
                         }
+                    }
+                }
+
+                val vaeReq = Request.Builder().url("$url/sdapi/v1/sd-vae").build()
+                client.newCall(vaeReq).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val array = JSONArray(res.body?.string() ?: "[]")
+                        val list = mutableListOf<String>("Automatic", "None")
+                        for (i in 0 until array.length()) list.add(array.getJSONObject(i).getString("model_name"))
+                        vaes.value = list
+                    }
+                }
+
+                val modelReq = Request.Builder().url("$url/sdapi/v1/sd-models").build()
+                client.newCall(modelReq).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val array = JSONArray(res.body?.string() ?: "[]")
+                        val list = mutableListOf<ApiResource>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            list.add(ApiResource(obj.getString("title"), obj.optString("filename"), obj.getString("model_name")))
+                        }
+                        models.value = list
+                    }
+                }
+
+                val loraReq = Request.Builder().url("$url/sdapi/v1/loras").build()
+                client.newCall(loraReq).execute().use { res ->
+                    if (res.isSuccessful) {
+                        val array = JSONArray(res.body?.string() ?: "[]")
+                        val list = mutableListOf<ApiResource>()
+                        for (i in 0 until array.length()) {
+                            val obj = array.getJSONObject(i)
+                            list.add(ApiResource(obj.getString("name"), obj.optString("path"), obj.getString("name")))
+                        }
+                        availableLoras.value = list
                     }
                 }
 
@@ -953,9 +1128,10 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     if (res.isSuccessful) {
                         val json = JSONObject(res.body?.string() ?: "{}")
                         _selectedModel.value = json.optString("sd_model_checkpoint", "")
+                        _selectedVae.value = json.optString("sd_vae", "Automatic")
                     }
                 }
-                ForgeState.logServer("Server Parameters synchronized (Models, Samplers, Settings)")
+                ForgeState.logServer("Server Parameters synchronized (Models, Samplers, VAEs, Settings)")
             } catch (e: Exception) {
                 ForgeState.logServer("Failed to synchronize API definitions: ${e.message}")
             }
@@ -969,38 +1145,52 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val baseUrlStr = _config.value.apiUrl.trimEnd('/')
-                val url = baseUrlStr.toHttpUrlOrNull()?.newBuilder()
+                val builder = baseUrlStr.toHttpUrlOrNull()?.newBuilder()
                     ?.addPathSegments("infinite_image_browsing/files")
-                    ?.addQueryParameter("folder_path", path)
-                    ?.build() ?: throw Exception("Invalid API URL format")
+
+                if (path.isNotEmpty() && path != "Root") {
+                    builder?.addQueryParameter("folder_path", path)
+                }
+
+                val url = builder?.build() ?: throw Exception("Invalid API URL format")
                 val request = Request.Builder().url(url).build()
 
                 client.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string() ?: ""
                     if (response.isSuccessful) {
-                        _galleryFiles.value = parseGalleryItems(response.body?.string() ?: "").sortedWith(compareBy({ !it.isDir }, { it.name }))
+                        _galleryFiles.value = parseGalleryItems(responseBody).sortedWith(compareBy({ !it.isDir }, { it.name }))
                         _currentGalleryPath.value = path
-                        ForgeState.logServer("Gallery path accessed: $path")
                     } else {
-                        _galleryError.value = "Server returned Error ${response.code}"
-                        ForgeState.logServer("Gallery request failed: Code ${response.code}")
+                        if (response.code == 400 && path.isNotEmpty() && path != "Root") {
+                            ForgeState.logServer("Gallery path '$path' returned 400. Falling back to Root.")
+                            fetchGalleryFolder("Root")
+                            return@launch
+                        } else if (response.code == 401 || response.code == 403) {
+                            _galleryError.value = "Authentication Required."
+                        } else {
+                            _galleryError.value = "Server returned Error ${response.code}"
+                        }
                     }
                 }
             } catch (e: Exception) {
                 _galleryError.value = e.message ?: "Failed to reach server."
-                ForgeState.logServer("Gallery Error: ${e.message}")
+            } finally {
+                _isGalleryLoading.value = false
             }
-            finally { _isGalleryLoading.value = false }
         }
     }
 
     fun getGalleryImageUrl(item: GalleryItem): String {
         val urlStr = _config.value.apiUrl.trimEnd('/')
-        val url = urlStr.toHttpUrlOrNull()?.newBuilder()
+        val builder = urlStr.toHttpUrlOrNull()?.newBuilder()
             ?.addPathSegments("infinite_image_browsing/file")
             ?.addQueryParameter("path", item.fullpath)
-            ?.addQueryParameter("t", item.date ?: "")
-            ?.build()
-        return url?.toString() ?: ""
+
+        if (!item.date.isNullOrEmpty()) {
+            builder?.addQueryParameter("t", item.date)
+        }
+
+        return builder?.build()?.toString() ?: ""
     }
 
     fun downloadImage(item: GalleryItem) {
@@ -1043,12 +1233,64 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
+    fun shareImage(item: GalleryItem, context: Context) {
+        viewModelScope.launch(workerDispatcher) {
+            try {
+                val url = getGalleryImageUrl(item)
+                if (url.isEmpty()) throw Exception("Invalid Gallery URL")
+
+                val request = Request.Builder().url(url).build()
+
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val bytes = response.body?.bytes() ?: throw Exception("Empty response body")
+                        val contentValues = ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, "Shared_${item.name}")
+                            put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen_Shared")
+                            }
+                        }
+
+                        val resolver = context.contentResolver
+                        val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        val uri = resolver.insert(insertUri, contentValues)
+
+                        if (uri != null) {
+                            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+
+                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "image/png"
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            withContext(Dispatchers.Main) {
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
+                            }
+                        } else throw Exception("Failed to prepare file for sharing")
+                    } else throw Exception("Server returned ${response.code}")
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Share Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
+    fun dismissGridPreview(index: Int? = null) {
+        ForgeState.isShowingGridPreview.value = false
+        if (index != null && index in 0 until ForgeState.sessionImages.value.size) {
+            ForgeState.currentSessionIndex.value = index
+        }
+    }
+
     fun sessionPrev() {
+        ForgeState.isShowingGridPreview.value = false
         val idx = ForgeState.currentSessionIndex.value
         if (idx > ForgeState.currentBatchStartIndex.value) ForgeState.currentSessionIndex.value = idx - 1
     }
 
     fun sessionNext() {
+        ForgeState.isShowingGridPreview.value = false
         val idx = ForgeState.currentSessionIndex.value
         if (idx < ForgeState.currentBatchEndIndex.value) ForgeState.currentSessionIndex.value = idx + 1
     }

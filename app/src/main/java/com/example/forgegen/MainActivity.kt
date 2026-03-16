@@ -1,31 +1,52 @@
 package com.yourname.forgegen
 
 import android.Manifest
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.hardware.biometrics.BiometricPrompt
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.util.Base64
+import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,6 +57,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -44,19 +67,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
@@ -72,12 +101,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.io.File
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 import kotlin.system.exitProcess
-
-const val APP_VERSION = "1"
 
 class MainActivity : ComponentActivity() {
 
@@ -109,7 +137,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Trigger persistent background service immediately on app launch
         val serviceIntent = Intent(this, GenerationService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)
@@ -127,6 +154,51 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: ForgeViewModel = viewModel()
             val config by viewModel.config.collectAsState()
+            val appState by viewModel.appState.collectAsState()
+            val activity = LocalContext.current as Activity
+
+            var isUnlocked by remember { mutableStateOf(!config.useBiometricLock) }
+
+            if (!isUnlocked) {
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.White)
+                        Spacer(Modifier.height(16.dp))
+                        Text("App Locked", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Spacer(Modifier.height(32.dp))
+                        Button(onClick = {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                val prompt = BiometricPrompt.Builder(activity)
+                                    .setTitle("ForgeGen is Locked")
+                                    .setNegativeButton("Cancel", activity.mainExecutor) { _, _ -> }
+                                    .build()
+                                prompt.authenticate(
+                                    CancellationSignal(),
+                                    activity.mainExecutor,
+                                    object : BiometricPrompt.AuthenticationCallback() {
+                                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
+                                            isUnlocked = true
+                                        }
+                                    }
+                                )
+                            } else {
+                                isUnlocked = true
+                            }
+                        }) {
+                            Text("Tap to Unlock")
+                        }
+                    }
+                }
+                return@setContent
+            }
+
+            LaunchedEffect(config.keepScreenOn) {
+                if (config.keepScreenOn) {
+                    activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
 
             val isOnline by currentConnectivityStatus(this)
             val isConnected by viewModel.isConnected.collectAsState()
@@ -138,12 +210,15 @@ class MainActivity : ComponentActivity() {
             val progress by viewModel.progress.collectAsState()
             val status by viewModel.statusText.collectAsState()
             val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsState()
+            val currentEta by ForgeState.currentEta.collectAsState()
 
             val context = LocalContext.current
             val prefs = remember { context.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE) }
 
             val isSamsungDevice = remember { Build.MANUFACTURER.equals("samsung", ignoreCase = true) }
             var useSamsungTheme by remember { mutableStateOf(prefs.getBoolean("use_samsung_theme", isSamsungDevice)) }
+
+            val useDynamicColor = config.useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
 
             val aospColorScheme = if (config.isDarkMode) darkColorScheme() else lightColorScheme()
 
@@ -198,9 +273,14 @@ class MainActivity : ComponentActivity() {
                 extraLarge = RoundedCornerShape(32.dp)
             )
 
-            val finalColorScheme = if (isSamsungDevice && useSamsungTheme) samsungColorScheme else aospColorScheme
-            val finalTypography = if (isSamsungDevice && useSamsungTheme) samsungTypography else appTypography
-            val finalShapes = if (isSamsungDevice && useSamsungTheme) samsungShapes else MaterialTheme.shapes
+            val finalColorScheme = when {
+                useDynamicColor -> if (config.isDarkMode) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+                isSamsungDevice && useSamsungTheme -> samsungColorScheme
+                else -> aospColorScheme
+            }
+
+            val finalTypography = if (isSamsungDevice && useSamsungTheme && !useDynamicColor) samsungTypography else appTypography
+            val finalShapes = if (isSamsungDevice && useSamsungTheme && !useDynamicColor) samsungShapes else MaterialTheme.shapes
 
             if (Build.VERSION.SDK_INT >= 33) {
                 val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -216,75 +296,6 @@ class MainActivity : ComponentActivity() {
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
             val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "terminal"
-
-            LaunchedEffect(isOnline, isConnected, isGenerating, progress, status, isRestoringPrompt, isSessionActive, isServerBusy, generationQueue, config.silentNotifications) {
-                if (!isGenerating) delay(2100)
-
-                if (ContextCompat.checkSelfPermission(context, "android.permission.POST_NOTIFICATIONS") == PackageManager.PERMISSION_GRANTED) {
-                    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-
-                    val channelId = if (config.silentNotifications) "GenerationChannelSilent" else "GenerationChannelAlert"
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        val silentChannel = android.app.NotificationChannel("GenerationChannelSilent", "App Status (Silent)", android.app.NotificationManager.IMPORTANCE_LOW)
-                        val alertChannel = android.app.NotificationChannel("GenerationChannelAlert", "App Status (Alerts)", android.app.NotificationManager.IMPORTANCE_DEFAULT)
-                        manager.createNotificationChannel(silentChannel)
-                        manager.createNotificationChannel(alertChannel)
-                    }
-
-                    val notifTitle = if (isGenerating || isServerBusy) "Forge Generator - Working" else "Forge Generator"
-
-                    val notifText = when {
-                        !isOnline -> "No Internet Connection! Check your network settings."
-                        !isConnected && !isServerBusy -> "Server Offline or Unreachable. Please check the API URL or server status."
-                        isRestoringPrompt -> "Restoring generation details from local image..."
-                        isServerBusy && !isGenerating -> "External generation in progress on the server... (${(progress * 100).toInt()}%)"
-                        isGenerating -> "$status" + if (generationQueue.isNotEmpty()) "\nQueued: ${generationQueue.size} items waiting." else ""
-                        generationQueue.isNotEmpty() -> "Ready - Queued: ${generationQueue.size} items waiting to be processed."
-                        !isSessionActive -> "Configuring Settings... App is active in background."
-                        else -> "Ready - Connected to server and waiting for prompts."
-                    }
-
-                    val max = 100
-                    val progInt = if (isGenerating) (progress * 100).toInt() else if (isServerBusy && !isGenerating) (progress * 100).toInt() else 0
-                    val isActivelyGenerating = isGenerating || isServerBusy
-
-                    val openIntent = Intent(context, MainActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    }
-                    val openPendingIntent = android.app.PendingIntent.getActivity(context, 0, openIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
-
-                    val exitIntent = Intent("ACTION_EXIT_APP").setPackage(context.packageName)
-                    val exitPendingIntent = android.app.PendingIntent.getBroadcast(context, 1, exitIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
-
-                    val settingsIntent = Intent(context, MainActivity::class.java).apply {
-                        action = "ACTION_OPEN_SETTINGS"
-                        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    }
-                    val settingsPendingIntent = android.app.PendingIntent.getActivity(context, 2, settingsIntent, android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE)
-
-                    val builder = androidx.core.app.NotificationCompat.Builder(context, channelId)
-                        .setContentTitle(notifTitle)
-                        .setContentText(notifText)
-                        .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(notifText))
-                        .setSmallIcon(android.R.drawable.ic_menu_preferences)
-                        .setOngoing(isActivelyGenerating || generationQueue.isNotEmpty())
-                        .setOnlyAlertOnce(true)
-                        .setContentIntent(openPendingIntent)
-                        .setDeleteIntent(exitPendingIntent)
-                        .addAction(android.R.drawable.ic_menu_view, "Open App", openPendingIntent)
-                        .addAction(android.R.drawable.ic_menu_preferences, "Settings", settingsPendingIntent)
-                        .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Exit App", exitPendingIntent)
-
-                    if (isActivelyGenerating) {
-                        builder.setProgress(max, progInt, progInt == 0)
-                    } else {
-                        builder.setProgress(0, 0, false)
-                    }
-
-                    manager.notify(1001, builder.build())
-                }
-            }
 
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
 
@@ -328,6 +339,17 @@ class MainActivity : ComponentActivity() {
                                         Spacer(Modifier.height(8.dp))
                                         Text("Make sure your API server is running.", textAlign = TextAlign.Center)
                                     }
+
+                                    Spacer(modifier = Modifier.height(16.dp))
+
+                                    Button(
+                                        onClick = { navController.navigate("setup") },
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                    ) {
+                                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Open Settings")
+                                    }
                                 }
                             }
                         }
@@ -340,8 +362,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(exitReceiver)
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        manager.cancel(1001)
     }
 }
 
@@ -407,15 +427,21 @@ fun checkConnectivity(connectivityManager: ConnectivityManager): Boolean {
 }
 
 @Composable
-fun ExpandableSection(title: String, initiallyExpanded: Boolean = false, content: @Composable () -> Unit) {
-    var expanded by remember { mutableStateOf(initiallyExpanded) }
+fun ExpandableSection(title: String, prefKey: String, initiallyExpanded: Boolean = false, content: @Composable () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE) }
+    var expanded by remember { mutableStateOf(prefs.getBoolean("expandable_$prefKey", initiallyExpanded)) }
+
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(MaterialTheme.shapes.medium)
                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                .clickable { expanded = !expanded }
+                .clickable {
+                    expanded = !expanded
+                    prefs.edit().putBoolean("expandable_$prefKey", expanded).apply()
+                }
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -430,6 +456,179 @@ fun ExpandableSection(title: String, initiallyExpanded: Boolean = false, content
         AnimatedVisibility(visible = expanded) {
             Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 content()
+            }
+        }
+    }
+}
+
+@Composable
+fun UndoRedoTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+    minLines: Int = 1,
+    maxLines: Int = Int.MAX_VALUE,
+    onClear: () -> Unit
+) {
+    var history by remember { mutableStateOf(listOf(value)) }
+    var historyIndex by remember { mutableStateOf(0) }
+
+    LaunchedEffect(value) {
+        if (history.isEmpty() || history[historyIndex] != value) {
+            val newHistory = history.take(historyIndex + 1) + value
+            history = newHistory
+            historyIndex = newHistory.size - 1
+        }
+    }
+
+    Column(modifier = modifier) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            IconButton(
+                onClick = {
+                    if (historyIndex > 0) {
+                        historyIndex--
+                        onValueChange(history[historyIndex])
+                    }
+                },
+                enabled = historyIndex > 0,
+                modifier = Modifier.size(32.dp)
+            ) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo", Modifier.size(18.dp)) }
+
+            IconButton(
+                onClick = {
+                    if (historyIndex < history.size - 1) {
+                        historyIndex++
+                        onValueChange(history[historyIndex])
+                    }
+                },
+                enabled = historyIndex < history.size - 1,
+                modifier = Modifier.size(32.dp)
+            ) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo", Modifier.size(18.dp)) }
+        }
+
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                if (it != value) {
+                    val newHistory = history.take(historyIndex + 1) + it
+                    history = newHistory
+                    historyIndex = newHistory.size - 1
+                    onValueChange(it)
+                }
+            },
+            label = label,
+            minLines = minLines,
+            maxLines = maxLines,
+            modifier = Modifier.fillMaxWidth(),
+            trailingIcon = {
+                if (value.isNotEmpty()) {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MetadataAlertDialog(
+    metadata: String?,
+    onDismiss: () -> Unit,
+    onApplyPrompt: (String, String) -> Unit,
+    onApplyModel: (String) -> Unit,
+    onApplyLoras: (List<String>) -> Unit,
+    onApplyAll: (() -> Unit)? = null
+) {
+    var posPrompt = ""
+    var negPrompt = ""
+    var modelName = ""
+    val loras = mutableListOf<String>()
+
+    if (metadata != null && !metadata.startsWith("Loading") && !metadata.startsWith("Failed") && !metadata.startsWith("Invalid") && !metadata.startsWith("Server")) {
+        val lines = metadata.split("\n")
+        var currentMode = 0
+        for (line in lines) {
+            if (line.startsWith("Negative prompt:")) {
+                currentMode = 1
+                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
+            } else if (line.startsWith("Steps:")) {
+                currentMode = 2
+                val params = line.split(",")
+                params.forEach { p ->
+                    val kv = p.split(":")
+                    if (kv.size >= 2 && kv[0].trim() == "Model") {
+                        modelName = kv[1].trim()
+                    }
+                }
+            } else {
+                if (currentMode == 0) posPrompt += line + "\n"
+                else if (currentMode == 1) negPrompt += line + "\n"
+            }
+        }
+        posPrompt = posPrompt.trim()
+        negPrompt = negPrompt.trim()
+
+        val loraRegex = Regex("<lora:([^:]+):([0-9.]+)>")
+        loraRegex.findAll(posPrompt).forEach { match ->
+            loras.add(match.value)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Generation Data", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
+
+                Box(modifier = Modifier.weight(1f, fill = false).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
+                    Text(
+                        text = metadata ?: "Loading...",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    )
+                }
+
+                if (metadata != null && posPrompt.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (onApplyAll != null) {
+                            Button(onClick = onApplyAll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Apply All", fontSize = 12.sp)
+                            }
+                        }
+
+                        OutlinedButton(onClick = { onApplyPrompt(posPrompt, negPrompt) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                            Text("Prompt", fontSize = 12.sp)
+                        }
+
+                        if (modelName.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyModel(modelName) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Model", fontSize = 12.sp)
+                            }
+                        }
+
+                        if (loras.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyLoras(loras) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Close")
+                }
             }
         }
     }
@@ -455,7 +654,7 @@ fun AppNavigation(
         }
     }
 
-    NavHost(navController = navController, startDestination = "setup") {
+    NavHost(navController = navController, startDestination = "main") {
         composable("setup") { SetupScreen(viewModel, navController, isSamsung, useSamsungTheme, onThemeChange) }
         composable("main") { MainScreen(viewModel, navController, isSamsung && useSamsungTheme) }
         composable("gallery") { GalleryScreen(viewModel, navController) }
@@ -473,24 +672,20 @@ fun SetupScreen(
     onThemeChange: (Boolean) -> Unit
 ) {
     val config by viewModel.config.collectAsState()
-    val useMultiThreading by viewModel.useMultiThreading.collectAsState()
 
-    var url by remember { mutableStateOf(config.apiUrl) }
-    var path by remember { mutableStateOf(config.galleryPath) }
-    var timeout by remember { mutableStateOf(config.connectionTimeout.toString()) }
-    var updateServerUrl by remember { mutableStateOf(config.updateServerUrl) }
-
-    var isDark by remember { mutableStateOf(config.isDarkMode) }
-    var silentNotifications by remember { mutableStateOf(config.silentNotifications) }
+    var url by remember(config.apiUrl) { mutableStateOf(config.apiUrl) }
+    var path by remember(config.galleryPath) { mutableStateOf(config.galleryPath) }
+    var timeout by remember(config.connectionTimeout) { mutableStateOf(config.connectionTimeout.toString()) }
 
     var apiTestStatus by remember { mutableStateOf<String?>(null) }
     var apiTestResults by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
-    var updateResult by remember { mutableStateOf<String?>(null) }
-    var apkUrlToDownload by remember { mutableStateOf<String?>(null) }
-
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    var newProfileName by remember { mutableStateOf("") }
+    var showAddProfileDialog by remember { mutableStateOf(false) }
+    var profileExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -503,10 +698,14 @@ fun SetupScreen(
                     }
                 },
                 navigationIcon = {
-                    if (navController.previousBackStackEntry != null) {
-                        IconButton(onClick = { navController.popBackStack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = {
+                        if (navController.previousBackStackEntry != null) {
+                            navController.popBackStack()
+                        } else {
+                            navController.navigate("main") { popUpTo(0) }
                         }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -515,48 +714,181 @@ fun SetupScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
 
-            Text("Connection Parameters", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
+            ExpandableSection("Connection & Server Profiles", "setup_connection", true) {
+                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        OutlinedButton(
+                            onClick = { profileExpanded = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text("Saved Profiles \u25BC", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        DropdownMenu(
+                            expanded = profileExpanded,
+                            onDismissRequest = { profileExpanded = false },
+                            modifier = Modifier.fillMaxWidth(0.9f)
+                        ) {
+                            config.serverProfiles.forEach { profile ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(profile.name, fontWeight = FontWeight.Bold)
+                                            Text(profile.url, fontSize = 10.sp, color = Color.Gray)
+                                        }
+                                    },
+                                    onClick = {
+                                        url = profile.url
+                                        profileExpanded = false
+                                    },
+                                    trailingIcon = {
+                                        IconButton(onClick = { viewModel.removeServerProfile(profile.name) }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete Profile", tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
 
-            OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("API URL") }, modifier = Modifier.fillMaxWidth())
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Gallery Server Path") }, modifier = Modifier.fillMaxWidth())
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(value = timeout, onValueChange = { timeout = it }, label = { Text("Timeout (sec)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("API URL") },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            IconButton(onClick = { showAddProfileDialog = true }) {
+                                Icon(Icons.Default.Save, contentDescription = "Save Profile")
+                            }
+                        }
+                    )
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
-
-            Text("App Preferences", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 8.dp))
-
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                Checkbox(checked = isDark, onCheckedChange = { isDark = it })
-                Text("Enable Dark Mode")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Gallery Server Path") }, modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(value = timeout, onValueChange = { timeout = it }, label = { Text("Timeout (sec)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                }
             }
 
-            // Always render but disable if not Samsung
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                Checkbox(checked = useSamsungTheme, onCheckedChange = onThemeChange, enabled = isSamsung)
-                Column(modifier = Modifier.alpha(if (isSamsung) 1f else 0.5f)) {
-                    Text("Samsung One UI Mode")
-                    Text("Use native Samsung styling and shapes.", fontSize = 10.sp, color = Color.Gray)
-                    if (!isSamsung) {
-                        Text("Only available on Samsung devices.", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+            ExpandableSection("Appearance & UI", "setup_appearance", false) {
+                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.isDarkMode, onCheckedChange = { viewModel.saveConfig(config.copy(isDarkMode = it)) })
+                        Text("Enable Dark Mode")
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                            Checkbox(checked = config.useDynamicColor, onCheckedChange = { viewModel.saveConfig(config.copy(useDynamicColor = it)) })
+                            Column {
+                                Text("Use Material You (Dynamic Color)")
+                                Text("Extracts app theme directly from wallpaper.", fontSize = 10.sp, color = Color.Gray)
+                            }
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.keepScreenOn, onCheckedChange = { viewModel.saveConfig(config.copy(keepScreenOn = it)) })
+                        Column {
+                            Text("Keep Screen On")
+                            Text("Prevents phone sleep while rendering.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = useSamsungTheme, onCheckedChange = onThemeChange, enabled = isSamsung && !config.useDynamicColor)
+                        Column(modifier = Modifier.alpha(if (isSamsung && !config.useDynamicColor) 1f else 0.5f)) {
+                            Text("Samsung One UI Mode")
+                            Text("Use native Samsung styling and shapes.", fontSize = 10.sp, color = Color.Gray)
+                            if (!isSamsung) Text("Only available on Samsung devices.", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+                            if (config.useDynamicColor) Text("Disabled when Material You is ON.", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+                        }
                     }
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
+            ExpandableSection("Gallery & Media", "setup_gallery", false) {
+                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.swipeToBrowseGallery, onCheckedChange = { viewModel.saveConfig(config.copy(swipeToBrowseGallery = it)) })
+                        Column {
+                            Text("Swipe to Browse Images")
+                            Text("Use horizontal swiping in fullscreen preview.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.livePreviews, onCheckedChange = { viewModel.saveConfig(config.copy(livePreviews = it)) })
+                        Column {
+                            Text("Live Step-by-Step Previews")
+                            Text("Show a live blurry image stream while generating.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.showGridAfterGeneration, onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) })
+                        Column {
+                            Text("Show Grid After Batch")
+                            Text("Temporarily show a grid of images when a batch generation finishes.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+                }
+            }
 
-            ExpandableSection("Advanced Settings & Updates", initiallyExpanded = false) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+            ExpandableSection("Advanced & System", "setup_advanced", false) {
+                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
+
+                    val indexerStatus by ForgeState.indexerStatus.collectAsState()
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Background Prompt Indexer", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text(indexerStatus, fontSize = 10.sp, color = if (indexerStatus.contains("Error")) MaterialTheme.colorScheme.error else Color.Gray)
+                        }
+                        Button(onClick = { viewModel.startIndexer() }, enabled = !indexerStatus.contains("Indexing")) {
+                            Text("Sync")
+                        }
+                    }
 
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = silentNotifications, onCheckedChange = { silentNotifications = it })
+                        Checkbox(checked = config.overnightMode, onCheckedChange = { viewModel.saveConfig(config.copy(overnightMode = it)) })
+                        Column {
+                            Text("Overnight Batch Mode")
+                            Text("Ignores minor errors to keep batch running.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+
+                    Text("Notification Detail Level", fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Full", "Brief", "Simple").forEach { level ->
+                            Button(
+                                onClick = { viewModel.saveConfig(config.copy(notificationVerbosity = level)) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (config.notificationVerbosity == level) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = if (config.notificationVerbosity == level) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+                                ),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text(level, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.useBiometricLock, onCheckedChange = { viewModel.saveConfig(config.copy(useBiometricLock = it)) })
+                        Column {
+                            Text("Biometric App Lock")
+                            Text("Require fingerprint or face scan on launch.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.silentNotifications, onCheckedChange = { viewModel.saveConfig(config.copy(silentNotifications = it)) })
                         Column {
                             Text("Silent Notifications")
                             Text("Disable sound and vibration alerts.", fontSize = 10.sp, color = Color.Gray)
                         }
                     }
 
+                    val useMultiThreading by viewModel.useMultiThreading.collectAsState()
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                         Checkbox(checked = useMultiThreading, onCheckedChange = { viewModel.setMultiThreading(it) })
                         Column {
@@ -576,77 +908,6 @@ fun SetupScreen(
                         Text("Remove Battery Restrictions", textAlign = TextAlign.Center)
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    OutlinedTextField(value = updateServerUrl, onValueChange = { updateServerUrl = it }, label = { Text("Update Server URL") }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
-                    Text("Current Version: $APP_VERSION", fontSize = 12.sp, color = Color.Gray)
-
-                    if (updateResult != null) {
-                        Text(
-                            text = updateResult!!,
-                            color = if (updateResult!!.contains("available")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
-                    }
-
-                    if (apkUrlToDownload != null) {
-                        Button(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(apkUrlToDownload))
-                                context.startActivity(intent)
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (useSamsungTheme) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
-                            )
-                        ) {
-                            Text("Download New Version", color = Color.White, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            updateResult = "Checking for updates..."
-                            apkUrlToDownload = null
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    val client = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).build()
-                                    val cleanUrl = updateServerUrl.trimEnd('/')
-                                    val req = Request.Builder().url("$cleanUrl/metadata.json").build()
-                                    client.newCall(req).execute().use { res ->
-                                        if (res.isSuccessful) {
-                                            val responseBody = res.body?.string() ?: ""
-                                            try {
-                                                val json = JSONObject(responseBody)
-                                                val meta = json.getJSONObject("meta")
-                                                val version = meta.getString("version")
-                                                val file = meta.getString("file")
-
-                                                withContext(Dispatchers.Main) {
-                                                    val serverVersionNum = version.substringBefore("-")
-                                                    if (serverVersionNum == APP_VERSION) {
-                                                        updateResult = "You are up-to-date"
-                                                    } else {
-                                                        updateResult = "New version available: $version"
-                                                        apkUrlToDownload = "$cleanUrl/$file"
-                                                    }
-                                                }
-                                            } catch (e: Exception) {
-                                                withContext(Dispatchers.Main) { updateResult = "Update server failed to fetch data" }
-                                            }
-                                        } else {
-                                            withContext(Dispatchers.Main) { updateResult = "Update server is not found" }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    withContext(Dispatchers.Main) { updateResult = "Update server is not found" }
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)
-                    ) {
-                        Text("Check for Updates", textAlign = TextAlign.Center)
-                    }
                 }
             }
 
@@ -699,6 +960,9 @@ fun SetupScreen(
                                         val time = System.currentTimeMillis() - start
                                         if (res.isSuccessful) {
                                             results.add(ep to "${time}ms \u2714")
+                                        } else if (res.code == 401 || res.code == 403) {
+                                            results.add(ep to "Auth Needed \u2718")
+                                            allSuccess = false
                                         } else {
                                             results.add(ep to "Err ${res.code} \u2718")
                                             allSuccess = false
@@ -723,33 +987,73 @@ fun SetupScreen(
 
                 Button(
                     onClick = {
-                        viewModel.saveConfig(AppConfig(url, path, isDark, timeout.toIntOrNull() ?: 10, updateServerUrl, silentNotifications))
-                        navController.navigate("main") { popUpTo(0) }
+                        val updateObj = config.copy(
+                            apiUrl = url,
+                            galleryPath = path,
+                            connectionTimeout = timeout.toIntOrNull() ?: 10
+                        )
+                        viewModel.saveConfig(updateObj)
+                        Toast.makeText(context, "Settings saved successfully", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.weight(1f).height(50.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (useSamsungTheme) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
+                        containerColor = if (useSamsungTheme && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
                     )
                 ) {
-                    Text("Save & Connect", textAlign = TextAlign.Center)
+                    Text("Save Settings", textAlign = TextAlign.Center)
                 }
             }
             Spacer(modifier = Modifier.height(30.dp))
+
+            if (showAddProfileDialog) {
+                AlertDialog(
+                    onDismissRequest = { showAddProfileDialog = false },
+                    title = { Text("Save Server Profile") },
+                    text = {
+                        OutlinedTextField(
+                            value = newProfileName,
+                            onValueChange = { newProfileName = it },
+                            label = { Text("Profile Name (e.g. Local PC)") }
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (newProfileName.isNotBlank() && url.isNotBlank()) {
+                                viewModel.addServerProfile(newProfileName, url)
+                            }
+                            showAddProfileDialog = false
+                            newProfileName = ""
+                        }) { Text("Save") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAddProfileDialog = false }) { Text("Cancel") }
+                    }
+                )
+            }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun TagFlowRow(text: String, onPromptChanged: (String) -> Unit) {
+fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
     val tags = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
     if (tags.isNotEmpty()) {
-        FlowRow(
+        var draggingIndex by remember { mutableStateOf<Int?>(null) }
+        var dragOffset by remember { mutableStateOf(0f) }
+
+        LazyRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            tags.forEachIndexed { index, tag ->
+            itemsIndexed(tags) { index, tag ->
+                val isDragging = index == draggingIndex
+                val modifier = if (isDragging) {
+                    Modifier.offset { IntOffset(dragOffset.roundToInt(), 0) }.zIndex(1f)
+                } else {
+                    Modifier.zIndex(0f)
+                }
+
                 AssistChip(
                     onClick = {},
                     label = { Text(tag, fontSize = 10.sp) },
@@ -766,7 +1070,33 @@ fun TagFlowRow(text: String, onPromptChanged: (String) -> Unit) {
                                 }
                         )
                     },
-                    shape = MaterialTheme.shapes.small
+                    shape = MaterialTheme.shapes.small,
+                    modifier = modifier.pointerInput(Unit) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { draggingIndex = index },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragOffset += dragAmount.x
+
+                                val swapThreshold = 150f // pixels to trigger swap
+                                if (dragOffset > swapThreshold && index < tags.size - 1) {
+                                    val newTags = tags.toMutableList()
+                                    newTags[index] = newTags[index + 1].also { newTags[index + 1] = newTags[index] }
+                                    onPromptChanged(newTags.joinToString(", "))
+                                    draggingIndex = index + 1
+                                    dragOffset -= swapThreshold
+                                } else if (dragOffset < -swapThreshold && index > 0) {
+                                    val newTags = tags.toMutableList()
+                                    newTags[index] = newTags[index - 1].also { newTags[index - 1] = newTags[index] }
+                                    onPromptChanged(newTags.joinToString(", "))
+                                    draggingIndex = index - 1
+                                    dragOffset += swapThreshold
+                                }
+                            },
+                            onDragEnd = { draggingIndex = null; dragOffset = 0f },
+                            onDragCancel = { draggingIndex = null; dragOffset = 0f }
+                        )
+                    }
                 )
             }
         }
@@ -775,19 +1105,25 @@ fun TagFlowRow(text: String, onPromptChanged: (String) -> Unit) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSamsungMode: Boolean) {
+    val config by viewModel.config.collectAsState()
     val state by viewModel.appState.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
     val pingMs by viewModel.pingMs.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
+    val currentEta by ForgeState.currentEta.collectAsState()
+    val progress by viewModel.progress.collectAsState()
+    val status by viewModel.statusText.collectAsState()
 
     val isServerBusy by ForgeState.isServerBusy.collectAsState()
     val generationQueue by ForgeState.generationQueue.collectAsState()
 
     val sessionImages by viewModel.sessionImages.collectAsState()
     val currentSessionIndex by viewModel.currentSessionIndex.collectAsState()
+    val livePreviewBase64 by ForgeState.livePreviewImage.collectAsState()
+    val isShowingGridPreview by ForgeState.isShowingGridPreview.collectAsState()
 
     val batchStart by ForgeState.currentBatchStartIndex.collectAsState()
     val batchEnd by ForgeState.currentBatchEndIndex.collectAsState()
@@ -796,25 +1132,21 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
     val selectedModel by viewModel.selectedModel.collectAsState()
     val samplers by viewModel.samplers.collectAsState()
     val schedulers by viewModel.schedulers.collectAsState()
+    val vaes by viewModel.vaes.collectAsState()
+    val selectedVae by viewModel.selectedVae.collectAsState()
     val availableLoras by viewModel.availableLoras.collectAsState()
     val activeLoras by viewModel.activeLoras.collectAsState()
 
     val tagSuggestions by viewModel.tagSuggestions.collectAsState()
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsState()
+    val promptHistory by viewModel.promptHistory.collectAsState()
 
-    val plugins by viewModel.plugins.collectAsState()
-    val loadedPlugin by viewModel.loadedPluginName.collectAsState()
-
-    var showPluginMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showHistoryDialog by remember { mutableStateOf(false) }
+    var showRecoverMenu by remember { mutableStateOf(false) }
     var fullscreenImageIndex by remember { mutableStateOf(-1) }
 
     val context = LocalContext.current
-    val pluginPickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            viewModel.importPlugin(uri, context)
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -846,59 +1178,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
                     },
                     actions = {
-                        Box {
-                            IconButton(onClick = { showPluginMenu = true }) {
-                                Icon(Icons.Default.Vaccines, contentDescription = "Plugins")
-                            }
-                            DropdownMenu(
-                                expanded = showPluginMenu,
-                                onDismissRequest = { showPluginMenu = false }
-                            ) {
-                                if (loadedPlugin != null) {
-                                    Text("Loaded: $loadedPlugin", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                    DropdownMenuItem(
-                                        text = { Text("Execute loaded script", fontSize = 14.sp) },
-                                        onClick = {
-                                            viewModel.executeLoadedPlugin()
-                                            showPluginMenu = false
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Remove currently loaded .lua script", fontSize = 14.sp, color = MaterialTheme.colorScheme.error) },
-                                        onClick = {
-                                            viewModel.unloadPlugin()
-                                            showPluginMenu = false
-                                        }
-                                    )
-                                } else {
-                                    Text("No script loaded", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-                                }
-
-                                HorizontalDivider()
-
-                                DropdownMenuItem(
-                                    text = { Text("Import new .lua script", fontSize = 14.sp) },
-                                    onClick = {
-                                        pluginPickerLauncher.launch("*/*")
-                                        showPluginMenu = false
-                                    }
-                                )
-
-                                if (plugins.isNotEmpty()) {
-                                    HorizontalDivider()
-                                    Text("Available Scripts", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), fontSize = 12.sp, color = Color.Gray)
-                                    plugins.forEach { pluginName ->
-                                        DropdownMenuItem(
-                                            text = { Text("Load: $pluginName", fontSize = 14.sp) },
-                                            onClick = {
-                                                viewModel.loadPluginIntoMemory(pluginName)
-                                                showPluginMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
                         Box {
                             IconButton(onClick = { showOverflowMenu = true }) {
                                 Icon(Icons.Default.MoreVert, contentDescription = "More Options")
@@ -939,266 +1218,474 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                 )
             }
         ) { padding ->
-            Column(modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp)) {
+            Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+                val scrollState = rememberScrollState()
 
-                if (generationQueue.isNotEmpty()) {
-                    ExpandableSection("Queued: ${generationQueue.size} items waiting", initiallyExpanded = false) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            generationQueue.forEach { item ->
-                                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
-                                    Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Prompt: ${item.positivePrompt}", fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                        IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
+
+                    val oomAlert by ForgeState.oomAlert.collectAsState()
+                    AnimatedVisibility(visible = oomAlert) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(32.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text("SERVER OUT OF MEMORY (OOM)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text("The current generation failed and the queue is paused. The failed prompt was skipped.", fontSize = 12.sp, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(onClick = { viewModel.resumeQueue() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onErrorContainer, contentColor = MaterialTheme.colorScheme.errorContainer)) {
+                                    Text("Resume Queue")
+                                }
+                            }
+                        }
+                    }
+
+                    if (generationQueue.isNotEmpty()) {
+                        ExpandableSection("Queued: ${generationQueue.size} items waiting", "main_queue", initiallyExpanded = false) {
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                generationQueue.forEach { item ->
+                                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
+                                        Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Prompt: ${item.positivePrompt}", fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                            IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(24.dp)) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
-                    if (currentSessionIndex >= 0 && sessionImages.isNotEmpty() && currentSessionIndex < sessionImages.size) {
-                        AsyncImage(
-                            model = sessionImages[currentSessionIndex],
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize().clickable { fullscreenImageIndex = currentSessionIndex },
-                            contentScale = ContentScale.Fit
-                        )
-                    } else {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
-                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
-                            Text("No Preview", color = Color.Gray)
-                        }
-                    }
-
-                    Row(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                        FilledTonalButton(onClick = { viewModel.sessionPrev() }, enabled = currentSessionIndex > batchStart, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null)
-                        }
-                        FilledTonalButton(onClick = { viewModel.sessionNext() }, enabled = currentSessionIndex < batchEnd, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
-                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Prompts", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    TextButton(onClick = { viewModel.recoverLastPrompt() }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(24.dp)) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Recover Last", fontSize = 12.sp)
-                    }
-                }
-
-                OutlinedTextField(
-                    value = state.positivePrompt,
-                    onValueChange = {
-                        viewModel.updateState { s -> s.copy(positivePrompt = it) }
-                        val currentWord = it.substringAfterLast(",").trim()
-                        viewModel.searchTags(currentWord)
-                    },
-                    label = { Text("Positive Prompt", fontSize = 12.sp) },
-                    minLines = 3,
-                    maxLines = 8,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                AnimatedVisibility(visible = tagSuggestions.isNotEmpty()) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp).padding(top = 4.dp, bottom = 4.dp),
-                        elevation = CardDefaults.cardElevation(4.dp),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        LazyColumn {
-                            items(tagSuggestions) { tag ->
-                                Text(
-                                    text = tag,
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.fillMaxWidth().clickable {
-                                        val before = state.positivePrompt.substringBeforeLast(",", "")
-                                        val newText = if (before.isEmpty()) "$tag, " else "$before, $tag, "
-                                        viewModel.updateState { s -> s.copy(positivePrompt = newText) }
-                                        viewModel.searchTags("")
-                                    }.padding(12.dp)
-                                )
-                                HorizontalDivider()
-                            }
-                        }
-                    }
-                }
-
-                ExpandableSection("Active Positive Tags", false) {
-                    Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                        TagFlowRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = state.negativePrompt,
-                    onValueChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
-                    label = { Text("Negative Prompt", fontSize = 12.sp) },
-                    minLines = 2,
-                    maxLines = 6,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                ExpandableSection("Active Negative Tags", false) {
-                    Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                        TagFlowRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                ExpandableSection("Settings & LoRAs", true) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-                        var modelExpanded by remember { mutableStateOf(false) }
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                Text("Model: ${selectedModel.ifEmpty { "Loading..." }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
-                            }
-                            DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                models.forEach { mod ->
-                                    DropdownMenuItem(text = { Text(mod, fontSize = 12.sp) }, onClick = { viewModel.changeCheckpoint(mod); modelExpanded = false })
-                                }
-                            }
-                        }
-
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = if (state.seed == -1L) "-1" else state.seed.toString(),
-                                onValueChange = {
-                                    val parsed = it.toLongOrNull()
-                                    if (parsed != null || it == "-" || it.isEmpty()) {
-                                        viewModel.updateState { s -> s.copy(seed = parsed ?: -1L) }
-                                    }
-                                },
-                                label = { Text("Seed (-1 for random)", fontSize = 12.sp) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.weight(1f)
-                            )
-                            IconButton(
-                                onClick = { viewModel.updateState { s -> s.copy(seed = -1L) } },
-                                modifier = Modifier.padding(start = 8.dp)
-                            ) {
-                                Icon(Icons.Default.Casino, contentDescription = "Random Seed")
-                            }
-                        }
-
-                        ForgeSlider("Steps", state.steps.toFloat(), 1f..100f, 0) { viewModel.updateState { s -> s.copy(steps = it.toInt()) } }
-                        ForgeSlider("CFG Scale", state.cfgScale, 1f..20f, 1) { viewModel.updateState { s -> s.copy(cfgScale = it) } }
-                        ForgeSlider("Clip Skip", state.clipSkip.toFloat(), 1f..3f, 0) { viewModel.updateState { s -> s.copy(clipSkip = it.toInt()) } }
-                        ForgeSlider("Width", state.width.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(width = (it.toInt() / 64) * 64) } }
-                        ForgeSlider("Height", state.height.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(height = (it.toInt() / 64) * 64) } }
-                        ForgeSlider("Batch Size", state.batchSize.toFloat(), 1f..16f, 0) { viewModel.updateState { s -> s.copy(batchSize = it.toInt()) } }
-
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            var samplerExpanded by remember { mutableStateOf(false) }
-                            Box(modifier = Modifier.weight(1f)) {
-                                OutlinedButton(onClick = { samplerExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                    Text(state.sampler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                                }
-                                DropdownMenu(expanded = samplerExpanded, onDismissRequest = { samplerExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                    samplers.forEach { samp -> DropdownMenuItem(text = { Text(samp, fontSize = 12.sp) }, onClick = { viewModel.updateState { s -> s.copy(sampler = samp) }; samplerExpanded = false }) }
-                                }
-                            }
-
-                            var schedulerExpanded by remember { mutableStateOf(false) }
-                            Box(modifier = Modifier.weight(1f)) {
-                                OutlinedButton(onClick = { schedulerExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                    Text(state.scheduler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                                }
-                                DropdownMenu(expanded = schedulerExpanded, onDismissRequest = { schedulerExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                    schedulers.forEach { sched -> DropdownMenuItem(text = { Text(sched, fontSize = 12.sp) }, onClick = { viewModel.updateState { s -> s.copy(scheduler = sched) }; schedulerExpanded = false }) }
-                                }
-                            }
-                        }
-
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("LoRAs", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
 
-                        var loraExpanded by remember { mutableStateOf(false) }
-                        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                            OutlinedButton(onClick = { loraExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Add LoRA...", fontSize = 12.sp)
+                    Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
+                        if (isGenerating && !livePreviewBase64.isNullOrEmpty()) {
+                            val bytes = Base64.decode(livePreviewBase64, Base64.DEFAULT)
+                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            if (bitmap != null) {
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "Live Preview",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
                             }
-                            DropdownMenu(expanded = loraExpanded, onDismissRequest = { loraExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                availableLoras.forEach { loraName ->
-                                    DropdownMenuItem(
-                                        text = { Text(loraName, fontSize = 12.sp) },
-                                        onClick = { viewModel.appendLora(loraName); loraExpanded = false }
+                        } else if (isShowingGridPreview && sessionImages.size > batchStart.toInt() && batchEnd.toInt() >= batchStart.toInt()) {
+                            val bStart = batchStart.toInt()
+                            val bEnd = batchEnd.toInt()
+                            val batchImages = sessionImages.subList(bStart, bEnd + 1)
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(minSize = 80.dp),
+                                modifier = Modifier.fillMaxSize().padding(bottom = 36.dp),
+                                contentPadding = PaddingValues(4.dp)
+                            ) {
+                                items(batchImages.size) { index ->
+                                    val imgPath = batchImages[index]
+                                    AsyncImage(
+                                        model = imgPath,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .padding(2.dp)
+                                            .aspectRatio(1f)
+                                            .clip(MaterialTheme.shapes.small)
+                                            .clickable {
+                                                viewModel.dismissGridPreview(bStart + index)
+                                                fullscreenImageIndex = bStart + index
+                                            },
+                                        contentScale = ContentScale.Crop
                                     )
                                 }
                             }
+                        } else if (currentSessionIndex.toInt() >= 0 && sessionImages.isNotEmpty() && currentSessionIndex.toInt() < sessionImages.size) {
+                            AsyncImage(
+                                model = sessionImages[currentSessionIndex.toInt()],
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize().clickable { fullscreenImageIndex = currentSessionIndex.toInt() },
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
+                                Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
+                                Text("No Preview", color = Color.Gray)
+                            }
                         }
 
-                        activeLoras.forEach { lora ->
-                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
-                                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                        IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                        Row(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            FilledTonalButton(onClick = { viewModel.sessionPrev() }, enabled = currentSessionIndex.toInt() > batchStart.toInt(), contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null)
+                            }
+                            FilledTonalButton(onClick = { viewModel.sessionNext() }, enabled = currentSessionIndex.toInt() < batchEnd.toInt(), contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(visible = isGenerating || isServerBusy || progress > 0f) {
+                        Column(modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                val currentStep = (progress * state.steps).toInt()
+                                val modeText = if (isGenerating) "Generating..." else "External Task..."
+                                Text("$modeText (Step $currentStep/${state.steps})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                if (currentEta > 0) {
+                                    Text("ETA: ${String.format(Locale.US, "%.1f", currentEta)}s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            LinearProgressIndicator(
+                                progress = { progress },
+                                modifier = Modifier.fillMaxWidth().height(12.dp).clip(CircleShape),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                            Text(
+                                text = "${(progress * 100).toInt()}% • $status",
+                                fontSize = 10.sp,
+                                color = Color.Gray,
+                                modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Prompts", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = { viewModel.recoverLastPrompt() }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Recover Last", fontSize = 12.sp)
+                            }
+                            Box {
+                                IconButton(onClick = { showRecoverMenu = true }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "More Recover Options")
+                                }
+                                DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text("From History", fontSize = 14.sp) },
+                                        leadingIcon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                        onClick = {
+                                            showRecoverMenu = false
+                                            showHistoryDialog = true
                                         }
-                                    }
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Strength", fontSize = 10.sp)
-                                        Text(String.format(java.util.Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
-                                    }
-                                    Slider(
-                                        value = lora.strength,
-                                        onValueChange = { viewModel.updateLoraStrength(lora.name, it) },
-                                        valueRange = 0.1f..2.0f,
-                                        modifier = Modifier.height(24.dp)
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("From Gallery", fontSize = 14.sp) },
+                                        leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                        onClick = {
+                                            showRecoverMenu = false
+                                            viewModel.fetchGalleryFolder()
+                                            navController.navigate("gallery")
+                                        }
                                     )
                                 }
                             }
                         }
                     }
+
+                    UndoRedoTextField(
+                        value = state.positivePrompt,
+                        onValueChange = {
+                            viewModel.updateState { s -> s.copy(positivePrompt = it) }
+                            val currentWord = it.substringAfterLast(",").trim()
+                            viewModel.searchTags(currentWord)
+                        },
+                        label = { Text("Positive Prompt", fontSize = 12.sp) },
+                        minLines = 3,
+                        maxLines = 8,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClear = { viewModel.updateState { s -> s.copy(positivePrompt = "") } }
+                    )
+
+                    AnimatedVisibility(visible = tagSuggestions.isNotEmpty()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp).padding(top = 4.dp, bottom = 4.dp),
+                            elevation = CardDefaults.cardElevation(4.dp),
+                            shape = MaterialTheme.shapes.medium
+                        ) {
+                            LazyColumn {
+                                items(tagSuggestions) { tag ->
+                                    Text(
+                                        text = tag,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.fillMaxWidth().clickable {
+                                            val before = state.positivePrompt.substringBeforeLast(",", "")
+                                            val newText = if (before.isEmpty()) "$tag, " else "$before, $tag, "
+                                            viewModel.updateState { s -> s.copy(positivePrompt = newText) }
+                                            viewModel.searchTags("")
+                                        }.padding(12.dp)
+                                    )
+                                    HorizontalDivider()
+                                }
+                            }
+                        }
+                    }
+
+                    ExpandableSection("Active Positive Tags", "main_pos_tags", false) {
+                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                            DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    UndoRedoTextField(
+                        value = state.negativePrompt,
+                        onValueChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
+                        label = { Text("Negative Prompt", fontSize = 12.sp) },
+                        minLines = 2,
+                        maxLines = 6,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClear = { viewModel.updateState { s -> s.copy(negativePrompt = "") } }
+                    )
+
+                    ExpandableSection("Active Negative Tags", "main_neg_tags", false) {
+                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                            DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ExpandableSection("Settings & LoRAs", "main_settings", true) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+
+                            val isIllustrious = selectedModel.contains("illustrious", ignoreCase = true) || selectedModel.contains("ill", ignoreCase = true)
+
+                            var modelExpanded by remember { mutableStateOf(false) }
+                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
+                                    Text("Model: ${selectedModel.ifEmpty { "Loading..." }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                                }
+                                DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
+                                    models.forEach { mod ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    AsyncImage(
+                                                        model = viewModel.getPreviewUrl(mod.path),
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(48.dp).padding(end = 8.dp).clip(MaterialTheme.shapes.small),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                    Text(mod.title, fontSize = 12.sp)
+                                                }
+                                            },
+                                            onClick = { viewModel.changeCheckpoint(mod.title); modelExpanded = false }
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = if (state.seed == -1L) "-1" else state.seed.toString(),
+                                    onValueChange = {
+                                        val parsed = it.toLongOrNull()
+                                        if (parsed != null || it == "-" || it.isEmpty()) {
+                                            viewModel.updateState { s -> s.copy(seed = parsed ?: -1L) }
+                                        }
+                                    },
+                                    label = { Text("Seed (-1 for random)", fontSize = 12.sp) },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { viewModel.updateState { s -> s.copy(seed = -1L) } },
+                                    modifier = Modifier.padding(start = 8.dp)
+                                ) {
+                                    Icon(Icons.Default.Casino, contentDescription = "Random Seed")
+                                }
+                            }
+
+                            ForgeSlider("Steps", state.steps.toFloat(), 1f..100f, 0) { viewModel.updateState { s -> s.copy(steps = it.toInt()) } }
+                            ForgeSlider("CFG Scale", state.cfgScale, 1f..20f, 1) { viewModel.updateState { s -> s.copy(cfgScale = it) } }
+                            ForgeSlider("Clip Skip", state.clipSkip.toFloat(), 1f..3f, 0) { viewModel.updateState { s -> s.copy(clipSkip = it.toInt()) } }
+                            ForgeSlider("Width", state.width.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(width = (it.toInt() / 64) * 64) } }
+                            ForgeSlider("Height", state.height.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(height = (it.toInt() / 64) * 64) } }
+                            ForgeSlider("Batch Size", state.batchSize.toFloat(), 1f..16f, 0) { viewModel.updateState { s -> s.copy(batchSize = it.toInt()) } }
+
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                var samplerExpanded by remember { mutableStateOf(false) }
+                                Box(modifier = Modifier.weight(1f)) {
+                                    OutlinedButton(onClick = { samplerExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
+                                        Text(state.sampler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    DropdownMenu(expanded = samplerExpanded, onDismissRequest = { samplerExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
+                                        samplers.forEach { samp -> DropdownMenuItem(text = { Text(samp, fontSize = 12.sp) }, onClick = { viewModel.updateState { s -> s.copy(sampler = samp) }; samplerExpanded = false }) }
+                                    }
+                                }
+
+                                var schedulerExpanded by remember { mutableStateOf(false) }
+                                Box(modifier = Modifier.weight(1f)) {
+                                    OutlinedButton(onClick = { schedulerExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
+                                        Text(state.scheduler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    DropdownMenu(expanded = schedulerExpanded, onDismissRequest = { schedulerExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
+                                        schedulers.forEach { sched -> DropdownMenuItem(text = { Text(sched, fontSize = 12.sp) }, onClick = { viewModel.updateState { s -> s.copy(scheduler = sched) }; schedulerExpanded = false }) }
+                                    }
+                                }
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                var vaeExpanded by remember { mutableStateOf(false) }
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    OutlinedButton(onClick = { vaeExpanded = true }, enabled = !isIllustrious, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
+                                        Text(if (isIllustrious) "VAE Disabled (Illustrious Detected)" else "VAE: ${selectedVae.ifEmpty { "Loading..." }}", maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    DropdownMenu(expanded = vaeExpanded, onDismissRequest = { vaeExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
+                                        vaes.forEach { vae -> DropdownMenuItem(text = { Text(vae, fontSize = 12.sp) }, onClick = { viewModel.changeVae(vae); vaeExpanded = false }) }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text("LoRAs", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                            var loraExpanded by remember { mutableStateOf(false) }
+                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                OutlinedButton(onClick = { loraExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
+                                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Add LoRA...", fontSize = 12.sp)
+                                }
+                                DropdownMenu(expanded = loraExpanded, onDismissRequest = { loraExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
+                                    availableLoras.forEach { loraName ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    AsyncImage(
+                                                        model = viewModel.getPreviewUrl(loraName.path),
+                                                        contentDescription = null,
+                                                        modifier = Modifier.size(48.dp).padding(end = 8.dp).clip(MaterialTheme.shapes.small),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                    Text(loraName.title, fontSize = 12.sp)
+                                                }
+                                            },
+                                            onClick = { viewModel.appendLora(loraName.name); loraExpanded = false }
+                                        )
+                                    }
+                                }
+                            }
+
+                            activeLoras.forEach { lora ->
+                                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
+                                    Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                            Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                            IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
+                                                Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Strength", fontSize = 10.sp)
+                                            Text(String.format(java.util.Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
+                                        }
+                                        Slider(
+                                            value = lora.strength,
+                                            onValueChange = { viewModel.updateLoraStrength(lora.name, it) },
+                                            valueRange = 0.1f..2.0f,
+                                            modifier = Modifier.height(24.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(100.dp)) // Extra padding to allow smooth scrolling past the FAB area
                 }
 
-                val buttonText = when {
+                // Always Floating Generate Button
+                val buttonTextOverlay = when {
                     isGenerating -> "GENERATING..."
                     isServerBusy -> "SERVER BUSY - ADD TO QUEUE"
                     generationQueue.isNotEmpty() -> "ADD TO QUEUE (${generationQueue.size})"
                     else -> "GENERATE"
                 }
 
-                val buttonColor = when {
+                val buttonColorOverlay = when {
                     isGenerating -> Color.Gray
                     isServerBusy || generationQueue.isNotEmpty() -> Color(0xFFFFA000)
-                    else -> if (isSamsungMode) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
+                    else -> if (isSamsungMode && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
                 }
 
                 Button(
                     onClick = { viewModel.queueGeneration() },
                     enabled = isConnected && !isRestoringPrompt,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = buttonColor)
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .shadow(8.dp, CircleShape),
+                    colors = ButtonDefaults.buttonColors(containerColor = buttonColorOverlay)
                 ) {
-                    Text(buttonText, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(buttonTextOverlay, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 }
             }
         }
 
-        if (fullscreenImageIndex >= 0 && fullscreenImageIndex < sessionImages.size) {
-            val currentFile = sessionImages[fullscreenImageIndex]
+        if (showHistoryDialog) {
+            AlertDialog(
+                onDismissRequest = { showHistoryDialog = false },
+                title = {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("Prompt History")
+                        IconButton(onClick = { viewModel.clearPromptHistory(); showHistoryDialog = false }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Clear History")
+                        }
+                    }
+                },
+                text = {
+                    if (promptHistory.isEmpty()) {
+                        Text("No history available yet.", color = Color.Gray)
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            items(promptHistory) { item ->
+                                val timeFormat = java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(item.timestamp)
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
+                                        viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
+                                        showHistoryDialog = false
+                                    },
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text(timeFormat, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
+                                        if (item.positivePrompt.isNotBlank()) Text(item.positivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        if (item.negativePrompt.isNotBlank()) Text("Negative: " + item.negativePrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Color.Gray)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showHistoryDialog = false }) { Text("Close") }
+                }
+            )
+        }
 
-            LaunchedEffect(currentFile) {
-                viewModel.loadMetadataForLocalFile(currentFile)
+        if (fullscreenImageIndex >= 0 && sessionImages.isNotEmpty()) {
+            val scope = rememberCoroutineScope()
+            val pagerState = rememberPagerState(initialPage = fullscreenImageIndex, pageCount = { sessionImages.size })
+
+            LaunchedEffect(pagerState.currentPage) {
+                if (fullscreenImageIndex != pagerState.currentPage) {
+                    fullscreenImageIndex = pagerState.currentPage
+                }
+                viewModel.loadMetadataForLocalFile(sessionImages[pagerState.currentPage])
             }
 
             Dialog(onDismissRequest = { fullscreenImageIndex = -1 }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                    val currentFile = sessionImages[fullscreenImageIndex]
 
                     Row(modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(vertical = 4.dp, horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { fullscreenImageIndex = -1 }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White) }
@@ -1212,76 +1699,85 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
 
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
 
-                        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                            AsyncImage(
-                                model = currentFile,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxWidth(),
-                                contentScale = ContentScale.Fit,
-                                alignment = Alignment.TopCenter
-                            )
-
-                            val showMetadata by viewModel.showGalleryMetadata.collectAsState()
-                            val currentMetadata by viewModel.currentImageMetadata.collectAsState()
-
-                            if (showMetadata) {
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    shape = MaterialTheme.shapes.large,
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.9f))
-                                ) {
-                                    Text(
-                                        text = currentMetadata ?: "Loading metadata...",
-                                        color = Color.LightGray,
-                                        fontSize = 11.sp,
-                                        lineHeight = 14.sp,
-                                        modifier = Modifier.padding(16.dp)
-                                    )
-                                }
+                        if (config.swipeToBrowseGallery) {
+                            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                                AsyncImage(
+                                    model = sessionImages[page],
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentScale = ContentScale.Fit,
+                                    alignment = Alignment.TopCenter
+                                )
                             }
-                            Spacer(modifier = Modifier.height(80.dp))
+                        } else {
+                            Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                                AsyncImage(
+                                    model = currentFile,
+                                    contentDescription = null,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentScale = ContentScale.Fit,
+                                    alignment = Alignment.TopCenter
+                                )
+                            }
+                        }
+
+                        val showMetadata by viewModel.showGalleryMetadata.collectAsState()
+                        val currentMetadata by viewModel.currentImageMetadata.collectAsState()
+
+                        if (showMetadata) {
+                            MetadataAlertDialog(
+                                metadata = currentMetadata,
+                                onDismiss = { viewModel.toggleGalleryMetadata() },
+                                onApplyAll = {
+                                    // Since we are in the Preview screen (not Gallery), we cannot use selectedImage,
+                                    // But we CAN use the local file path!
+                                    viewModel.loadMetadataForLocalFile(sessionImages[fullscreenImageIndex])
+                                    viewModel.toggleGalleryMetadata()
+                                    fullscreenImageIndex = -1
+                                },
+                                onApplyPrompt = { pos, neg ->
+                                    viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
+                                    Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                                    viewModel.toggleGalleryMetadata()
+                                },
+                                onApplyModel = { model ->
+                                    viewModel.changeCheckpoint(model)
+                                    Toast.makeText(context, "Model Applied: $model", Toast.LENGTH_SHORT).show()
+                                    viewModel.toggleGalleryMetadata()
+                                },
+                                onApplyLoras = { loras ->
+                                    var currentPos = state.positivePrompt
+                                    loras.forEach { loraTag ->
+                                        if (!currentPos.contains(loraTag)) {
+                                            currentPos += if (currentPos.isEmpty() || currentPos.endsWith(",")) " $loraTag" else ", $loraTag"
+                                        }
+                                    }
+                                    viewModel.updateState { it.copy(positivePrompt = currentPos) }
+                                    Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                                    viewModel.toggleGalleryMetadata()
+                                }
+                            )
                         }
 
                         if (fullscreenImageIndex > batchStart) {
                             IconButton(
-                                onClick = { fullscreenImageIndex-- },
+                                onClick = {
+                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(fullscreenImageIndex - 1) } }
+                                    else { fullscreenImageIndex-- }
+                                },
                                 modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).background(Color(0x88000000), CircleShape)
                             ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = Color.White) }
                         }
 
                         if (fullscreenImageIndex < batchEnd && fullscreenImageIndex < sessionImages.size - 1) {
                             IconButton(
-                                onClick = { fullscreenImageIndex++ },
+                                onClick = {
+                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(fullscreenImageIndex + 1) } }
+                                    else { fullscreenImageIndex++ }
+                                },
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).background(Color(0x88000000), CircleShape)
                             ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White) }
                         }
-                    }
-                }
-            }
-        }
-
-        if (isRestoringPrompt) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.4f))
-                    .clickable(enabled = false) {},
-                contentAlignment = Alignment.Center
-            ) {
-                Card(
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(8.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        CircularProgressIndicator()
-                        Text("Restoring prompt...", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     }
                 }
             }
@@ -1323,9 +1819,10 @@ fun ForgeSlider(name: String, value: Float, range: ClosedFloatingPointRange<Floa
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
+    val state by viewModel.appState.collectAsState()
     val files by viewModel.galleryFiles.collectAsState()
     val currentPath by viewModel.currentGalleryPath.collectAsState()
     val isLoading by viewModel.isGalleryLoading.collectAsState()
@@ -1334,38 +1831,99 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     var selectedImage by remember { mutableStateOf<GalleryItem?>(null) }
     var isGridView by remember { mutableStateOf(true) }
+    var showGridSlider by remember { mutableStateOf(false) }
+
+    // Batch Selection State
+    val selectedItems = remember { mutableStateListOf<GalleryItem>() }
+    val isSelectionMode = selectedItems.isNotEmpty()
+
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, contentDescription = "App Icon", modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Gallery", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { isGridView = !isGridView }) {
-                        Icon(if (isGridView) Icons.Default.List else Icons.Default.GridView, contentDescription = "Toggle View")
+            Column {
+                if (isSelectionMode) {
+                    TopAppBar(
+                        title = { Text("${selectedItems.size} Selected", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                        navigationIcon = {
+                            IconButton(onClick = { selectedItems.clear() }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear Selection")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = {
+                                val allImages = files.filter { !it.isDir }
+                                if (selectedItems.size == allImages.size) selectedItems.clear()
+                                else { selectedItems.clear(); selectedItems.addAll(allImages) }
+                            }) {
+                                Icon(Icons.Default.SelectAll, contentDescription = "Select All")
+                            }
+                            IconButton(onClick = {
+                                selectedItems.forEach { item -> viewModel.downloadImage(item) }
+                                selectedItems.clear()
+                            }) {
+                                Icon(Icons.Default.Download, contentDescription = "Download Selected")
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    )
+                } else {
+                    TopAppBar(
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Settings, contentDescription = "App Icon", modifier = Modifier.size(24.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Gallery", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = { navController.popBackStack() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { isGridView = !isGridView }) {
+                                Icon(if (isGridView) Icons.Default.List else Icons.Default.GridView, contentDescription = "Toggle View")
+                            }
+                            if (isGridView) {
+                                IconButton(onClick = { showGridSlider = !showGridSlider }) {
+                                    Icon(Icons.Default.ViewColumn, contentDescription = "Adjust Columns")
+                                }
+                            }
+                        }
+                    )
+                }
+
+                // Inject Dropdown Grid Slider cleanly beneath the Appbar
+                AnimatedVisibility(visible = showGridSlider && isGridView && !isSelectionMode) {
+                    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Columns: ${config.galleryGridColumns}", modifier = Modifier.width(90.dp), fontWeight = FontWeight.Bold)
+                            Slider(
+                                value = config.galleryGridColumns.toFloat(),
+                                onValueChange = { viewModel.updateGalleryGridColumns(it.roundToInt()) },
+                                valueRange = 1f..5f,
+                                steps = 3,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
-            )
+            }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
 
             Row(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (currentPath.isNotEmpty() && currentPath != config.galleryPath) {
+                if (currentPath.isNotEmpty() && currentPath != config.galleryPath && currentPath != "Root") {
                     IconButton(onClick = {
                         val separator = if (currentPath.contains("\\")) "\\" else "/"
-                        val parent = currentPath.substringBeforeLast(separator, config.galleryPath)
-                        viewModel.fetchGalleryFolder(parent)
+                        if (currentPath.contains(separator)) {
+                            val parent = currentPath.substringBeforeLast(separator)
+                            viewModel.fetchGalleryFolder(parent.ifEmpty { "Root" })
+                        } else {
+                            viewModel.fetchGalleryFolder("Root")
+                        }
                     }, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.ArrowUpward, contentDescription = "Up")
                     }
@@ -1384,11 +1942,31 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Folder is empty.", color = Color.Gray) }
             } else {
                 if (isGridView) {
-                    LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 100.dp), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(4.dp)) {
+                    LazyVerticalGrid(columns = GridCells.Fixed(config.galleryGridColumns), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(4.dp)) {
                         items(files) { file ->
-                            Card(modifier = Modifier.padding(4.dp).aspectRatio(1f).clickable {
-                                if (file.isDir) viewModel.fetchGalleryFolder(file.fullpath) else selectedImage = file
-                            }, shape = MaterialTheme.shapes.medium) {
+                            val isSelected = selectedItems.contains(file)
+
+                            Card(
+                                modifier = Modifier.padding(4.dp).aspectRatio(1f)
+                                    .then(if (isSelected) Modifier.border(4.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium) else Modifier)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (isSelectionMode && !file.isDir) {
+                                                if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
+                                            } else if (file.isDir) {
+                                                viewModel.fetchGalleryFolder(file.fullpath)
+                                            } else {
+                                                selectedImage = file
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!file.isDir) {
+                                                if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
+                                            }
+                                        }
+                                    ),
+                                shape = MaterialTheme.shapes.medium
+                            ) {
                                 Box(modifier = Modifier.fillMaxSize()) {
                                     if (file.isDir) {
                                         Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(48.dp).align(Alignment.Center), tint = Color(0xFFFFC107))
@@ -1403,10 +1981,26 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(files) { file ->
+                            val isSelected = selectedItems.contains(file)
                             Row(
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    if (file.isDir) viewModel.fetchGalleryFolder(file.fullpath) else selectedImage = file
-                                }.padding(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                                    .then(if (isSelected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha=0.2f)) else Modifier)
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (isSelectionMode && !file.isDir) {
+                                                if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
+                                            } else if (file.isDir) {
+                                                viewModel.fetchGalleryFolder(file.fullpath)
+                                            } else {
+                                                selectedImage = file
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!file.isDir) {
+                                                if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
+                                            }
+                                        }
+                                    ).padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (file.isDir) {
@@ -1429,8 +2023,16 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     }
 
     if (selectedImage != null) {
-        LaunchedEffect(selectedImage) {
-            viewModel.loadMetadataForImage(selectedImage)
+        val scope = rememberCoroutineScope()
+        val imageList = files.filter { !it.isDir }
+        val initialIndex = imageList.indexOf(selectedImage)
+        val pagerState = rememberPagerState(initialPage = if (initialIndex >= 0) initialIndex else 0, pageCount = { imageList.size })
+
+        LaunchedEffect(pagerState.currentPage) {
+            if (imageList.isNotEmpty()) {
+                selectedImage = imageList[pagerState.currentPage]
+                viewModel.loadMetadataForImage(selectedImage)
+            }
         }
 
         Dialog(onDismissRequest = { selectedImage = null }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -1441,12 +2043,8 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
                     Text(selectedImage!!.name, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
 
-                    IconButton(onClick = {
-                        viewModel.recoverPromptFromImage(selectedImage!!)
-                        selectedImage = null
-                        navController.popBackStack()
-                    }) {
-                        Icon(Icons.Default.CheckCircle, contentDescription = "Use in txt2img", tint = Color.White)
+                    IconButton(onClick = { viewModel.shareImage(selectedImage!!, context) }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                     }
 
                     val showMetadata by viewModel.showGalleryMetadata.collectAsState()
@@ -1460,51 +2058,84 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
 
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        AsyncImage(
-                            model = viewModel.getGalleryImageUrl(selectedImage!!),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxWidth(),
-                            contentScale = ContentScale.Fit,
-                            alignment = Alignment.TopCenter
-                        )
-
-                        val showMetadata by viewModel.showGalleryMetadata.collectAsState()
-                        val currentMetadata by viewModel.currentImageMetadata.collectAsState()
-
-                        if (showMetadata) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                shape = MaterialTheme.shapes.large,
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.9f))
-                            ) {
-                                Text(
-                                    text = currentMetadata ?: "Loading metadata...",
-                                    color = Color.LightGray,
-                                    fontSize = 11.sp,
-                                    lineHeight = 14.sp,
-                                    modifier = Modifier.padding(16.dp)
-                                )
-                            }
+                    if (config.swipeToBrowseGallery && imageList.isNotEmpty()) {
+                        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                            AsyncImage(
+                                model = viewModel.getGalleryImageUrl(imageList[page]),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.Fit,
+                                alignment = Alignment.TopCenter
+                            )
                         }
-                        Spacer(modifier = Modifier.height(80.dp))
+                    } else {
+                        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            AsyncImage(
+                                model = viewModel.getGalleryImageUrl(selectedImage!!),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.Fit,
+                                alignment = Alignment.TopCenter
+                            )
+                        }
                     }
 
-                    val imageList = files.filter { !it.isDir }
+                    val showMetadata by viewModel.showGalleryMetadata.collectAsState()
+                    val currentMetadata by viewModel.currentImageMetadata.collectAsState()
+
+                    if (showMetadata) {
+                        MetadataAlertDialog(
+                            metadata = currentMetadata,
+                            onDismiss = { viewModel.toggleGalleryMetadata() },
+                            onApplyAll = {
+                                // Since we are in the Gallery screen, we can use selectedImage
+                                viewModel.recoverPromptFromImage(selectedImage!!)
+                                viewModel.toggleGalleryMetadata()
+                                selectedImage = null
+                                navController.popBackStack()
+                            },
+                            onApplyPrompt = { pos, neg ->
+                                viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
+                                Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                                viewModel.toggleGalleryMetadata()
+                            },
+                            onApplyModel = { model ->
+                                viewModel.changeCheckpoint(model)
+                                Toast.makeText(context, "Model Applied: $model", Toast.LENGTH_SHORT).show()
+                                viewModel.toggleGalleryMetadata()
+                            },
+                            onApplyLoras = { loras ->
+                                var currentPos = state.positivePrompt
+                                loras.forEach { loraTag ->
+                                    if (!currentPos.contains(loraTag)) {
+                                        currentPos += if (currentPos.isEmpty() || currentPos.endsWith(",")) " $loraTag" else ", $loraTag"
+                                    }
+                                }
+                                viewModel.updateState { it.copy(positivePrompt = currentPos) }
+                                Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                                viewModel.toggleGalleryMetadata()
+                            }
+                        )
+                    }
+
                     val currentIndex = imageList.indexOf(selectedImage)
 
                     if (currentIndex > 0) {
                         IconButton(
-                            onClick = { selectedImage = imageList[currentIndex - 1] },
+                            onClick = {
+                                if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(currentIndex - 1) } }
+                                else { selectedImage = imageList[currentIndex - 1] }
+                            },
                             modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).background(Color(0x88000000), CircleShape)
                         ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = Color.White) }
                     }
 
                     if (currentIndex < imageList.size - 1 && currentIndex != -1) {
                         IconButton(
-                            onClick = { selectedImage = imageList[currentIndex + 1] },
+                            onClick = {
+                                if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(currentIndex + 1) } }
+                                else { selectedImage = imageList[currentIndex + 1] }
+                            },
                             modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).background(Color(0x88000000), CircleShape)
                         ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White) }
                     }
@@ -1517,16 +2148,8 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(viewModel: ForgeViewModel, navController: NavHostController) {
-    val appLogs by viewModel.appLogs.collectAsState()
     val serverLogs by ForgeState.serverLogs.collectAsState()
-
-    val appScrollState = rememberLazyListState()
     val serverScrollState = rememberLazyListState()
-
-    // Auto-scroll to bottom when new logs arrive
-    LaunchedEffect(appLogs.size) {
-        if (appLogs.isNotEmpty()) appScrollState.animateScrollToItem(appLogs.size - 1)
-    }
 
     LaunchedEffect(serverLogs.size) {
         if (serverLogs.isNotEmpty()) serverScrollState.animateScrollToItem(serverLogs.size - 1)
@@ -1535,7 +2158,7 @@ fun TerminalScreen(viewModel: ForgeViewModel, navController: NavHostController) 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Terminal / Console", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                title = { Text("Server Terminal", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -1551,36 +2174,6 @@ fun TerminalScreen(viewModel: ForgeViewModel, navController: NavHostController) 
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Upper part: Local App Logcat
-            Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                Text(
-                    "App Logcat",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                LazyColumn(
-                    state = appScrollState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .padding(8.dp)
-                ) {
-                    items(appLogs) { log ->
-                        Text(
-                            text = log,
-                            color = Color(0xFF00FF00), // Hacker Green
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 12.sp
-                        )
-                    }
-                }
-            }
-
-            HorizontalDivider(thickness = 2.dp, color = MaterialTheme.colorScheme.primary)
-
-            // Lower part: Server Logs
             Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 Text(
                     "Server Logs",
