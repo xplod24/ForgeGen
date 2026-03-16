@@ -1,9 +1,9 @@
 name: Build and Release Debug APK
 
 on:
-  push:
+  pull_request: # Changed this from 'push' to trigger on pull requests
     branches:
-      - main # Change this if your primary branch has a different name (e.g., 'master')
+      - main
 
 permissions:
   contents: write # Required to allow the action to create a GitHub Release
