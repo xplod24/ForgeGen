@@ -11,8 +11,6 @@ data class ServerProfile(
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
-    var serverUsername: String = "",
-    var serverPassword: String = "",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
     var silentNotifications: Boolean = false,
@@ -26,7 +24,11 @@ data class AppConfig(
     var useBiometricLock: Boolean = false,
     var overnightMode: Boolean = false,
     var autoIndexGallery: Boolean = false,
-    var showGridAfterGeneration: Boolean = true
+    var showGridAfterGeneration: Boolean = true,
+
+    // New Feature Toggles
+    var showActiveTagsUI: Boolean = true,
+    var useCivitaiHelperTags: Boolean = true
 )
 
 // --- GENERATION STATE ---
@@ -59,11 +61,14 @@ data class PromptHistoryItem(
 data class ApiResource(
     val title: String,
     val path: String,
-    val name: String
+    val name: String,
+    val triggerWords: String? = null // For Civitai Helper triggers
 )
 
 data class OverrideSettings(
-    @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int
+    @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int,
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
+    @SerializedName("sd_vae") val sdVae: String? = null
 )
 
 data class Txt2ImgPayload(

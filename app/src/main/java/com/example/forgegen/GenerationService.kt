@@ -202,12 +202,12 @@ class GenerationService : Service() {
                 builder.setCategory(NotificationCompat.CATEGORY_PROGRESS)
                 builder.setUsesChronometer(true)
                 builder.setWhen(generationStartTime)
-                // A transparent vector icon is strictly required for the pill to extract the shape correctly
-                builder.setSmallIcon(android.R.drawable.stat_sys_download)
+                // We use a still icon like ic_menu_gallery to prevent glitches in the dynamic pill animation
+                builder.setSmallIcon(android.R.drawable.ic_menu_gallery)
                 // Primary blue for the pill tint backdrop
                 builder.setColor(android.graphics.Color.parseColor("#005BFF"))
             } else {
-                builder.setSmallIcon(android.R.drawable.ic_menu_preferences)
+                builder.setSmallIcon(android.R.drawable.ic_menu_gallery)
             }
         }
 

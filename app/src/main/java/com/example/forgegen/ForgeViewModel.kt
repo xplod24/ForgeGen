@@ -52,7 +52,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     private val _config = MutableStateFlow(loadConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
-    private var client = createClient(_config.value.connectionTimeout, _config.value)
+    // Expose client publicly for Coil ImageLoader, and initialize ONCE to prevent connection pool leaks
+    var client: OkHttpClient = createClient(_config.value.connectionTimeout)
+        private set
 
     private val _appState = MutableStateFlow(loadState())
     val appState: StateFlow<AppState> = _appState.asStateFlow()
@@ -84,10 +86,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     val currentSessionIndex: StateFlow<Int> = ForgeState.currentSessionIndex.asStateFlow()
 
     private val _useMultiThreading = MutableStateFlow(prefs.getBoolean("multi_threading", true))
-    val useMultiThreading: StateFlow<Boolean> = _useMultiThreading.asStateFlow()
+    val valUseMultiThreading: StateFlow<Boolean> = _useMultiThreading.asStateFlow()
     private var workerDispatcher: CoroutineDispatcher = Dispatchers.Default
 
-    private val _allTags = mutableListOf<String>()
+    // Use immutable list for true thread-safety during tag parsing and searching
+    private var _allTags = emptyList<String>()
+
     private val _tagSuggestions = MutableStateFlow<List<String>>(emptyList())
     val tagSuggestions: StateFlow<List<String>> = _tagSuggestions.asStateFlow()
 
@@ -138,7 +142,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
-    private fun createClient(timeoutSeconds: Int, currentConfig: AppConfig): OkHttpClient {
+    private fun createClient(timeoutSeconds: Int): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
@@ -146,17 +150,82 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
 
-                if (currentConfig.serverUsername.isNotEmpty() && currentConfig.serverPassword.isNotEmpty()) {
-                    val credentials = "${currentConfig.serverUsername}:${currentConfig.serverPassword}"
-                    val basicAuth = "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
-                    requestBuilder.header("Authorization", basicAuth)
-                }
+                val urlString = originalRequest.url.toString()
+                val isGalleryCall = originalRequest.url.encodedPath.contains("infinite_image_browsing")
 
                 // Inject Hardcoded IIB Secret Key specifically for gallery endpoints as a Cookie
-                requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                if (isGalleryCall) {
+                    requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                }
 
                 val finalRequest = requestBuilder.build()
-                chain.proceed(finalRequest)
+
+                val isImageCall = urlString.contains("file=") || urlString.contains("png-info") || urlString.contains("txt2img")
+                val isTrackedCall = isGalleryCall || isImageCall
+
+                // --- Comprehensive Logging for Request ---
+                if (isTrackedCall) {
+                    Log.d(TAG, "========== API REQUEST OUT ==========")
+                    Log.d(TAG, "URL: ${finalRequest.url}")
+                    Log.d(TAG, "Method: ${finalRequest.method}")
+                    Log.d(TAG, "Headers:\n${finalRequest.headers}")
+                    if (finalRequest.body != null) {
+                        try {
+                            val buffer = okio.Buffer()
+                            finalRequest.body?.writeTo(buffer)
+                            Log.d(TAG, "Request Body Length: ${buffer.size} bytes")
+                            if (buffer.size < 1024 * 50) { // Limit string output to 50KB to avoid logcat truncation/spam
+                                Log.d(TAG, "Request Body: ${buffer.readUtf8()}")
+                            } else {
+                                Log.d(TAG, "Request Body: [Content too large to print in logs]")
+                            }
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Request Body: [Unreadable]")
+                        }
+                    }
+                    Log.d(TAG, "=====================================")
+                }
+
+                val t1 = System.nanoTime()
+                val response = try {
+                    chain.proceed(finalRequest)
+                } catch (e: Exception) {
+                    if (isTrackedCall) Log.e(TAG, "API CALL FAILED: ${e.message}", e)
+                    throw e
+                }
+                val t2 = System.nanoTime()
+
+                // --- Comprehensive Logging for Response ---
+                if (isTrackedCall) {
+                    val durationMs = (t2 - t1) / 1e6
+                    Log.d(TAG, "========== API RESPONSE IN (${durationMs}ms) ==========")
+                    Log.d(TAG, "URL: ${response.request.url}")
+                    Log.d(TAG, "Code: ${response.code}")
+                    Log.d(TAG, "Headers:\n${response.headers}")
+
+                    val contentType = response.header("Content-Type") ?: response.body?.contentType()?.toString() ?: ""
+                    val contentLength = response.body?.contentLength() ?: -1
+
+                    if (contentType.contains("json", true) || contentType.contains("text", true) || contentType.isEmpty()) {
+                        try {
+                            val peekedBody = response.peekBody(1024 * 1024 * 5) // Peek up to 5MB max safely
+                            val bodyString = peekedBody.string()
+                            // Truncate if the json string is enormous (e.g. contains base64 images payload)
+                            if (bodyString.length > 4000) {
+                                Log.d(TAG, "Body (truncated): ${bodyString.take(4000)}... [Total Length: ${bodyString.length}]")
+                            } else {
+                                Log.d(TAG, "Body:\n$bodyString")
+                            }
+                        } catch (e: Exception) {
+                            Log.d(TAG, "Body: [Could not read response string]")
+                        }
+                    } else {
+                        Log.d(TAG, "Body: [Binary image/data - Content-Type: $contentType, Size: $contentLength bytes]")
+                    }
+                    Log.d(TAG, "===============================================")
+                }
+
+                response
             }
             .build()
     }
@@ -170,8 +239,6 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             galleryPath = parsed?.galleryPath ?: "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
-            serverUsername = parsed?.serverUsername ?: "",
-            serverPassword = parsed?.serverPassword ?: "",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
             silentNotifications = parsed?.silentNotifications ?: false,
@@ -185,7 +252,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             useBiometricLock = parsed?.useBiometricLock ?: false,
             overnightMode = parsed?.overnightMode ?: false,
             autoIndexGallery = parsed?.autoIndexGallery ?: false,
-            showGridAfterGeneration = parsed?.showGridAfterGeneration ?: true
+            showGridAfterGeneration = parsed?.showGridAfterGeneration ?: true,
+            showActiveTagsUI = parsed?.showActiveTagsUI ?: true,
+            useCivitaiHelperTags = parsed?.useCivitaiHelperTags ?: true
         )
     }
 
@@ -197,7 +266,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         val updatedConfig = newConfig.copy(apiUrl = cleanUrl)
         _config.value = updatedConfig
         prefs.edit().putString("config", gson.toJson(updatedConfig)).apply()
-        client = createClient(updatedConfig.connectionTimeout, updatedConfig)
+
+        // OPTIMIZATION: Use newBuilder() to share the connection pool while applying the new timeout.
+        // This prevents severe memory/socket leaks every time settings are saved.
+        client = client.newBuilder()
+            .connectTimeout(updatedConfig.connectionTimeout.toLong(), TimeUnit.SECONDS)
+            .build()
     }
 
     fun getPreviewUrl(path: String): String {
@@ -421,6 +495,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     // --- QUEUE MANAGER ---
     private fun startQueueManager() {
         viewModelScope.launch(workerDispatcher) {
+            var lastGenerationTime = 0L
             while (true) {
                 try {
                     val queue = ForgeState.generationQueue.value
@@ -429,9 +504,20 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     val isPaused = ForgeState.isQueuePaused.value
 
                     if (queue.isNotEmpty() && !isBusy && !isGeneratingLocally && !isPaused) {
+                        val timeSinceLast = System.currentTimeMillis() - lastGenerationTime
+
+                        // Minimum 10 second wait time in between consecutive generations
+                        if (lastGenerationTime != 0L && timeSinceLast < 10000) {
+                            val secondsLeft = (10000 - timeSinceLast) / 1000
+                            ForgeState.statusText.value = "Queue Cooldown (${secondsLeft}s)..."
+                            delay(1000)
+                            continue
+                        }
+
                         val nextJob = queue.first()
                         ForgeState.isGenerating.value = true
                         executeGeneration(nextJob)
+                        lastGenerationTime = System.currentTimeMillis()
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Queue Manager Exception", e)
@@ -443,11 +529,21 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
     fun queueGeneration() {
         val state = _appState.value
+
+        // Dynamically capture the selected model and VAE for the specific generation being queued
+        val currentModel = _selectedModel.value.ifEmpty { null }
+        val currentVae = _selectedVae.value.ifEmpty { null }
+
         val payload = Txt2ImgPayload(
             prompt = state.positivePrompt, negative_prompt = state.negativePrompt,
             steps = state.steps, cfg_scale = state.cfgScale, width = state.width, height = state.height,
             batch_size = state.batchSize, seed = state.seed, sampler_name = state.sampler, scheduler = state.scheduler,
-            override_settings = OverrideSettings(state.clipSkip), enable_hr = state.hiresFix, hr_scale = state.hiresScale,
+            override_settings = OverrideSettings(
+                clipSkip = state.clipSkip,
+                sdModelCheckpoint = currentModel,
+                sdVae = currentVae
+            ),
+            enable_hr = state.hiresFix, hr_scale = state.hiresScale,
             hr_upscaler = state.upscaler, denoising_strength = state.denoising
         )
 
@@ -770,11 +866,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         }
     }
 
-    fun appendLora(name: String) {
+    fun appendLora(name: String, triggerWords: List<String> = emptyList()) {
         val current = _appState.value.positivePrompt
         if (!current.contains("<lora:$name:")) {
             val prefix = if (current.isNotEmpty() && !current.endsWith(",")) ", " else ""
-            val newPrompt = current.trimEnd() + prefix + "<lora:$name:1.0>"
+            val triggers = if (triggerWords.isNotEmpty()) ", " + triggerWords.joinToString(", ") else ""
+            val newPrompt = current.trimEnd() + prefix + "<lora:$name:1.0>" + triggers
             updateState { it.copy(positivePrompt = newPrompt) }
         }
     }
@@ -810,13 +907,15 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 } catch (e: Exception) {}
             }
             if (file.exists()) {
-                _allTags.clear()
+                val tempTags = mutableListOf<String>()
                 file.useLines { lines ->
                     lines.forEach { line ->
                         val parts = line.split(",")
-                        if (parts.isNotEmpty() && parts[0].isNotBlank()) _allTags.add(parts[0])
+                        if (parts.isNotEmpty() && parts[0].isNotBlank()) tempTags.add(parts[0])
                     }
                 }
+                // Atomic swap to prevent thread-safety/ConcurrentModification exceptions while searching
+                _allTags = tempTags.toList()
             }
         }
     }
@@ -1121,7 +1220,9 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                         val list = mutableListOf<ApiResource>()
                         for (i in 0 until array.length()) {
                             val obj = array.getJSONObject(i)
-                            list.add(ApiResource(obj.getString("name"), obj.optString("path"), obj.getString("name")))
+                            // A1111/Forge standard includes prompt payload containing trained triggers
+                            val promptStr = obj.optString("prompt", "")
+                            list.add(ApiResource(obj.getString("name"), obj.optString("path"), obj.getString("name"), promptStr))
                         }
                         availableLoras.value = list
                     }
@@ -1299,4 +1400,3 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         if (idx < ForgeState.currentBatchEndIndex.value) ForgeState.currentSessionIndex.value = idx + 1
     }
 }
-// hahahahahahahahah

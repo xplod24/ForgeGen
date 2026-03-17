@@ -77,7 +77,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -93,7 +92,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.compose.LocalImageLoader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -104,6 +105,7 @@ import okhttp3.Request
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 
@@ -152,10 +154,18 @@ class MainActivity : ComponentActivity() {
         ContextCompat.registerReceiver(this, exitReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
 
         setContent {
+            val context = LocalContext.current
             val viewModel: ForgeViewModel = viewModel()
             val config by viewModel.config.collectAsState()
             val appState by viewModel.appState.collectAsState()
-            val activity = LocalContext.current as Activity
+            val activity = context as Activity
+
+            // Hook up Coil's ImageLoader directly to our OkHttpClient so it gets the Cookies & Logging!
+            val imageLoader = remember(viewModel.client) {
+                ImageLoader.Builder(context)
+                    .okHttpClient { viewModel.client }
+                    .build()
+            }
 
             var isUnlocked by remember { mutableStateOf(!config.useBiometricLock) }
 
@@ -212,7 +222,6 @@ class MainActivity : ComponentActivity() {
             val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsState()
             val currentEta by ForgeState.currentEta.collectAsState()
 
-            val context = LocalContext.current
             val prefs = remember { context.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE) }
 
             val isSamsungDevice = remember { Build.MANUFACTURER.equals("samsung", ignoreCase = true) }
@@ -295,60 +304,62 @@ class MainActivity : ComponentActivity() {
 
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
-            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "terminal"
+            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "terminal" || currentRoute == "queue"
 
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
 
-            MaterialTheme(colorScheme = finalColorScheme, typography = finalTypography, shapes = finalShapes) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(if (shouldBlur) Modifier.blur(15.dp) else Modifier),
-                        color = MaterialTheme.colorScheme.background
-                    ) {
-                        AppNavigation(
-                            viewModel = viewModel,
-                            navController = navController,
-                            isSamsung = isSamsungDevice,
-                            useSamsungTheme = useSamsungTheme,
-                            onThemeChange = {
-                                useSamsungTheme = it
-                                prefs.edit().putBoolean("use_samsung_theme", it).apply()
-                            }
-                        )
-                    }
-
-                    if (shouldBlur) {
-                        Box(
-                            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(enabled = false) {},
-                            contentAlignment = Alignment.Center
+            CompositionLocalProvider(LocalImageLoader provides imageLoader) {
+                MaterialTheme(colorScheme = finalColorScheme, typography = finalTypography, shapes = finalShapes) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(if (shouldBlur) Modifier.blur(15.dp) else Modifier),
+                            color = MaterialTheme.colorScheme.background
                         ) {
-                            Card(shape = MaterialTheme.shapes.large, elevation = CardDefaults.cardElevation(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    if (!isOnline) {
-                                        Icon(Icons.Default.SignalWifiOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Turn on internet connection to use app", textAlign = TextAlign.Center)
-                                    } else {
-                                        Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Make sure your API server is running.", textAlign = TextAlign.Center)
-                                    }
+                            AppNavigation(
+                                viewModel = viewModel,
+                                navController = navController,
+                                isSamsung = isSamsungDevice,
+                                useSamsungTheme = useSamsungTheme,
+                                onThemeChange = {
+                                    useSamsungTheme = it
+                                    prefs.edit().putBoolean("use_samsung_theme", it).apply()
+                                }
+                            )
+                        }
 
-                                    Spacer(modifier = Modifier.height(16.dp))
+                        if (shouldBlur) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Card(shape = MaterialTheme.shapes.large, elevation = CardDefaults.cardElevation(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                                    Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        if (!isOnline) {
+                                            Icon(Icons.Default.SignalWifiOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("Turn on internet connection to use app", textAlign = TextAlign.Center)
+                                        } else {
+                                            Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                            Spacer(Modifier.height(8.dp))
+                                            Text("Make sure your API server is running.", textAlign = TextAlign.Center)
+                                        }
 
-                                    Button(
-                                        onClick = { navController.navigate("setup") },
-                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                                    ) {
-                                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Open Settings")
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        Button(
+                                            onClick = { navController.navigate("setup") },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                        ) {
+                                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Open Settings")
+                                        }
                                     }
                                 }
                             }
@@ -659,6 +670,7 @@ fun AppNavigation(
         composable("main") { MainScreen(viewModel, navController, isSamsung && useSamsungTheme) }
         composable("gallery") { GalleryScreen(viewModel, navController) }
         composable("terminal") { TerminalScreen(viewModel, navController) }
+        composable("queue") { QueueScreen(viewModel, navController) }
     }
 }
 
@@ -675,8 +687,6 @@ fun SetupScreen(
 
     var url by remember(config.apiUrl) { mutableStateOf(config.apiUrl) }
     var path by remember(config.galleryPath) { mutableStateOf(config.galleryPath) }
-    var username by remember(config.serverUsername) { mutableStateOf(config.serverUsername) }
-    var password by remember(config.serverPassword) { mutableStateOf(config.serverPassword) }
     var timeout by remember(config.connectionTimeout) { mutableStateOf(config.connectionTimeout.toString()) }
 
     var apiTestStatus by remember { mutableStateOf<String?>(null) }
@@ -764,21 +774,7 @@ fun SetupScreen(
                             }
                         }
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it },
-                        label = { Text("Gradio Username (Optional)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text("Gradio Password (Optional)") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Gallery Server Path") }, modifier = Modifier.fillMaxWidth())
                     Spacer(modifier = Modifier.height(8.dp))
@@ -800,6 +796,14 @@ fun SetupScreen(
                                 Text("Use Material You (Dynamic Color)")
                                 Text("Extracts app theme directly from wallpaper.", fontSize = 10.sp, color = Color.Gray)
                             }
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.showActiveTagsUI, onCheckedChange = { viewModel.saveConfig(config.copy(showActiveTagsUI = it)) })
+                        Column {
+                            Text("Show Active Tags UI")
+                            Text("Show draggable tags bubbles below prompts.", fontSize = 10.sp, color = Color.Gray)
                         }
                     }
 
@@ -864,6 +868,14 @@ fun SetupScreen(
                     }
 
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+                        Checkbox(checked = config.useCivitaiHelperTags, onCheckedChange = { viewModel.saveConfig(config.copy(useCivitaiHelperTags = it)) })
+                        Column {
+                            Text("Use LoRA Trigger Words")
+                            Text("Popup to select trigger words when adding LoRAs.", fontSize = 10.sp, color = Color.Gray)
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                         Checkbox(checked = config.overnightMode, onCheckedChange = { viewModel.saveConfig(config.copy(overnightMode = it)) })
                         Column {
                             Text("Overnight Batch Mode")
@@ -904,7 +916,7 @@ fun SetupScreen(
                         }
                     }
 
-                    val useMultiThreading by viewModel.useMultiThreading.collectAsState()
+                    val useMultiThreading by viewModel.valUseMultiThreading.collectAsState()
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
                         Checkbox(checked = useMultiThreading, onCheckedChange = { viewModel.setMultiThreading(it) })
                         Column {
@@ -963,11 +975,6 @@ fun SetupScreen(
                             val testClientBuilder = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS)
                             testClientBuilder.addInterceptor { chain ->
                                 val reqBuilder = chain.request().newBuilder()
-                                if (username.isNotEmpty() && password.isNotEmpty()) {
-                                    val creds = "$username:$password"
-                                    val basic = "Basic " + Base64.encodeToString(creds.toByteArray(), Base64.NO_WRAP)
-                                    reqBuilder.header("Authorization", basic)
-                                }
                                 reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
                                 chain.proceed(reqBuilder.build())
                             }
@@ -1017,8 +1024,6 @@ fun SetupScreen(
                         val updateObj = config.copy(
                             apiUrl = url,
                             galleryPath = path,
-                            serverUsername = username,
-                            serverPassword = password,
                             connectionTimeout = timeout.toIntOrNull() ?: 10
                         )
                         viewModel.saveConfig(updateObj)
@@ -1063,70 +1068,161 @@ fun SetupScreen(
     }
 }
 
+fun getTagStrength(tag: String): String {
+    val trimmed = tag.trim()
+    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
+    return match?.groupValues?.get(2) ?: "1.0"
+}
+
+fun adjustTagStrength(tag: String, delta: Float): String {
+    val trimmed = tag.trim()
+    val regex = Regex("^\\((.*):([0-9.]+)\\)$")
+    val match = regex.find(trimmed)
+
+    if (match != null) {
+        val base = match.groupValues[1]
+        val currentStrength = match.groupValues[2].toFloatOrNull() ?: 1.0f
+        val newStrength = (currentStrength + delta).coerceIn(0.1f, 3.0f)
+        if (abs(newStrength - 1.0f) < 0.05f) return base
+        return "($base:${String.format(Locale.US, "%.1f", newStrength)})"
+    } else {
+        val newStrength = (1.0f + delta).coerceIn(0.1f, 3.0f)
+        if (abs(newStrength - 1.0f) < 0.05f) return trimmed
+        return "($trimmed:${String.format(Locale.US, "%.1f", newStrength)})"
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
     val tags = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
     if (tags.isNotEmpty()) {
         var draggingIndex by remember { mutableStateOf<Int?>(null) }
-        var dragOffset by remember { mutableStateOf(0f) }
+        var tunedIndex by remember { mutableStateOf<Int?>(null) }
 
-        LazyRow(
+        var dragOffsetX by remember { mutableStateOf(0f) }
+        var dragOffsetY by remember { mutableStateOf(0f) }
+
+        fun swap(i: Int, j: Int) {
+            val newTags = tags.toMutableList()
+            newTags[i] = newTags[j].also { newTags[j] = newTags[i] }
+            onPromptChanged(newTags.joinToString(", "))
+        }
+
+        FlowRow(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            itemsIndexed(tags) { index, tag ->
+            tags.forEachIndexed { index, tag ->
                 val isDragging = index == draggingIndex
+                val isTuned = index == tunedIndex
+
                 val modifier = if (isDragging) {
-                    Modifier.offset { IntOffset(dragOffset.roundToInt(), 0) }.zIndex(1f)
+                    Modifier.offset { IntOffset(dragOffsetX.roundToInt(), dragOffsetY.roundToInt()) }.zIndex(1f)
                 } else {
                     Modifier.zIndex(0f)
                 }
 
-                AssistChip(
-                    onClick = {},
-                    label = { Text(tag, fontSize = 10.sp) },
-                    trailingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Remove",
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
+                    AnimatedVisibility(visible = isTuned && !isDragging) {
+                        Row(
                             modifier = Modifier
-                                .size(16.dp)
-                                .clickable {
+                                .padding(bottom = 2.dp)
+                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Remove, "Decrease",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(14.dp).clickable {
                                     val newTags = tags.toMutableList()
-                                    newTags.removeAt(index)
+                                    newTags[index] = adjustTagStrength(tag, -0.1f)
                                     onPromptChanged(newTags.joinToString(", "))
                                 }
-                        )
-                    },
-                    shape = MaterialTheme.shapes.small,
-                    modifier = modifier.pointerInput(Unit) {
-                        detectDragGesturesAfterLongPress(
-                            onDragStart = { draggingIndex = index },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                dragOffset += dragAmount.x
-
-                                val swapThreshold = 150f // pixels to trigger swap
-                                if (dragOffset > swapThreshold && index < tags.size - 1) {
+                            )
+                            Text(
+                                getTagStrength(tag),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontSize = 10.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp)
+                            )
+                            Icon(
+                                Icons.Default.Add, "Increase",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(14.dp).clickable {
                                     val newTags = tags.toMutableList()
-                                    newTags[index] = newTags[index + 1].also { newTags[index + 1] = newTags[index] }
+                                    newTags[index] = adjustTagStrength(tag, 0.1f)
                                     onPromptChanged(newTags.joinToString(", "))
-                                    draggingIndex = index + 1
-                                    dragOffset -= swapThreshold
-                                } else if (dragOffset < -swapThreshold && index > 0) {
-                                    val newTags = tags.toMutableList()
-                                    newTags[index] = newTags[index - 1].also { newTags[index - 1] = newTags[index] }
-                                    onPromptChanged(newTags.joinToString(", "))
-                                    draggingIndex = index - 1
-                                    dragOffset += swapThreshold
                                 }
-                            },
-                            onDragEnd = { draggingIndex = null; dragOffset = 0f },
-                            onDragCancel = { draggingIndex = null; dragOffset = 0f }
-                        )
+                            )
+                        }
                     }
-                )
+
+                    AssistChip(
+                        onClick = { tunedIndex = if (tunedIndex == index) null else index },
+                        label = { Text(tag, fontSize = 10.sp) },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Remove",
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clickable {
+                                        val newTags = tags.toMutableList()
+                                        newTags.removeAt(index)
+                                        onPromptChanged(newTags.joinToString(", "))
+                                        if (tunedIndex == index) tunedIndex = null
+                                    }
+                            )
+                        },
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.pointerInput(Unit) {
+                            detectDragGesturesAfterLongPress(
+                                onDragStart = {
+                                    draggingIndex = index
+                                    tunedIndex = null
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    dragOffsetX += dragAmount.x
+                                    dragOffsetY += dragAmount.y
+
+                                    val swapXThreshold = 150f
+                                    val swapYThreshold = 80f // Approx height of a row + spacing
+
+                                    // Horizontal Swaps
+                                    if (dragOffsetX > swapXThreshold && index < tags.size - 1) {
+                                        swap(index, index + 1)
+                                        draggingIndex = index + 1
+                                        dragOffsetX -= swapXThreshold
+                                    } else if (dragOffsetX < -swapXThreshold && index > 0) {
+                                        swap(index, index - 1)
+                                        draggingIndex = index - 1
+                                        dragOffsetX += swapXThreshold
+                                    }
+
+                                    // Vertical Swaps (approx +/- 3 items, highly dependent on screen width)
+                                    if (dragOffsetY > swapYThreshold && index < tags.size - 3) {
+                                        val target = (index + 3).coerceAtMost(tags.size - 1)
+                                        swap(index, target)
+                                        draggingIndex = target
+                                        dragOffsetY -= swapYThreshold
+                                    } else if (dragOffsetY < -swapYThreshold && index > 2) {
+                                        val target = (index - 3).coerceAtLeast(0)
+                                        swap(index, target)
+                                        draggingIndex = target
+                                        dragOffsetY += swapYThreshold
+                                    }
+                                },
+                                onDragEnd = { draggingIndex = null; dragOffsetX = 0f; dragOffsetY = 0f },
+                                onDragCancel = { draggingIndex = null; dragOffsetX = 0f; dragOffsetY = 0f }
+                            )
+                        }
+                    )
+                }
             }
         }
     } else {
@@ -1174,6 +1270,9 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
     var showHistoryDialog by remember { mutableStateOf(false) }
     var showRecoverMenu by remember { mutableStateOf(false) }
     var fullscreenImageIndex by remember { mutableStateOf(-1) }
+
+    // LoRA Civitai Helper Trigger Words Popup State
+    var pendingLora by remember { mutableStateOf<ApiResource?>(null) }
 
     val context = LocalContext.current
 
@@ -1269,24 +1368,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                 }
                             }
                         }
-                    }
-
-                    if (generationQueue.isNotEmpty()) {
-                        ExpandableSection("Queued: ${generationQueue.size} items waiting", "main_queue", initiallyExpanded = false) {
-                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                generationQueue.forEach { item ->
-                                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
-                                        Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("Prompt: ${item.positivePrompt}", fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                            IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(24.dp)) {
-                                                Icon(Icons.Default.Delete, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
                     }
 
                     Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
@@ -1454,9 +1535,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
                     }
 
-                    ExpandableSection("Active Positive Tags", "main_pos_tags", false) {
-                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                            DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
+                    if (config.showActiveTagsUI) {
+                        ExpandableSection("Active Positive Tags", "main_pos_tags", false) {
+                            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                                DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
+                            }
                         }
                     }
 
@@ -1471,9 +1554,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         onClear = { viewModel.updateState { s -> s.copy(negativePrompt = "") } }
                     )
 
-                    ExpandableSection("Active Negative Tags", "main_neg_tags", false) {
-                        Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                            DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
+                    if (config.showActiveTagsUI) {
+                        ExpandableSection("Active Negative Tags", "main_neg_tags", false) {
+                            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                                DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
+                            }
                         }
                     }
 
@@ -1583,20 +1668,27 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                     Text("Add LoRA...", fontSize = 12.sp)
                                 }
                                 DropdownMenu(expanded = loraExpanded, onDismissRequest = { loraExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                    availableLoras.forEach { loraName ->
+                                    availableLoras.forEach { loraData ->
                                         DropdownMenuItem(
                                             text = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     AsyncImage(
-                                                        model = viewModel.getPreviewUrl(loraName.path),
+                                                        model = viewModel.getPreviewUrl(loraData.path),
                                                         contentDescription = null,
                                                         modifier = Modifier.size(48.dp).padding(end = 8.dp).clip(MaterialTheme.shapes.small),
                                                         contentScale = ContentScale.Crop
                                                     )
-                                                    Text(loraName.title, fontSize = 12.sp)
+                                                    Text(loraData.title, fontSize = 12.sp)
                                                 }
                                             },
-                                            onClick = { viewModel.appendLora(loraName.name); loraExpanded = false }
+                                            onClick = {
+                                                if (config.useCivitaiHelperTags && !loraData.triggerWords.isNullOrEmpty()) {
+                                                    pendingLora = loraData
+                                                } else {
+                                                    viewModel.appendLora(loraData.name)
+                                                }
+                                                loraExpanded = false
+                                            }
                                         )
                                     }
                                 }
@@ -1630,7 +1722,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                     Spacer(modifier = Modifier.height(100.dp)) // Extra padding to allow smooth scrolling past the FAB area
                 }
 
-                // Always Floating Generate Button
+                // Advanced Generator Button Area with Separate Queue Route
                 val buttonTextOverlay = when {
                     isGenerating -> "GENERATING..."
                     isServerBusy -> "SERVER BUSY - ADD TO QUEUE"
@@ -1644,20 +1736,86 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                     else -> if (isSamsungMode && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
                 }
 
-                Button(
-                    onClick = { viewModel.queueGeneration() },
-                    enabled = isConnected && !isRestoringPrompt,
+                Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .shadow(8.dp, CircleShape),
-                    colors = ButtonDefaults.buttonColors(containerColor = buttonColorOverlay)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(buttonTextOverlay, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (generationQueue.isNotEmpty()) {
+                        Button(
+                            onClick = { navController.navigate("queue") },
+                            modifier = Modifier
+                                .height(54.dp)
+                                .weight(0.35f)
+                                .shadow(8.dp, CircleShape),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = "Queue")
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("${generationQueue.size}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Button(
+                        onClick = { viewModel.queueGeneration() },
+                        enabled = isConnected && !isRestoringPrompt,
+                        modifier = Modifier
+                            .height(54.dp)
+                            .weight(1f)
+                            .shadow(8.dp, CircleShape),
+                        colors = ButtonDefaults.buttonColors(containerColor = buttonColorOverlay)
+                    ) {
+                        Text(buttonTextOverlay, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
                 }
             }
+        }
+
+        // Civitai Trigger Words Dialog
+        if (pendingLora != null) {
+            val triggerWords = pendingLora!!.triggerWords!!.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            var selectedWords by remember { mutableStateOf(triggerWords.toSet()) }
+
+            AlertDialog(
+                onDismissRequest = { pendingLora = null },
+                title = { Text("Add Trigger Words", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text("Select tags from Civitai Helper:", fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                        LazyColumn(modifier = Modifier.heightIn(max = 250.dp).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)) {
+                            items(triggerWords) { word ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        selectedWords = if (selectedWords.contains(word)) selectedWords - word else selectedWords + word
+                                    }.padding(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Checkbox(
+                                        checked = selectedWords.contains(word),
+                                        onCheckedChange = null
+                                    )
+                                    Text(word, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.appendLora(pendingLora!!.name, selectedWords.toList())
+                        pendingLora = null
+                    }) { Text("Add Selected") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        viewModel.appendLora(pendingLora!!.name, emptyList())
+                        pendingLora = null
+                    }) { Text("Skip Tags") }
+                }
+            )
         }
 
         if (showHistoryDialog) {
@@ -1806,6 +1964,57 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                 },
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).background(Color(0x88000000), CircleShape)
                             ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
+    val queue by ForgeState.generationQueue.collectAsState()
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Generation Queue (${queue.size})", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = { navController.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            )
+        }
+    ) { padding ->
+        if (queue.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text("Queue is empty.", color = Color.Gray)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(8.dp)) {
+                items(queue) { item ->
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                                Text("Prompt: ${item.positivePrompt}", fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(32.dp)) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            val modelStr = item.payload.override_settings.sdModelCheckpoint ?: "Current Default"
+                            Text("Model: $modelStr", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                            val vaeStr = item.payload.override_settings.sdVae ?: "Automatic"
+                            Text("VAE: $vaeStr", fontSize = 10.sp, color = Color.Gray)
+                            Text("Steps: ${item.payload.steps} | CFG: ${item.payload.cfg_scale} | Size: ${item.payload.width}x${item.payload.height}", fontSize = 10.sp, color = Color.Gray)
                         }
                     }
                 }
