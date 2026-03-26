@@ -11,8 +11,12 @@ data class ServerProfile(
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
+    var checkpointPath: String = "C:\\webui_forge_cu124_torch24\\webui\\models\\Stable-diffusion",
+    var loraPath: String = "C:\\webui_forge_cu124_torch24\\webui\\models\\Lora",
+    var language: String = "en",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
+    var receiveGenerationNotification: Boolean = true,
     var silentNotifications: Boolean = false,
     var notificationVerbosity: String = "Full",
     var keepScreenOn: Boolean = false,
@@ -21,14 +25,12 @@ data class AppConfig(
     var galleryGridColumns: Int = 3,
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
     var livePreviews: Boolean = false,
+    var useNativeSecurity: Boolean = false,
     var useBiometricLock: Boolean = false,
     var overnightMode: Boolean = false,
     var autoIndexGallery: Boolean = false,
     var showGridAfterGeneration: Boolean = true,
-
-    // New Feature Toggles
-    var showActiveTagsUI: Boolean = true,
-    var useCivitaiHelperTags: Boolean = true
+    var showActiveTagsUI: Boolean = true
 )
 
 // --- GENERATION STATE ---
@@ -39,6 +41,7 @@ data class AppState(
     var steps: Int = 20,
     var width: Int = 512,
     var height: Int = 512,
+    var batchCount: Int = 1,
     var batchSize: Int = 1,
     var clipSkip: Int = 1,
     var seed: Long = -1L,
@@ -61,14 +64,12 @@ data class PromptHistoryItem(
 data class ApiResource(
     val title: String,
     val path: String,
-    val name: String,
-    val triggerWords: String? = null // For Civitai Helper triggers
+    val name: String
 )
 
 data class OverrideSettings(
     @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int,
-    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
-    @SerializedName("sd_vae") val sdVae: String? = null
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null
 )
 
 data class Txt2ImgPayload(
@@ -78,6 +79,7 @@ data class Txt2ImgPayload(
     val cfg_scale: Float,
     val width: Int,
     val height: Int,
+    val n_iter: Int,
     val batch_size: Int,
     val seed: Long,
     val sampler_name: String,
@@ -96,6 +98,11 @@ data class QueuedGeneration(
 )
 
 // --- GALLERY MODELS ---
+enum class GalleryMode {
+    NORMAL,
+    PROMPT_PICKER
+}
+
 data class GalleryFileList(
     val files: List<GalleryItem> = emptyList()
 )

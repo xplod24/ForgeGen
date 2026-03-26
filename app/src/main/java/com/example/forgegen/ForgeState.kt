@@ -1,7 +1,6 @@
 package com.yourname.forgegen
 
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.update
 
 object ForgeState {
     val progress = MutableStateFlow(0f)
@@ -30,12 +29,4 @@ object ForgeState {
     // Tracks the index boundaries of the most recently generated batch
     val currentBatchStartIndex = MutableStateFlow(0)
     val currentBatchEndIndex = MutableStateFlow(-1)
-
-    // Terminal Server Logs
-    val serverLogs = MutableStateFlow<List<String>>(emptyList())
-
-    fun logServer(msg: String) {
-        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-        serverLogs.update { (it + "[$time] $msg").takeLast(100) }
-    }
 }

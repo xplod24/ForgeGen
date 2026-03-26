@@ -2,6 +2,7 @@ package com.yourname.forgegen
 
 import android.Manifest
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -16,18 +17,17 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
-import android.util.Base64
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -37,14 +37,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -86,6 +82,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -118,6 +117,7 @@ class MainActivity : ComponentActivity() {
             if (intent?.action == "ACTION_EXIT_APP") {
                 val manager = context?.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
                 manager?.cancel(1001)
+                manager?.cancel(1002)
 
                 val serviceIntent = Intent(context, GenerationService::class.java)
                 context?.stopService(serviceIntent)
@@ -160,27 +160,65 @@ class MainActivity : ComponentActivity() {
             val appState by viewModel.appState.collectAsState()
             val activity = context as Activity
 
-            // Hook up Coil's ImageLoader directly to our OkHttpClient so it gets the Cookies & Logging!
+            // Instantly apply language on start and keep it synced
+            LaunchedEffect(config.language) {
+                Translator.currentLang = config.language
+            }
+
+            val lifecycleOwner = LocalLifecycleOwner.current
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_START) {
+                        viewModel.setAppForegroundState(true)
+                    } else if (event == Lifecycle.Event.ON_STOP) {
+                        viewModel.setAppForegroundState(false)
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                }
+            }
+
             val imageLoader = remember(viewModel.client) {
                 ImageLoader.Builder(context)
                     .okHttpClient { viewModel.client }
                     .build()
             }
 
-            var isUnlocked by remember { mutableStateOf(!config.useBiometricLock) }
+            var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
 
             if (!isUnlocked) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.White)
                         Spacer(Modifier.height(16.dp))
-                        Text("App Locked", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        Text("App Locked".t, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         Spacer(Modifier.height(32.dp))
                         Button(onClick = {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                val authenticators = if (config.useBiometricLock) {
+                                    android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                } else {
+                                    android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                }
                                 val prompt = BiometricPrompt.Builder(activity)
-                                    .setTitle("ForgeGen is Locked")
-                                    .setNegativeButton("Cancel", activity.mainExecutor) { _, _ -> }
+                                    .setTitle("ForgeGen Security")
+                                    .setAllowedAuthenticators(authenticators)
+                                    .build()
+                                prompt.authenticate(
+                                    CancellationSignal(),
+                                    activity.mainExecutor,
+                                    object : BiometricPrompt.AuthenticationCallback() {
+                                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
+                                            isUnlocked = true
+                                        }
+                                    }
+                                )
+                            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                val prompt = BiometricPrompt.Builder(activity)
+                                    .setTitle("ForgeGen Security")
+                                    .setNegativeButton("Cancel".t, activity.mainExecutor) { _, _ -> }
                                     .build()
                                 prompt.authenticate(
                                     CancellationSignal(),
@@ -195,7 +233,7 @@ class MainActivity : ComponentActivity() {
                                 isUnlocked = true
                             }
                         }) {
-                            Text("Tap to Unlock")
+                            Text("Tap to Unlock".t)
                         }
                     }
                 }
@@ -215,12 +253,6 @@ class MainActivity : ComponentActivity() {
 
             val isServerBusy by ForgeState.isServerBusy.collectAsState()
             val generationQueue by ForgeState.generationQueue.collectAsState()
-
-            val isGenerating by viewModel.isGenerating.collectAsState()
-            val progress by viewModel.progress.collectAsState()
-            val status by viewModel.statusText.collectAsState()
-            val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsState()
-            val currentEta by ForgeState.currentEta.collectAsState()
 
             val prefs = remember { context.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE) }
 
@@ -304,9 +336,10 @@ class MainActivity : ComponentActivity() {
 
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
-            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "terminal" || currentRoute == "queue"
+            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue"
 
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
+            val onSetupClick = rememberDebounced { navController.navigate("setup") }
 
             CompositionLocalProvider(LocalImageLoader provides imageLoader) {
                 MaterialTheme(colorScheme = finalColorScheme, typography = finalTypography, shapes = finalShapes) {
@@ -339,26 +372,26 @@ class MainActivity : ComponentActivity() {
                                         if (!isOnline) {
                                             Icon(Icons.Default.SignalWifiOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                            Text("No Internet Connection".t, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("Turn on internet connection to use app", textAlign = TextAlign.Center)
+                                            Text("Turn on internet connection to use app".t, textAlign = TextAlign.Center)
                                         } else {
                                             Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                            Text("Server Not Found".t, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("Make sure your API server is running.", textAlign = TextAlign.Center)
+                                            Text("Make sure your API server is running.".t, textAlign = TextAlign.Center)
                                         }
 
                                         Spacer(modifier = Modifier.height(16.dp))
 
                                         Button(
-                                            onClick = { navController.navigate("setup") },
+                                            onClick = onSetupClick,
                                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                                         ) {
                                             Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Open Settings")
+                                            Text("Open Settings".t)
                                         }
                                     }
                                 }
@@ -376,6 +409,21 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Safely prevents rapid double-clicking UI elements inside Compose across recompositions
+@Composable
+fun rememberDebounced(onClick: () -> Unit): () -> Unit {
+    var lastClickTime by remember { mutableStateOf(0L) }
+    return remember(onClick) {
+        {
+            val now = System.currentTimeMillis()
+            if (now - lastClickTime >= 500L) {
+                lastClickTime = now
+                onClick()
+            }
+        }
+    }
+}
+
 @Composable
 fun currentConnectivityStatus(context: Context): State<Boolean> {
     val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -390,7 +438,7 @@ fun currentConnectivityStatus(context: Context): State<Boolean> {
                 if (hasInternet) {
                     if (wasOffline.value) {
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            android.widget.Toast.makeText(context, "Back online!", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "Back online!".t, android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                     isConnected.value = true
@@ -403,7 +451,7 @@ fun currentConnectivityStatus(context: Context): State<Boolean> {
                 if (hasInternet) {
                     if (wasOffline.value) {
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            android.widget.Toast.makeText(context, "Back online!", android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, "Back online!".t, android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                     isConnected.value = true
@@ -460,7 +508,7 @@ fun ExpandableSection(title: String, prefKey: String, initiallyExpanded: Boolean
             Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Icon(
                 imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = "Toggle",
+                contentDescription = null,
                 modifier = Modifier.size(20.dp)
             )
         }
@@ -480,7 +528,8 @@ fun UndoRedoTextField(
     modifier: Modifier = Modifier,
     minLines: Int = 1,
     maxLines: Int = Int.MAX_VALUE,
-    onClear: () -> Unit
+    onClear: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {}
 ) {
     var history by remember { mutableStateOf(listOf(value)) }
     var historyIndex by remember { mutableStateOf(0) }
@@ -504,7 +553,7 @@ fun UndoRedoTextField(
                 },
                 enabled = historyIndex > 0,
                 modifier = Modifier.size(32.dp)
-            ) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo", Modifier.size(18.dp)) }
+            ) { Icon(Icons.AutoMirrored.Filled.Undo, null, Modifier.size(18.dp)) }
 
             IconButton(
                 onClick = {
@@ -515,7 +564,7 @@ fun UndoRedoTextField(
                 },
                 enabled = historyIndex < history.size - 1,
                 modifier = Modifier.size(32.dp)
-            ) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo", Modifier.size(18.dp)) }
+            ) { Icon(Icons.AutoMirrored.Filled.Redo, null, Modifier.size(18.dp)) }
         }
 
         OutlinedTextField(
@@ -533,9 +582,18 @@ fun UndoRedoTextField(
             maxLines = maxLines,
             modifier = Modifier.fillMaxWidth(),
             trailingIcon = {
-                if (value.isNotEmpty()) {
-                    IconButton(onClick = onClear) {
-                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
+                    if (value.isNotEmpty()) {
+                        VerticalDivider(
+                            modifier = Modifier.height(24.dp).padding(horizontal = 4.dp),
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+                        )
+                    }
+                    actions()
+                    if (value.isNotEmpty()) {
+                        IconButton(onClick = onClear) {
+                            Icon(Icons.Default.Close, null)
+                        }
                     }
                 }
             }
@@ -582,9 +640,10 @@ fun MetadataAlertDialog(
         posPrompt = posPrompt.trim()
         negPrompt = negPrompt.trim()
 
-        val loraRegex = Regex("<lora:([^:]+):([0-9.]+)>")
-        loraRegex.findAll(posPrompt).forEach { match ->
-            loras.add(match.value)
+        val loraPattern = java.util.regex.Pattern.compile("<lora:([^:]+):([0-9.]+)>")
+        val matcher = loraPattern.matcher(posPrompt)
+        while (matcher.find()) {
+            loras.add(matcher.group(0) ?: "")
         }
     }
 
@@ -595,11 +654,11 @@ fun MetadataAlertDialog(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Generation Data", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
+                Text("Generation Data".t, fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
 
                 Box(modifier = Modifier.weight(1f, fill = false).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
                     Text(
-                        text = metadata ?: "Loading...",
+                        text = metadata ?: "Loading...".t,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.verticalScroll(rememberScrollState())
@@ -608,29 +667,29 @@ fun MetadataAlertDialog(
 
                 if (metadata != null && posPrompt.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Apply to current session:".t, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
 
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (onApplyAll != null) {
                             Button(onClick = onApplyAll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("Apply All", fontSize = 12.sp)
+                                Text("Apply All".t, fontSize = 12.sp)
                             }
                         }
 
                         OutlinedButton(onClick = { onApplyPrompt(posPrompt, negPrompt) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                            Text("Prompt", fontSize = 12.sp)
+                            Text("Prompt".t, fontSize = 12.sp)
                         }
 
                         if (modelName.isNotEmpty()) {
                             OutlinedButton(onClick = { onApplyModel(modelName) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("Model", fontSize = 12.sp)
+                                Text("Model".t, fontSize = 12.sp)
                             }
                         }
 
                         if (loras.isNotEmpty()) {
                             OutlinedButton(onClick = { onApplyLoras(loras) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
+                                Text("${"LoRAs".t} (${loras.size})", fontSize = 12.sp)
                             }
                         }
                     }
@@ -638,7 +697,7 @@ fun MetadataAlertDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
                 TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Close")
+                    Text("Close".t)
                 }
             }
         }
@@ -665,12 +724,70 @@ fun AppNavigation(
         }
     }
 
-    NavHost(navController = navController, startDestination = "main") {
+    NavHost(
+        navController = navController,
+        startDestination = "main",
+        enterTransition = { fadeIn(animationSpec = tween(0)) },
+        exitTransition = { fadeOut(animationSpec = tween(0)) },
+        popEnterTransition = { fadeIn(animationSpec = tween(0)) },
+        popExitTransition = { fadeOut(animationSpec = tween(0)) }
+    ) {
         composable("setup") { SetupScreen(viewModel, navController, isSamsung, useSamsungTheme, onThemeChange) }
         composable("main") { MainScreen(viewModel, navController, isSamsung && useSamsungTheme) }
         composable("gallery") { GalleryScreen(viewModel, navController) }
-        composable("terminal") { TerminalScreen(viewModel, navController) }
         composable("queue") { QueueScreen(viewModel, navController) }
+    }
+}
+
+@Composable
+fun PreferenceCategory(title: String) {
+    Text(
+        text = title.uppercase(Locale.getDefault()),
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp, end = 16.dp)
+    )
+}
+
+@Composable
+fun SwitchPreference(title: String, subtitle: String? = null, checked: Boolean, onCheckedChange: (Boolean) -> Unit, enabled: Boolean = true) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).alpha(if (enabled) 1f else 0.5f)) {
+            Text(text = title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            if (subtitle != null) {
+                Text(text = subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), lineHeight = 18.sp)
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = enabled
+        )
+    }
+}
+
+@Composable
+fun TextPreference(title: String, value: String, subtitle: String? = value, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            if (subtitle != null) {
+                Text(text = subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 
@@ -684,277 +801,493 @@ fun SetupScreen(
     onThemeChange: (Boolean) -> Unit
 ) {
     val config by viewModel.config.collectAsState()
+    val useMultiThreading by viewModel.useMultiThreading.collectAsState()
+    val indexerStatus by ForgeState.indexerStatus.collectAsState()
 
-    var url by remember(config.apiUrl) { mutableStateOf(config.apiUrl) }
-    var path by remember(config.galleryPath) { mutableStateOf(config.galleryPath) }
-    var timeout by remember(config.connectionTimeout) { mutableStateOf(config.connectionTimeout.toString()) }
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var showPathDialog by remember { mutableStateOf(false) }
+    var showCheckpointPathDialog by remember { mutableStateOf(false) }
+    var showLoraPathDialog by remember { mutableStateOf(false) }
+    var showTimeoutDialog by remember { mutableStateOf(false) }
+    var showProfilesDialog by remember { mutableStateOf(false) }
+    var showVerbosityDialog by remember { mutableStateOf(false) }
 
-    var apiTestStatus by remember { mutableStateOf<String?>(null) }
-    var apiTestResults by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var testStatus by remember { mutableStateOf<String?>(null) }
+    var testResults by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var newProfileName by remember { mutableStateOf("") }
-    var showAddProfileDialog by remember { mutableStateOf(false) }
-    var profileExpanded by remember { mutableStateOf(false) }
+    val keyguardManager = remember { context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
+    val isDeviceSecure = remember { keyguardManager.isDeviceSecure }
+
+    val onBackClick = rememberDebounced {
+        if (navController.previousBackStackEntry != null) {
+            navController.popBackStack()
+        } else {
+            navController.navigate("main") { popUpTo(0) }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Settings, contentDescription = "App Icon", modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Settings", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    }
-                },
+                title = { Text("Settings".t, fontSize = 20.sp, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        if (navController.previousBackStackEntry != null) {
-                            navController.popBackStack()
-                        } else {
-                            navController.navigate("main") { popUpTo(0) }
-                        }
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onBackClick) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState())) {
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
 
-            ExpandableSection("Connection & Server Profiles", "setup_connection", true) {
-                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-                        OutlinedButton(
-                            onClick = { profileExpanded = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.small
-                        ) {
-                            Text("Saved Profiles \u25BC", color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        DropdownMenu(
-                            expanded = profileExpanded,
-                            onDismissRequest = { profileExpanded = false },
-                            modifier = Modifier.fillMaxWidth(0.9f)
-                        ) {
-                            config.serverProfiles.forEach { profile ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Column {
-                                            Text(profile.name, fontWeight = FontWeight.Bold)
-                                            Text(profile.url, fontSize = 10.sp, color = Color.Gray)
-                                        }
-                                    },
-                                    onClick = {
-                                        url = profile.url
-                                        profileExpanded = false
-                                    },
-                                    trailingIcon = {
-                                        IconButton(onClick = { viewModel.removeServerProfile(profile.name) }) {
-                                            Icon(Icons.Default.Delete, contentDescription = "Delete Profile", tint = MaterialTheme.colorScheme.error)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    OutlinedTextField(
-                        value = url,
-                        onValueChange = { url = it },
-                        label = { Text("API URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        trailingIcon = {
-                            IconButton(onClick = { showAddProfileDialog = true }) {
-                                Icon(Icons.Default.Save, contentDescription = "Save Profile")
-                            }
-                        }
+            item { PreferenceCategory("Language".t) }
+            item {
+                var langExpanded by remember { mutableStateOf(false) }
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    TextPreference(
+                        title = "Language (Język)".t,
+                        value = if (config.language == "pl") "Polski" else "English",
+                        onClick = { langExpanded = true }
                     )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = path, onValueChange = { path = it }, label = { Text("Gallery Server Path") }, modifier = Modifier.fillMaxWidth())
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(value = timeout, onValueChange = { timeout = it }, label = { Text("Timeout (sec)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                }
-            }
-
-            ExpandableSection("Appearance & UI", "setup_appearance", false) {
-                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.isDarkMode, onCheckedChange = { viewModel.saveConfig(config.copy(isDarkMode = it)) })
-                        Text("Enable Dark Mode")
-                    }
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                            Checkbox(checked = config.useDynamicColor, onCheckedChange = { viewModel.saveConfig(config.copy(useDynamicColor = it)) })
-                            Column {
-                                Text("Use Material You (Dynamic Color)")
-                                Text("Extracts app theme directly from wallpaper.", fontSize = 10.sp, color = Color.Gray)
+                    DropdownMenu(expanded = langExpanded, onDismissRequest = { langExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("English") },
+                            onClick = {
+                                viewModel.saveConfig(config.copy(language = "en"))
+                                Translator.currentLang = "en"
+                                langExpanded = false
                             }
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.showActiveTagsUI, onCheckedChange = { viewModel.saveConfig(config.copy(showActiveTagsUI = it)) })
-                        Column {
-                            Text("Show Active Tags UI")
-                            Text("Show draggable tags bubbles below prompts.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.keepScreenOn, onCheckedChange = { viewModel.saveConfig(config.copy(keepScreenOn = it)) })
-                        Column {
-                            Text("Keep Screen On")
-                            Text("Prevents phone sleep while rendering.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = useSamsungTheme, onCheckedChange = onThemeChange, enabled = isSamsung && !config.useDynamicColor)
-                        Column(modifier = Modifier.alpha(if (isSamsung && !config.useDynamicColor) 1f else 0.5f)) {
-                            Text("Samsung One UI Mode")
-                            Text("Use native Samsung styling and shapes.", fontSize = 10.sp, color = Color.Gray)
-                            if (!isSamsung) Text("Only available on Samsung devices.", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
-                            if (config.useDynamicColor) Text("Disabled when Material You is ON.", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
-
-            ExpandableSection("Gallery & Media", "setup_gallery", false) {
-                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.swipeToBrowseGallery, onCheckedChange = { viewModel.saveConfig(config.copy(swipeToBrowseGallery = it)) })
-                        Column {
-                            Text("Swipe to Browse Images")
-                            Text("Use horizontal swiping in fullscreen preview.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.livePreviews, onCheckedChange = { viewModel.saveConfig(config.copy(livePreviews = it)) })
-                        Column {
-                            Text("Live Step-by-Step Previews")
-                            Text("Show a live blurry image stream while generating.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.showGridAfterGeneration, onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) })
-                        Column {
-                            Text("Show Grid After Batch")
-                            Text("Temporarily show a grid of images when a batch generation finishes.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-                }
-            }
-
-            ExpandableSection("Advanced & System", "setup_advanced", false) {
-                Column(modifier = Modifier.padding(horizontal = 8.dp)) {
-
-                    val indexerStatus by ForgeState.indexerStatus.collectAsState()
-                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Background Prompt Indexer", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text(indexerStatus, fontSize = 10.sp, color = if (indexerStatus.contains("Error")) MaterialTheme.colorScheme.error else Color.Gray)
-                        }
-                        Button(onClick = { viewModel.startIndexer() }, enabled = !indexerStatus.contains("Indexing")) {
-                            Text("Sync")
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.useCivitaiHelperTags, onCheckedChange = { viewModel.saveConfig(config.copy(useCivitaiHelperTags = it)) })
-                        Column {
-                            Text("Use LoRA Trigger Words")
-                            Text("Popup to select trigger words when adding LoRAs.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.overnightMode, onCheckedChange = { viewModel.saveConfig(config.copy(overnightMode = it)) })
-                        Column {
-                            Text("Overnight Batch Mode")
-                            Text("Ignores minor errors to keep batch running.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Text("Notification Detail Level", fontSize = 14.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-                    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Full", "Brief", "Simple").forEach { level ->
-                            Button(
-                                onClick = { viewModel.saveConfig(config.copy(notificationVerbosity = level)) },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (config.notificationVerbosity == level) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                                    contentColor = if (config.notificationVerbosity == level) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                ),
-                                modifier = Modifier.weight(1f).height(36.dp),
-                                contentPadding = PaddingValues(0.dp)
-                            ) {
-                                Text(level, fontSize = 12.sp)
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Polski") },
+                            onClick = {
+                                viewModel.saveConfig(config.copy(language = "pl"))
+                                Translator.currentLang = "pl"
+                                langExpanded = false
                             }
-                        }
+                        )
                     }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.useBiometricLock, onCheckedChange = { viewModel.saveConfig(config.copy(useBiometricLock = it)) })
-                        Column {
-                            Text("Biometric App Lock")
-                            Text("Require fingerprint or face scan on launch.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = config.silentNotifications, onCheckedChange = { viewModel.saveConfig(config.copy(silentNotifications = it)) })
-                        Column {
-                            Text("Silent Notifications")
-                            Text("Disable sound and vibration alerts.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    val useMultiThreading by viewModel.valUseMultiThreading.collectAsState()
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
-                        Checkbox(checked = useMultiThreading, onCheckedChange = { viewModel.setMultiThreading(it) })
-                        Column {
-                            Text("Multi-threaded Processing")
-                            Text("Utilize all cores. Disable to save battery.", fontSize = 10.sp, color = Color.Gray)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = {
-                            val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) {
-                        Text("Remove Battery Restrictions", textAlign = TextAlign.Center)
-                    }
-
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            item { PreferenceCategory("Server Connection".t) }
+            item {
+                TextPreference(title = "API URL".t, value = config.apiUrl) { showUrlDialog = true }
+            }
+            item {
+                TextPreference(title = "Server Profiles".t, subtitle = "${config.serverProfiles.size} " + "saved profiles".t, value = "") { showProfilesDialog = true }
+            }
+            item {
+                TextPreference(title = "Connection Timeout".t, subtitle = "${config.connectionTimeout} " + "seconds".t, value = "") { showTimeoutDialog = true }
+            }
+            item {
+                TextPreference(title = "Test Connection".t, subtitle = "Run API diagnostics".t, value = "") {
+                    isTestingConnection = true
+                    testStatus = "Running diagnostics..."
+                    testResults = emptyList()
 
-            if (apiTestStatus != null) {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    shape = MaterialTheme.shapes.medium
+                    scope.launch(Dispatchers.IO) {
+                        val testClientBuilder = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS)
+                        testClientBuilder.addInterceptor { chain ->
+                            val reqBuilder = chain.request().newBuilder()
+                            reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                            chain.proceed(reqBuilder.build())
+                        }
+                        val testClient = testClientBuilder.build()
+                        val endpoints = listOf("sd-models", "samplers", "schedulers", "upscalers", "loras", "options")
+                        val results = mutableListOf<Pair<String, String>>()
+                        var allSuccess = true
+
+                        for (ep in endpoints) {
+                            val start = System.currentTimeMillis()
+                            try {
+                                var cleanUrl = config.apiUrl.trimEnd('/')
+                                if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) cleanUrl = "http://$cleanUrl"
+
+                                val req = Request.Builder().url("$cleanUrl/sdapi/v1/$ep").build()
+                                testClient.newCall(req).execute().use { res ->
+                                    val time = System.currentTimeMillis() - start
+                                    if (res.isSuccessful) {
+                                        results.add(ep to "${time}ms \u2714")
+                                    } else if (res.code == 401 || res.code == 403) {
+                                        results.add(ep to "Auth Needed \u2718")
+                                        allSuccess = false
+                                    } else {
+                                        results.add(ep to "Err ${res.code} \u2718")
+                                        allSuccess = false
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                results.add(ep to "Failed \u2718")
+                                allSuccess = false
+                            }
+                            withContext(Dispatchers.Main) { testResults = results.toList() }
+                        }
+
+                        withContext(Dispatchers.Main) {
+                            testStatus = if (allSuccess) "All Systems Operational!" else "Some APIs Failed."
+                        }
+                    }
+                }
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            item { PreferenceCategory("Security".t) }
+            if (!isDeviceSecure) {
+                item {
+                    Text(
+                        text = "Your device does not have a PIN, Pattern, or Password set. Please set a lock in your device settings to enable App Security.".t,
+                        color = MaterialTheme.colorScheme.error,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
+            item {
+                SwitchPreference(
+                    title = "Use Native Security".t,
+                    subtitle = "Require device PIN/Password/Pattern to open app".t,
+                    checked = config.useNativeSecurity,
+                    enabled = isDeviceSecure,
+                    onCheckedChange = {
+                        val newConfig = config.copy(useNativeSecurity = it)
+                        if (!it) {
+                            newConfig.useBiometricLock = false
+                        }
+                        viewModel.saveConfig(newConfig)
+                    }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Biometric App Lock".t,
+                    subtitle = "Require fingerprint or face scan on launch".t,
+                    checked = config.useBiometricLock,
+                    enabled = config.useNativeSecurity && isDeviceSecure,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(useBiometricLock = it)) }
+                )
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            item { PreferenceCategory("Paths & Media".t) }
+            item {
+                TextPreference(title = "Gallery Server Path".t, value = config.galleryPath) { showPathDialog = true }
+            }
+            item {
+                TextPreference(title = "Checkpoint Directory Path".t, value = config.checkpointPath) { showCheckpointPathDialog = true }
+            }
+            item {
+                TextPreference(title = "LoRA Directory Path".t, value = config.loraPath) { showLoraPathDialog = true }
+            }
+            item {
+                SwitchPreference(
+                    title = "Swipe to Browse Images".t,
+                    subtitle = "Use horizontal swiping in fullscreen preview".t,
+                    checked = config.swipeToBrowseGallery,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(swipeToBrowseGallery = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Live Step-by-Step Previews".t,
+                    subtitle = "Show a live blurry image stream while generating".t,
+                    checked = config.livePreviews,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(livePreviews = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Show Grid After Batch".t,
+                    subtitle = "Temporarily show a grid of images when a batch generation finishes".t,
+                    checked = config.showGridAfterGeneration,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) }
+                )
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            item { PreferenceCategory("Appearance & UI".t) }
+            item {
+                SwitchPreference(
+                    title = "Enable Dark Mode".t,
+                    checked = config.isDarkMode,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(isDarkMode = it)) }
+                )
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                item {
+                    SwitchPreference(
+                        title = "Use Material You".t,
+                        subtitle = "Extracts app dynamic color theme directly from your wallpaper".t,
+                        checked = config.useDynamicColor,
+                        onCheckedChange = { viewModel.saveConfig(config.copy(useDynamicColor = it)) }
+                    )
+                }
+            }
+            item {
+                SwitchPreference(
+                    title = "Show Active Tags UI".t,
+                    subtitle = "Show a quick edit button to visually reorder tags in prompt".t,
+                    checked = config.showActiveTagsUI,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(showActiveTagsUI = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Keep Screen On".t,
+                    subtitle = "Prevents phone sleep while rendering".t,
+                    checked = config.keepScreenOn,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(keepScreenOn = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Samsung One UI Mode".t,
+                    subtitle = "Use native Samsung styling and shapes".t,
+                    checked = useSamsungTheme,
+                    enabled = isSamsung && !config.useDynamicColor,
+                    onCheckedChange = onThemeChange
+                )
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            item { PreferenceCategory("Notifications & Advanced".t) }
+            item {
+                TextPreference(
+                    title = "Background Prompt Indexer".t,
+                    subtitle = indexerStatus,
+                    value = ""
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    if (!indexerStatus.contains("Indexing")) viewModel.startIndexer()
+                }
+            }
+            item {
+                SwitchPreference(
+                    title = "Receive Generation Completion Notification".t,
+                    subtitle = "Get alerted when batch is fully completed".t,
+                    checked = config.receiveGenerationNotification,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(receiveGenerationNotification = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Silent Notifications".t,
+                    subtitle = "Disable sound and vibration alerts for app notifications".t,
+                    checked = config.silentNotifications,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(silentNotifications = it)) }
+                )
+            }
+            item {
+                TextPreference(
+                    title = "Notification Detail Level".t,
+                    value = config.notificationVerbosity,
+                    onClick = { showVerbosityDialog = true }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Overnight Batch Mode".t,
+                    subtitle = "Ignores minor errors to keep batch running".t,
+                    checked = config.overnightMode,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(overnightMode = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Multi-threaded Processing".t,
+                    subtitle = "Utilize all cores. Disable to save battery".t,
+                    checked = useMultiThreading,
+                    onCheckedChange = { viewModel.setMultiThreading(it) }
+                )
+            }
+            item {
+                TextPreference(
+                    title = "Remove Battery Restrictions".t,
+                    subtitle = "Allow app to run uninhibited in the background".t,
+                    value = ""
+                ) {
+                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                    context.startActivity(intent)
+                }
+            }
+            item { Spacer(Modifier.height(32.dp)) }
+        }
+
+        if (showUrlDialog) {
+            var tempUrl by remember { mutableStateOf(config.apiUrl) }
+            AlertDialog(
+                onDismissRequest = { showUrlDialog = false },
+                title = { Text("API URL".t) },
+                text = { OutlinedTextField(value = tempUrl, onValueChange = { tempUrl = it }, modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.saveConfig(config.copy(apiUrl = tempUrl)); showUrlDialog = false }) { Text("Save".t) }
+                },
+                dismissButton = { TextButton(onClick = { showUrlDialog = false }) { Text("Cancel".t) } }
+            )
+        }
+
+        if (showPathDialog) {
+            var tempPath by remember { mutableStateOf(config.galleryPath) }
+            AlertDialog(
+                onDismissRequest = { showPathDialog = false },
+                title = { Text("Gallery Server Path".t) },
+                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.saveConfig(config.copy(galleryPath = tempPath)); showPathDialog = false }) { Text("Save".t) }
+                },
+                dismissButton = { TextButton(onClick = { showPathDialog = false }) { Text("Cancel".t) } }
+            )
+        }
+
+        if (showCheckpointPathDialog) {
+            var tempPath by remember { mutableStateOf(config.checkpointPath) }
+            AlertDialog(
+                onDismissRequest = { showCheckpointPathDialog = false },
+                title = { Text("Checkpoint Directory Path".t) },
+                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.saveConfig(config.copy(checkpointPath = tempPath)); showCheckpointPathDialog = false }) { Text("Save".t) }
+                },
+                dismissButton = { TextButton(onClick = { showCheckpointPathDialog = false }) { Text("Cancel".t) } }
+            )
+        }
+
+        if (showLoraPathDialog) {
+            var tempPath by remember { mutableStateOf(config.loraPath) }
+            AlertDialog(
+                onDismissRequest = { showLoraPathDialog = false },
+                title = { Text("LoRA Directory Path".t) },
+                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.saveConfig(config.copy(loraPath = tempPath)); showLoraPathDialog = false }) { Text("Save".t) }
+                },
+                dismissButton = { TextButton(onClick = { showLoraPathDialog = false }) { Text("Cancel".t) } }
+            )
+        }
+
+        if (showTimeoutDialog) {
+            var tempTimeout by remember { mutableStateOf(config.connectionTimeout.toString()) }
+            AlertDialog(
+                onDismissRequest = { showTimeoutDialog = false },
+                title = { Text("Connection Timeout (sec)".t) },
+                text = {
+                    OutlinedTextField(
+                        value = tempTimeout,
+                        onValueChange = { tempTimeout = it },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val t = tempTimeout.toIntOrNull() ?: 10
+                        viewModel.saveConfig(config.copy(connectionTimeout = t))
+                        showTimeoutDialog = false
+                    }) { Text("Save".t) }
+                },
+                dismissButton = { TextButton(onClick = { showTimeoutDialog = false }) { Text("Cancel".t) } }
+            )
+        }
+
+        if (showVerbosityDialog) {
+            AlertDialog(
+                onDismissRequest = { showVerbosityDialog = false },
+                title = { Text("Notification Verbosity".t) },
+                text = {
+                    Column {
+                        listOf("Full", "Brief", "Simple").forEach { level ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    viewModel.saveConfig(config.copy(notificationVerbosity = level))
+                                    showVerbosityDialog = false
+                                }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = config.notificationVerbosity == level, onClick = null)
+                                Spacer(Modifier.width(16.dp))
+                                Text(level, fontSize = 16.sp)
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showVerbosityDialog = false }) { Text("Close".t) } }
+            )
+        }
+
+        if (showProfilesDialog) {
+            var newProfileName by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showProfilesDialog = false },
+                title = { Text("Server Profiles".t) },
+                text = {
+                    Column {
+                        LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                            items(config.serverProfiles) { profile ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        viewModel.saveConfig(config.copy(apiUrl = profile.url))
+                                        showProfilesDialog = false
+                                    }.padding(vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(profile.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                        Text(profile.url, fontSize = 12.sp, color = Color.Gray)
+                                    }
+                                    IconButton(onClick = { viewModel.removeServerProfile(profile.name) }) {
+                                        Icon(Icons.Default.Delete, "Delete".t, tint = MaterialTheme.colorScheme.error)
+                                    }
+                                }
+                                HorizontalDivider()
+                            }
+                        }
+                        Spacer(Modifier.height(16.dp))
+                        Text("Add New Profile".t, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        OutlinedTextField(
+                            value = newProfileName,
+                            onValueChange = { newProfileName = it },
+                            label = { Text("Profile Name (Uses current API URL)".t) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Button(
+                            onClick = {
+                                if (newProfileName.isNotBlank() && config.apiUrl.isNotBlank()) {
+                                    viewModel.addServerProfile(newProfileName, config.apiUrl)
+                                    newProfileName = ""
+                                }
+                            },
+                            modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+                        ) {
+                            Text("Save Profile".t)
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showProfilesDialog = false }) { Text("Close".t) } }
+            )
+        }
+
+        if (isTestingConnection || testStatus != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    isTestingConnection = false
+                    testStatus = null
+                },
+                title = { Text("Diagnostics".t) },
+                text = {
+                    Column {
                         Text(
-                            text = apiTestStatus!!,
-                            color = if (apiTestStatus!!.contains("Operational")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                            text = testStatus ?: "",
+                            color = if (testStatus?.contains("Operational") == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
-                        apiTestResults.forEach { (endpoint, result) ->
+                        testResults.forEach { (endpoint, result) ->
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(endpoint, fontSize = 12.sp)
                                 Text(result, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -962,128 +1295,38 @@ fun SetupScreen(
                             Spacer(Modifier.height(4.dp))
                         }
                     }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        isTestingConnection = false
+                        testStatus = null
+                    }) { Text("Close".t) }
                 }
-            }
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        apiTestStatus = "Running diagnostics..."
-                        apiTestResults = emptyList()
-
-                        scope.launch(Dispatchers.IO) {
-                            val testClientBuilder = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS)
-                            testClientBuilder.addInterceptor { chain ->
-                                val reqBuilder = chain.request().newBuilder()
-                                reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                                chain.proceed(reqBuilder.build())
-                            }
-                            val testClient = testClientBuilder.build()
-                            val endpoints = listOf("sd-models", "samplers", "schedulers", "upscalers", "loras", "options")
-                            val results = mutableListOf<Pair<String, String>>()
-                            var allSuccess = true
-
-                            for (ep in endpoints) {
-                                val start = System.currentTimeMillis()
-                                try {
-                                    var cleanUrl = url.trimEnd('/')
-                                    if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) cleanUrl = "http://$cleanUrl"
-
-                                    val req = Request.Builder().url("$cleanUrl/sdapi/v1/$ep").build()
-                                    testClient.newCall(req).execute().use { res ->
-                                        val time = System.currentTimeMillis() - start
-                                        if (res.isSuccessful) {
-                                            results.add(ep to "${time}ms \u2714")
-                                        } else if (res.code == 401 || res.code == 403) {
-                                            results.add(ep to "Auth Needed \u2718")
-                                            allSuccess = false
-                                        } else {
-                                            results.add(ep to "Err ${res.code} \u2718")
-                                            allSuccess = false
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    results.add(ep to "Failed \u2718")
-                                    allSuccess = false
-                                }
-                                withContext(Dispatchers.Main) { apiTestResults = results.toList() }
-                            }
-
-                            withContext(Dispatchers.Main) {
-                                apiTestStatus = if (allSuccess) "All Systems Operational!" else "Some APIs Failed."
-                            }
-                        }
-                    },
-                    modifier = Modifier.weight(1f).height(50.dp)
-                ) {
-                    Text("Test Connection", textAlign = TextAlign.Center)
-                }
-
-                Button(
-                    onClick = {
-                        val updateObj = config.copy(
-                            apiUrl = url,
-                            galleryPath = path,
-                            connectionTimeout = timeout.toIntOrNull() ?: 10
-                        )
-                        viewModel.saveConfig(updateObj)
-                        Toast.makeText(context, "Settings saved successfully", Toast.LENGTH_SHORT).show()
-                    },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (useSamsungTheme && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
-                    )
-                ) {
-                    Text("Save Settings", textAlign = TextAlign.Center)
-                }
-            }
-            Spacer(modifier = Modifier.height(30.dp))
-
-            if (showAddProfileDialog) {
-                AlertDialog(
-                    onDismissRequest = { showAddProfileDialog = false },
-                    title = { Text("Save Server Profile") },
-                    text = {
-                        OutlinedTextField(
-                            value = newProfileName,
-                            onValueChange = { newProfileName = it },
-                            label = { Text("Profile Name (e.g. Local PC)") }
-                        )
-                    },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            if (newProfileName.isNotBlank() && url.isNotBlank()) {
-                                viewModel.addServerProfile(newProfileName, url)
-                            }
-                            showAddProfileDialog = false
-                            newProfileName = ""
-                        }) { Text("Save") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showAddProfileDialog = false }) { Text("Cancel") }
-                    }
-                )
-            }
+            )
         }
     }
 }
 
 fun getTagStrength(tag: String): String {
     val trimmed = tag.trim()
-    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
-    return match?.groupValues?.get(2) ?: "1.0"
+    val pattern = java.util.regex.Pattern.compile("^\\((.*):([0-9.]+)\\)$")
+    val matcher = pattern.matcher(trimmed)
+    if (matcher.find() && matcher.groupCount() >= 2) {
+        return matcher.group(2) ?: "1.0"
+    }
+    return "1.0"
 }
 
 fun adjustTagStrength(tag: String, delta: Float): String {
     val trimmed = tag.trim()
-    val regex = Regex("^\\((.*):([0-9.]+)\\)$")
-    val match = regex.find(trimmed)
+    val pattern = java.util.regex.Pattern.compile("^\\((.*):([0-9.]+)\\)$")
+    val matcher = pattern.matcher(trimmed)
 
-    if (match != null) {
-        val base = match.groupValues[1]
-        val currentStrength = match.groupValues[2].toFloatOrNull() ?: 1.0f
+    if (matcher.find() && matcher.groupCount() >= 2) {
+        val base = matcher.group(1)
+        val currentStrength = matcher.group(2)?.toFloatOrNull() ?: 1.0f
         val newStrength = (currentStrength + delta).coerceIn(0.1f, 3.0f)
-        if (abs(newStrength - 1.0f) < 0.05f) return base
+        if (abs(newStrength - 1.0f) < 0.05f) return base ?: ""
         return "($base:${String.format(Locale.US, "%.1f", newStrength)})"
     } else {
         val newStrength = (1.0f + delta).coerceIn(0.1f, 3.0f)
@@ -1111,7 +1354,7 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
         }
 
         FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -1135,7 +1378,7 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
-                                Icons.Default.Remove, "Decrease",
+                                Icons.Default.Remove, "Decrease".t,
                                 tint = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier.size(14.dp).clickable {
                                     val newTags = tags.toMutableList()
@@ -1150,7 +1393,7 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
                                 modifier = Modifier.padding(horizontal = 6.dp)
                             )
                             Icon(
-                                Icons.Default.Add, "Increase",
+                                Icons.Default.Add, "Increase".t,
                                 tint = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier.size(14.dp).clickable {
                                     val newTags = tags.toMutableList()
@@ -1163,13 +1406,13 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
 
                     AssistChip(
                         onClick = { tunedIndex = if (tunedIndex == index) null else index },
-                        label = { Text(tag, fontSize = 10.sp) },
+                        label = { Text(tag, fontSize = 12.sp) },
                         trailingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Remove",
+                                contentDescription = "Remove".t,
                                 modifier = Modifier
-                                    .size(16.dp)
+                                    .size(18.dp)
                                     .clickable {
                                         val newTags = tags.toMutableList()
                                         newTags.removeAt(index)
@@ -1191,9 +1434,8 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
                                     dragOffsetY += dragAmount.y
 
                                     val swapXThreshold = 150f
-                                    val swapYThreshold = 80f // Approx height of a row + spacing
+                                    val swapYThreshold = 80f
 
-                                    // Horizontal Swaps
                                     if (dragOffsetX > swapXThreshold && index < tags.size - 1) {
                                         swap(index, index + 1)
                                         draggingIndex = index + 1
@@ -1204,7 +1446,6 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
                                         dragOffsetX += swapXThreshold
                                     }
 
-                                    // Vertical Swaps (approx +/- 3 items, highly dependent on screen width)
                                     if (dragOffsetY > swapYThreshold && index < tags.size - 3) {
                                         val target = (index + 3).coerceAtMost(tags.size - 1)
                                         swap(index, target)
@@ -1226,7 +1467,7 @@ fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
             }
         }
     } else {
-        Text("No active tags", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
+        Text("No active tags".t, color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(16.dp))
     }
 }
 
@@ -1257,8 +1498,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
     val selectedModel by viewModel.selectedModel.collectAsState()
     val samplers by viewModel.samplers.collectAsState()
     val schedulers by viewModel.schedulers.collectAsState()
-    val vaes by viewModel.vaes.collectAsState()
-    val selectedVae by viewModel.selectedVae.collectAsState()
     val availableLoras by viewModel.availableLoras.collectAsState()
     val activeLoras by viewModel.activeLoras.collectAsState()
 
@@ -1271,10 +1510,26 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
     var showRecoverMenu by remember { mutableStateOf(false) }
     var fullscreenImageIndex by remember { mutableStateOf(-1) }
 
-    // LoRA Civitai Helper Trigger Words Popup State
     var pendingLora by remember { mutableStateOf<ApiResource?>(null) }
 
+    var showPosTagEditor by remember { mutableStateOf(false) }
+    var showNegTagEditor by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
+
+    val onGalleryClick = rememberDebounced {
+        showOverflowMenu = false
+        viewModel.setGalleryMode(GalleryMode.NORMAL)
+        viewModel.fetchGalleryFolder()
+        navController.navigate("gallery")
+    }
+
+    val onSettingsClick = rememberDebounced {
+        showOverflowMenu = false
+        navController.navigate("setup")
+    }
+
+    val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
     Box(modifier = Modifier.fillMaxSize()) {
 
@@ -1284,7 +1539,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Settings, contentDescription = "App Icon", modifier = Modifier.size(24.dp))
+                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(24.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text("Forge Generator", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1297,7 +1552,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = if (isConnected) "${pingMs}ms" else "Offline",
+                                        text = if (isConnected) "${pingMs}ms" else "Offline".t,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Normal
                                     )
@@ -1308,36 +1563,21 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                     actions = {
                         Box {
                             IconButton(onClick = { showOverflowMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "More Options")
+                                Icon(Icons.Default.MoreVert, null)
                             }
                             DropdownMenu(
                                 expanded = showOverflowMenu,
                                 onDismissRequest = { showOverflowMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Terminal", fontSize = 14.sp) },
-                                    leadingIcon = { Icon(Icons.Default.Terminal, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        navController.navigate("terminal")
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Gallery", fontSize = 14.sp) },
+                                    text = { Text("Gallery".t, fontSize = 14.sp) },
                                     leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.fetchGalleryFolder()
-                                        navController.navigate("gallery")
-                                    }
+                                    onClick = onGalleryClick
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Settings", fontSize = 14.sp) },
+                                    text = { Text("Settings".t, fontSize = 14.sp) },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        navController.navigate("setup")
-                                    }
+                                    onClick = onSettingsClick
                                 )
                             }
                         }
@@ -1360,11 +1600,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                             Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(Icons.Default.Warning, contentDescription = "Error", tint = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.size(32.dp))
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Text("SERVER OUT OF MEMORY (OOM)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
-                                Text("The current generation failed and the queue is paused. The failed prompt was skipped.", fontSize = 12.sp, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text("SERVER OUT OF MEMORY (OOM)".t, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+                                Text("The current generation failed and the queue is paused. The failed prompt was skipped.".t, fontSize = 12.sp, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onErrorContainer)
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Button(onClick = { viewModel.resumeQueue() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.onErrorContainer, contentColor = MaterialTheme.colorScheme.errorContainer)) {
-                                    Text("Resume Queue")
+                                    Text("Resume Queue".t)
                                 }
                             }
                         }
@@ -1372,9 +1612,17 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
 
                     Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
                         if (isGenerating && !livePreviewBase64.isNullOrEmpty()) {
-                            val bytes = Base64.decode(livePreviewBase64, Base64.DEFAULT)
-                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                            if (bitmap != null) {
+
+                            val previewBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, livePreviewBase64) {
+                                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                    try {
+                                        val bytes = android.util.Base64.decode(livePreviewBase64, android.util.Base64.DEFAULT)
+                                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    } catch (e: Exception) { null }
+                                }
+                            }
+
+                            previewBitmap?.let { bitmap ->
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
                                     contentDescription = "Live Preview",
@@ -1382,9 +1630,10 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                     contentScale = ContentScale.Fit
                                 )
                             }
-                        } else if (isShowingGridPreview && sessionImages.size > batchStart.toInt() && batchEnd.toInt() >= batchStart.toInt()) {
-                            val bStart = batchStart.toInt()
-                            val bEnd = batchEnd.toInt()
+
+                        } else if (isShowingGridPreview && sessionImages.size > batchStart && batchEnd >= batchStart) {
+                            val bStart = batchStart
+                            val bEnd = batchEnd
                             val batchImages = sessionImages.subList(bStart, bEnd + 1)
                             LazyVerticalGrid(
                                 columns = GridCells.Adaptive(minSize = 80.dp),
@@ -1408,91 +1657,67 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                     )
                                 }
                             }
-                        } else if (currentSessionIndex.toInt() >= 0 && sessionImages.isNotEmpty() && currentSessionIndex.toInt() < sessionImages.size) {
+                        } else if (currentSessionIndex >= 0 && sessionImages.isNotEmpty() && currentSessionIndex < sessionImages.size) {
                             AsyncImage(
-                                model = sessionImages[currentSessionIndex.toInt()],
+                                model = sessionImages[currentSessionIndex],
                                 contentDescription = null,
-                                modifier = Modifier.fillMaxSize().clickable { fullscreenImageIndex = currentSessionIndex.toInt() },
+                                modifier = Modifier.fillMaxSize().clickable { fullscreenImageIndex = currentSessionIndex },
                                 contentScale = ContentScale.Fit
                             )
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                                 Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
-                                Text("No Preview", color = Color.Gray)
+                                Text("No Preview".t, color = Color.Gray)
                             }
                         }
 
                         Row(modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                            FilledTonalButton(onClick = { viewModel.sessionPrev() }, enabled = currentSessionIndex.toInt() > batchStart.toInt(), contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                            FilledTonalButton(onClick = { viewModel.sessionPrev() }, enabled = currentSessionIndex > batchStart, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null)
                             }
-                            FilledTonalButton(onClick = { viewModel.sessionNext() }, enabled = currentSessionIndex.toInt() < batchEnd.toInt(), contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                            FilledTonalButton(onClick = { viewModel.sessionNext() }, enabled = currentSessionIndex < batchEnd, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
                                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
                             }
-                        }
-                    }
-
-                    AnimatedVisibility(visible = isGenerating || isServerBusy || progress > 0f) {
-                        Column(modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                val currentStep = (progress * state.steps).toInt()
-                                val modeText = if (isGenerating) "Generating..." else "External Task..."
-                                Text("$modeText (Step $currentStep/${state.steps})", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                if (currentEta > 0) {
-                                    Text("ETA: ${String.format(Locale.US, "%.1f", currentEta)}s", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.fillMaxWidth().height(12.dp).clip(CircleShape),
-                                color = MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            Text(
-                                text = "${(progress * 100).toInt()}% • $status",
-                                fontSize = 10.sp,
-                                color = Color.Gray,
-                                modifier = Modifier.padding(top = 4.dp).fillMaxWidth(),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Prompts", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = { viewModel.recoverLastPrompt() }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Text("Prompts".t, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Box {
+                            TextButton(onClick = { showRecoverMenu = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                                Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("Recover Last", fontSize = 12.sp)
+                                Text("Recover Prompt".t, fontSize = 12.sp)
                             }
-                            Box {
-                                IconButton(onClick = { showRecoverMenu = true }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "More Recover Options")
-                                }
-                                DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text("From History", fontSize = 14.sp) },
-                                        leadingIcon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                        onClick = {
-                                            showRecoverMenu = false
-                                            showHistoryDialog = true
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("From Gallery", fontSize = 14.sp) },
-                                        leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                        onClick = {
-                                            showRecoverMenu = false
-                                            viewModel.fetchGalleryFolder()
-                                            navController.navigate("gallery")
-                                        }
-                                    )
-                                }
+                            DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Last Generated Image".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        viewModel.recoverLastPrompt()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("From History".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        showHistoryDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("From Gallery Image".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        viewModel.setGalleryMode(GalleryMode.PROMPT_PICKER)
+                                        viewModel.fetchGalleryFolder()
+                                        navController.navigate("gallery")
+                                    }
+                                )
                             }
                         }
                     }
@@ -1504,11 +1729,18 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                             val currentWord = it.substringAfterLast(",").trim()
                             viewModel.searchTags(currentWord)
                         },
-                        label = { Text("Positive Prompt", fontSize = 12.sp) },
+                        label = { Text("Positive Prompt".t, fontSize = 12.sp) },
                         minLines = 3,
                         maxLines = 8,
                         modifier = Modifier.fillMaxWidth(),
-                        onClear = { viewModel.updateState { s -> s.copy(positivePrompt = "") } }
+                        onClear = { viewModel.updateState { s -> s.copy(positivePrompt = "") } },
+                        actions = {
+                            if (config.showActiveTagsUI && state.positivePrompt.isNotBlank()) {
+                                IconButton(onClick = { showPosTagEditor = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        }
                     )
 
                     AnimatedVisibility(visible = tagSuggestions.isNotEmpty()) {
@@ -1535,44 +1767,33 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
                     }
 
-                    if (config.showActiveTagsUI) {
-                        ExpandableSection("Active Positive Tags", "main_pos_tags", false) {
-                            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                                DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
-                            }
-                        }
-                    }
-
                     Spacer(modifier = Modifier.height(4.dp))
                     UndoRedoTextField(
                         value = state.negativePrompt,
                         onValueChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
-                        label = { Text("Negative Prompt", fontSize = 12.sp) },
+                        label = { Text("Negative Prompt".t, fontSize = 12.sp) },
                         minLines = 2,
                         maxLines = 6,
                         modifier = Modifier.fillMaxWidth(),
-                        onClear = { viewModel.updateState { s -> s.copy(negativePrompt = "") } }
-                    )
-
-                    if (config.showActiveTagsUI) {
-                        ExpandableSection("Active Negative Tags", "main_neg_tags", false) {
-                            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                                DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
+                        onClear = { viewModel.updateState { s -> s.copy(negativePrompt = "") } },
+                        actions = {
+                            if (config.showActiveTagsUI && state.negativePrompt.isNotBlank()) {
+                                IconButton(onClick = { showNegTagEditor = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
-                    }
+                    )
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    ExpandableSection("Settings & LoRAs", "main_settings", true) {
+                    ExpandableSection("Settings & LoRAs".t, "main_settings", true) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-
-                            val isIllustrious = selectedModel.contains("illustrious", ignoreCase = true) || selectedModel.contains("ill", ignoreCase = true)
 
                             var modelExpanded by remember { mutableStateOf(false) }
                             Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                    Text("Model: ${selectedModel.ifEmpty { "Loading..." }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                                OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(42.dp), contentPadding = PaddingValues(4.dp)) {
+                                    Text("${"Model: ".t}${selectedModel.ifEmpty { "Loading...".t }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                                 }
                                 DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
                                     models.forEach { mod ->
@@ -1580,9 +1801,9 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                             text = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     AsyncImage(
-                                                        model = viewModel.getPreviewUrl(mod.path),
+                                                        model = viewModel.getPreviewUrl(mod.path, isLora = false),
                                                         contentDescription = null,
-                                                        modifier = Modifier.size(48.dp).padding(end = 8.dp).clip(MaterialTheme.shapes.small),
+                                                        modifier = Modifier.size(40.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
                                                         contentScale = ContentScale.Crop
                                                     )
                                                     Text(mod.title, fontSize = 12.sp)
@@ -1603,25 +1824,46 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                             viewModel.updateState { s -> s.copy(seed = parsed ?: -1L) }
                                         }
                                     },
-                                    label = { Text("Seed (-1 for random)", fontSize = 12.sp) },
+                                    label = { Text("Seed".t, fontSize = 12.sp) },
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true,
                                     modifier = Modifier.weight(1f)
                                 )
-                                IconButton(
-                                    onClick = { viewModel.updateState { s -> s.copy(seed = -1L) } },
-                                    modifier = Modifier.padding(start = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.Casino, contentDescription = "Random Seed")
+
+                                var seedExpanded by remember { mutableStateOf(false) }
+                                Box {
+                                    IconButton(
+                                        onClick = { seedExpanded = true },
+                                        modifier = Modifier.padding(start = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Casino, contentDescription = "Seed Options".t)
+                                    }
+                                    DropdownMenu(expanded = seedExpanded, onDismissRequest = { seedExpanded = false }) {
+                                        DropdownMenuItem(
+                                            text = { Text("Randomize (-1)".t, fontSize = 14.sp) },
+                                            onClick = {
+                                                viewModel.updateState { s -> s.copy(seed = -1L) }
+                                                seedExpanded = false
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("Recover Last Seed".t, fontSize = 14.sp) },
+                                            onClick = {
+                                                viewModel.recoverLastSeed()
+                                                seedExpanded = false
+                                            }
+                                        )
+                                    }
                                 }
                             }
 
-                            ForgeSlider("Steps", state.steps.toFloat(), 1f..100f, 0) { viewModel.updateState { s -> s.copy(steps = it.toInt()) } }
-                            ForgeSlider("CFG Scale", state.cfgScale, 1f..20f, 1) { viewModel.updateState { s -> s.copy(cfgScale = it) } }
-                            ForgeSlider("Clip Skip", state.clipSkip.toFloat(), 1f..3f, 0) { viewModel.updateState { s -> s.copy(clipSkip = it.toInt()) } }
-                            ForgeSlider("Width", state.width.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(width = (it.toInt() / 64) * 64) } }
-                            ForgeSlider("Height", state.height.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(height = (it.toInt() / 64) * 64) } }
-                            ForgeSlider("Batch Size", state.batchSize.toFloat(), 1f..16f, 0) { viewModel.updateState { s -> s.copy(batchSize = it.toInt()) } }
+                            ForgeSlider("Batch Count".t, state.batchCount.toFloat(), 1f..100f, 0) { viewModel.updateState { s -> s.copy(batchCount = it.toInt()) } }
+                            ForgeSlider("Batch Size".t, state.batchSize.toFloat(), 1f..16f, 0) { viewModel.updateState { s -> s.copy(batchSize = it.toInt()) } }
+                            ForgeSlider("Steps".t, state.steps.toFloat(), 1f..100f, 0) { viewModel.updateState { s -> s.copy(steps = it.toInt()) } }
+                            ForgeSlider("CFG Scale".t, state.cfgScale, 1f..20f, 1) { viewModel.updateState { s -> s.copy(cfgScale = it) } }
+                            ForgeSlider("Clip Skip".t, state.clipSkip.toFloat(), 1f..3f, 0) { viewModel.updateState { s -> s.copy(clipSkip = it.toInt()) } }
+                            ForgeSlider("Width".t, state.width.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(width = (it.toInt() / 64) * 64) } }
+                            ForgeSlider("Height".t, state.height.toFloat(), 256f..2048f, 0) { viewModel.updateState { s -> s.copy(height = (it.toInt() / 64) * 64) } }
 
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 var samplerExpanded by remember { mutableStateOf(false) }
@@ -1645,27 +1887,15 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                 }
                             }
 
-                            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                                var vaeExpanded by remember { mutableStateOf(false) }
-                                Box(modifier = Modifier.fillMaxWidth()) {
-                                    OutlinedButton(onClick = { vaeExpanded = true }, enabled = !isIllustrious, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                                        Text(if (isIllustrious) "VAE Disabled (Illustrious Detected)" else "VAE: ${selectedVae.ifEmpty { "Loading..." }}", maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                                    }
-                                    DropdownMenu(expanded = vaeExpanded, onDismissRequest = { vaeExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                                        vaes.forEach { vae -> DropdownMenuItem(text = { Text(vae, fontSize = 12.sp) }, onClick = { viewModel.changeVae(vae); vaeExpanded = false }) }
-                                    }
-                                }
-                            }
-
                             Spacer(modifier = Modifier.height(8.dp))
-                            Text("LoRAs", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("LoRAs".t, fontWeight = FontWeight.Bold, fontSize = 16.sp)
 
                             var loraExpanded by remember { mutableStateOf(false) }
                             Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                                 OutlinedButton(onClick = { loraExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
                                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Add LoRA...", fontSize = 12.sp)
+                                    Text("Add LoRA...".t, fontSize = 12.sp)
                                 }
                                 DropdownMenu(expanded = loraExpanded, onDismissRequest = { loraExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
                                     availableLoras.forEach { loraData ->
@@ -1673,20 +1903,16 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                             text = {
                                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                                     AsyncImage(
-                                                        model = viewModel.getPreviewUrl(loraData.path),
+                                                        model = viewModel.getPreviewUrl(loraData.path, isLora = true),
                                                         contentDescription = null,
-                                                        modifier = Modifier.size(48.dp).padding(end = 8.dp).clip(MaterialTheme.shapes.small),
+                                                        modifier = Modifier.size(40.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
                                                         contentScale = ContentScale.Crop
                                                     )
                                                     Text(loraData.title, fontSize = 12.sp)
                                                 }
                                             },
                                             onClick = {
-                                                if (config.useCivitaiHelperTags && !loraData.triggerWords.isNullOrEmpty()) {
-                                                    pendingLora = loraData
-                                                } else {
-                                                    viewModel.appendLora(loraData.name)
-                                                }
+                                                pendingLora = loraData
                                                 loraExpanded = false
                                             }
                                         )
@@ -1700,11 +1926,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                             Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                             IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
-                                                Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
                                             }
                                         }
                                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("Strength", fontSize = 10.sp)
+                                            Text("Strength".t, fontSize = 10.sp)
                                             Text(String.format(java.util.Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
                                         }
                                         Slider(
@@ -1719,23 +1945,10 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(100.dp)) // Extra padding to allow smooth scrolling past the FAB area
+                    Spacer(modifier = Modifier.height(100.dp))
                 }
 
-                // Advanced Generator Button Area with Separate Queue Route
-                val buttonTextOverlay = when {
-                    isGenerating -> "GENERATING..."
-                    isServerBusy -> "SERVER BUSY - ADD TO QUEUE"
-                    generationQueue.isNotEmpty() -> "ADD TO QUEUE (${generationQueue.size})"
-                    else -> "GENERATE"
-                }
-
-                val buttonColorOverlay = when {
-                    isGenerating -> Color.Gray
-                    isServerBusy || generationQueue.isNotEmpty() -> Color(0xFFFFA000)
-                    else -> if (isSamsungMode && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50)
-                }
-
+                val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -1745,75 +1958,112 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                 ) {
                     if (generationQueue.isNotEmpty()) {
                         Button(
-                            onClick = { navController.navigate("queue") },
-                            modifier = Modifier
-                                .height(54.dp)
-                                .weight(0.35f)
-                                .shadow(8.dp, CircleShape),
+                            onClick = onQueueClick,
+                            modifier = Modifier.height(54.dp).weight(0.35f).shadow(8.dp, CircleShape),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                             contentPadding = PaddingValues(0.dp)
                         ) {
-                            Icon(Icons.Default.List, contentDescription = "Queue")
+                            Icon(Icons.Default.List, contentDescription = null)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("${generationQueue.size}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
-                    Button(
-                        onClick = { viewModel.queueGeneration() },
-                        enabled = isConnected && !isRestoringPrompt,
-                        modifier = Modifier
-                            .height(54.dp)
-                            .weight(1f)
-                            .shadow(8.dp, CircleShape),
-                        colors = ButtonDefaults.buttonColors(containerColor = buttonColorOverlay)
-                    ) {
-                        Text(buttonTextOverlay, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (isActivelyGenerating || generationQueue.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .height(54.dp)
+                                .weight(1.2f)
+                                .shadow(8.dp, CircleShape)
+                                .clip(CircleShape)
+                                .background(Color.DarkGray)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(progress.coerceIn(0f, 1f))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                val currentStep = (progress * state.steps).toInt()
+                                val totalImgs = state.batchCount * state.batchSize
+                                val percentage = (progress * 100).toInt()
+
+                                Text(
+                                    text = if (isGenerating) "GENERATING • ".t + "$percentage%" else "SERVER BUSY • ".t + "$percentage%",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
+                                )
+                                Text(
+                                    text = "$totalImgs Imgs | Step $currentStep/${state.steps} | ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
+                                    fontSize = 9.sp,
+                                    color = Color.LightGray,
+                                    style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
+                                )
+                            }
+                        }
+
+                        val queueGen = rememberDebounced { viewModel.queueGeneration() }
+                        Button(
+                            onClick = queueGen,
+                            enabled = isConnected && !isRestoringPrompt,
+                            modifier = Modifier.height(54.dp).weight(0.8f).shadow(8.dp, CircleShape),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFA000)),
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text("QUEUE".t, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    } else {
+                        val genBtn = rememberDebounced { viewModel.queueGeneration() }
+                        Button(
+                            onClick = genBtn,
+                            enabled = isConnected && !isRestoringPrompt,
+                            modifier = Modifier.height(54.dp).weight(1f).shadow(8.dp, CircleShape),
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isSamsungMode && !config.useDynamicColor) MaterialTheme.colorScheme.primary else Color(0xFF4CAF50))
+                        ) {
+                            Text("GENERATE".t, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
                     }
                 }
             }
         }
 
-        // Civitai Trigger Words Dialog
-        if (pendingLora != null) {
-            val triggerWords = pendingLora!!.triggerWords!!.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-            var selectedWords by remember { mutableStateOf(triggerWords.toSet()) }
-
+        if (showPosTagEditor) {
             AlertDialog(
-                onDismissRequest = { pendingLora = null },
-                title = { Text("Add Trigger Words", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                onDismissRequest = { showPosTagEditor = false },
+                title = { Text("Active Positive Tags".t, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
                 text = {
-                    Column {
-                        Text("Select tags from Civitai Helper:", fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
-                        LazyColumn(modifier = Modifier.heightIn(max = 250.dp).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)) {
-                            items(triggerWords) { word ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.fillMaxWidth().clickable {
-                                        selectedWords = if (selectedWords.contains(word)) selectedWords - word else selectedWords + word
-                                    }.padding(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Checkbox(
-                                        checked = selectedWords.contains(word),
-                                        onCheckedChange = null
-                                    )
-                                    Text(word, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
-                                }
-                            }
+                    Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
+                        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
                         }
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.appendLora(pendingLora!!.name, selectedWords.toList())
-                        pendingLora = null
-                    }) { Text("Add Selected") }
+                    TextButton(onClick = { showPosTagEditor = false }) { Text("Done".t) }
+                }
+            )
+        }
+
+        if (showNegTagEditor) {
+            AlertDialog(
+                onDismissRequest = { showNegTagEditor = false },
+                title = { Text("Active Negative Tags".t, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+                text = {
+                    Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
+                        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                            DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
+                        }
+                    }
                 },
-                dismissButton = {
-                    TextButton(onClick = {
-                        viewModel.appendLora(pendingLora!!.name, emptyList())
-                        pendingLora = null
-                    }) { Text("Skip Tags") }
+                confirmButton = {
+                    TextButton(onClick = { showNegTagEditor = false }) { Text("Done".t) }
                 }
             )
         }
@@ -1823,15 +2073,15 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                 onDismissRequest = { showHistoryDialog = false },
                 title = {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Prompt History")
+                        Text("Prompt History".t)
                         IconButton(onClick = { viewModel.clearPromptHistory(); showHistoryDialog = false }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Clear History")
+                            Icon(Icons.Default.Delete, contentDescription = null)
                         }
                     }
                 },
                 text = {
                     if (promptHistory.isEmpty()) {
-                        Text("No history available yet.", color = Color.Gray)
+                        Text("No history available yet.".t, color = Color.Gray)
                     } else {
                         LazyColumn(modifier = Modifier.fillMaxWidth()) {
                             items(promptHistory) { item ->
@@ -1846,7 +2096,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                     Column(modifier = Modifier.padding(8.dp)) {
                                         Text(timeFormat, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
                                         if (item.positivePrompt.isNotBlank()) Text(item.positivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        if (item.negativePrompt.isNotBlank()) Text("Negative: " + item.negativePrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Color.Gray)
+                                        if (item.negativePrompt.isNotBlank()) Text("Negative: ".t + item.negativePrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Color.Gray)
                                     }
                                 }
                             }
@@ -1854,7 +2104,90 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showHistoryDialog = false }) { Text("Close") }
+                    TextButton(onClick = { showHistoryDialog = false }) { Text("Close".t) }
+                }
+            )
+        }
+
+        // Live-updating LoRA Tag Application Dialog
+        if (pendingLora != null) {
+            val lora = pendingLora!!
+            var triggerWords by remember(lora) { mutableStateOf<List<String>?>(null) }
+            var selectedWords by remember { mutableStateOf(emptySet<String>()) }
+            var originalPrompt by remember(lora) { mutableStateOf(state.positivePrompt) }
+
+            // Fetch json trigger words dynamically when dialog opens
+            LaunchedEffect(lora) {
+                viewModel.fetchLoraTriggerWords(lora) { words ->
+                    triggerWords = words
+                }
+            }
+
+            // Instantly apply tags visually to the main prompt when clicked
+            LaunchedEffect(selectedWords, lora) {
+                val hasLora = originalPrompt.contains("<lora:${lora.name}:")
+                var newPrompt = originalPrompt
+
+                if (!hasLora) {
+                    val prefix = if (newPrompt.isNotEmpty() && !newPrompt.trimEnd().endsWith(",")) ", " else ""
+                    newPrompt = newPrompt.trimEnd() + prefix + "<lora:${lora.name}:1.0>"
+                }
+
+                if (selectedWords.isNotEmpty()) {
+                    val tags = ", " + selectedWords.joinToString(", ")
+                    newPrompt += tags
+                }
+
+                viewModel.updateState { it.copy(positivePrompt = newPrompt) }
+            }
+
+            AlertDialog(
+                onDismissRequest = {
+                    viewModel.updateState { it.copy(positivePrompt = originalPrompt) }
+                    pendingLora = null
+                },
+                title = { Text(lora.title, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                        if (triggerWords == null) {
+                            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+                            Text("Loading trigger words...".t, fontSize = 12.sp)
+                        } else {
+                            if (triggerWords!!.isNotEmpty()) {
+                                Text("Click tags to add/remove them from your prompt:".t, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+                                LazyColumn(modifier = Modifier.heightIn(max = 250.dp).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)) {
+                                    items(triggerWords!!) { word ->
+                                        val isSelected = selectedWords.contains(word)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                selectedWords = if (isSelected) selectedWords.minus(word) else selectedWords.plus(word)
+                                            }.padding(horizontal = 8.dp, vertical = 6.dp)
+                                        ) {
+                                            Checkbox(
+                                                checked = isSelected,
+                                                onCheckedChange = null
+                                            )
+                                            Text(word, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+                                        }
+                                    }
+                                }
+                            } else {
+                                Text("This LoRA has no trigger words associated with it. Do you still want to add it?".t, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { pendingLora = null }, enabled = triggerWords != null) {
+                        Text(if (triggerWords?.isEmpty() == true) "Add LoRA".t else "Done".t)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        viewModel.updateState { it.copy(positivePrompt = originalPrompt) } // Cancel reverts the Live state
+                        pendingLora = null
+                    }) { Text("Cancel".t) }
                 }
             )
         }
@@ -1862,25 +2195,27 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
         if (fullscreenImageIndex >= 0 && sessionImages.isNotEmpty()) {
             val scope = rememberCoroutineScope()
             val pagerState = rememberPagerState(initialPage = fullscreenImageIndex, pageCount = { sessionImages.size })
+            val currentFile = sessionImages.getOrNull(pagerState.currentPage) ?: ""
 
             LaunchedEffect(pagerState.currentPage) {
                 if (fullscreenImageIndex != pagerState.currentPage) {
                     fullscreenImageIndex = pagerState.currentPage
                 }
-                viewModel.loadMetadataForLocalFile(sessionImages[pagerState.currentPage])
+                if (currentFile.isNotEmpty()) {
+                    viewModel.loadMetadataForLocalFile(currentFile)
+                }
             }
 
             Dialog(onDismissRequest = { fullscreenImageIndex = -1 }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
                 Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-                    val currentFile = sessionImages[fullscreenImageIndex]
 
                     Row(modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(vertical = 4.dp, horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { fullscreenImageIndex = -1 }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White) }
+                        IconButton(onClick = { fullscreenImageIndex = -1 }) { Icon(Icons.Default.Close, contentDescription = "Close".t, tint = Color.White) }
                         Text(File(currentFile).name, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
 
                         val showMetadata by viewModel.showGalleryMetadata.collectAsState()
                         IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {
-                            Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White, modifier = Modifier.then(if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier))
+                            Icon(Icons.Default.Info, contentDescription = "Info".t, tint = Color.White, modifier = Modifier.then(if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier))
                         }
                     }
 
@@ -1915,21 +2250,15 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                             MetadataAlertDialog(
                                 metadata = currentMetadata,
                                 onDismiss = { viewModel.toggleGalleryMetadata() },
-                                onApplyAll = {
-                                    // Since we are in the Preview screen (not Gallery), we cannot use selectedImage,
-                                    // But we CAN use the local file path!
-                                    viewModel.loadMetadataForLocalFile(sessionImages[fullscreenImageIndex])
-                                    viewModel.toggleGalleryMetadata()
-                                    fullscreenImageIndex = -1
-                                },
+                                onApplyAll = null, // Set to null as "Apply All" is complex for local images without prompt picker
                                 onApplyPrompt = { pos, neg ->
                                     viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
-                                    Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Prompts Applied".t, Toast.LENGTH_SHORT).show()
                                     viewModel.toggleGalleryMetadata()
                                 },
                                 onApplyModel = { model ->
                                     viewModel.changeCheckpoint(model)
-                                    Toast.makeText(context, "Model Applied: $model", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Model Applied: ".t + model, Toast.LENGTH_SHORT).show()
                                     viewModel.toggleGalleryMetadata()
                                 },
                                 onApplyLoras = { loras ->
@@ -1940,30 +2269,38 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                         }
                                     }
                                     viewModel.updateState { it.copy(positivePrompt = currentPos) }
-                                    Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "LoRAs Applied".t, Toast.LENGTH_SHORT).show()
                                     viewModel.toggleGalleryMetadata()
                                 }
                             )
                         }
 
-                        if (fullscreenImageIndex > batchStart) {
+                        val currentIndex = pagerState.currentPage
+
+                        if (currentIndex > 0) {
                             IconButton(
                                 onClick = {
-                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(fullscreenImageIndex - 1) } }
-                                    else { fullscreenImageIndex-- }
+                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(currentIndex - 1) } }
+                                    else {
+                                        fullscreenImageIndex = currentIndex - 1
+                                        scope.launch { pagerState.scrollToPage(currentIndex - 1) }
+                                    }
                                 },
                                 modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).background(Color(0x88000000), CircleShape)
-                            ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = Color.White) }
+                            ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.White) }
                         }
 
-                        if (fullscreenImageIndex < batchEnd && fullscreenImageIndex < sessionImages.size - 1) {
+                        if (currentIndex < sessionImages.size - 1) {
                             IconButton(
                                 onClick = {
-                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(fullscreenImageIndex + 1) } }
-                                    else { fullscreenImageIndex++ }
+                                    if (config.swipeToBrowseGallery) { scope.launch { pagerState.animateScrollToPage(currentIndex + 1) } }
+                                    else {
+                                        fullscreenImageIndex = currentIndex + 1
+                                        scope.launch { pagerState.scrollToPage(currentIndex + 1) }
+                                    }
                                 },
                                 modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).background(Color(0x88000000), CircleShape)
-                            ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White) }
+                            ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.White) }
                         }
                     }
                 }
@@ -1976,45 +2313,74 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
 @Composable
 fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val queue by ForgeState.generationQueue.collectAsState()
+    val isGenerating by ForgeState.isGenerating.collectAsState()
+    val progress by ForgeState.progress.collectAsState()
+    val status by ForgeState.statusText.collectAsState()
+    val currentEta by ForgeState.currentEta.collectAsState()
+
+    val onBackClick = rememberDebounced { navController.popBackStack() }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Generation Queue (${queue.size})", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                title = { Text("Generation Queue".t + " (${queue.size})", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = onBackClick) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
             )
         }
     ) { padding ->
-        if (queue.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("Queue is empty.", color = Color.Gray)
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(8.dp)) {
+
+            if (isGenerating || progress > 0f || status.contains("Cooldown")) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Currently Generating".t, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Spacer(Modifier.height(8.dp))
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha=0.2f)
+                        )
+                        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${(progress * 100).toInt()}% • $status", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            if (currentEta > 0) Text("ETA: ${String.format(Locale.US, "%.1f", currentEta)}s", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                    }
+                }
             }
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(8.dp)) {
-                items(queue) { item ->
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-                                Text("Prompt: ${item.positivePrompt}", fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Discard", tint = MaterialTheme.colorScheme.error)
+
+            if (queue.isEmpty()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text("Queue is empty.".t, color = Color.Gray)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    items(queue) { item ->
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            shape = MaterialTheme.shapes.medium,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
+                                    Text("Prompt: ".t + item.positivePrompt, fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    IconButton(onClick = { viewModel.removeFromQueue(item.id) }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Discard".t, tint = MaterialTheme.colorScheme.error)
+                                    }
                                 }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                val modelStr = item.payload.override_settings.sdModelCheckpoint ?: "Current Default"
+                                Text("${"Model".t}: $modelStr", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                Text("${"Steps".t}: ${item.payload.steps} | ${"Batch Count".t}: ${item.payload.n_iter} | ${"CFG Scale".t}: ${item.payload.cfg_scale} | ${"Size".t}: ${item.payload.width}x${item.payload.height}", fontSize = 10.sp, color = Color.Gray)
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            val modelStr = item.payload.override_settings.sdModelCheckpoint ?: "Current Default"
-                            Text("Model: $modelStr", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                            val vaeStr = item.payload.override_settings.sdVae ?: "Automatic"
-                            Text("VAE: $vaeStr", fontSize = 10.sp, color = Color.Gray)
-                            Text("Steps: ${item.payload.steps} | CFG: ${item.payload.cfg_scale} | Size: ${item.payload.width}x${item.payload.height}", fontSize = 10.sp, color = Color.Gray)
                         }
                     }
                 }
@@ -2066,26 +2432,38 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val isLoading by viewModel.isGalleryLoading.collectAsState()
     val errorMsg by viewModel.galleryError.collectAsState()
     val config by viewModel.config.collectAsState()
+    val galleryMode by viewModel.galleryMode.collectAsState()
+
+    val isPromptPicker = galleryMode == GalleryMode.PROMPT_PICKER
 
     var selectedImage by remember { mutableStateOf<GalleryItem?>(null) }
     var isGridView by remember { mutableStateOf(true) }
     var showGridSlider by remember { mutableStateOf(false) }
 
-    // Batch Selection State
     val selectedItems = remember { mutableStateListOf<GalleryItem>() }
-    val isSelectionMode = selectedItems.isNotEmpty()
+    val isSelectionMode = selectedItems.isNotEmpty() && !isPromptPicker
 
     val context = LocalContext.current
+
+    val onBackClick = rememberDebounced {
+        if (isPromptPicker) viewModel.setGalleryMode(GalleryMode.NORMAL)
+        navController.popBackStack()
+    }
+
+    BackHandler(enabled = isPromptPicker) {
+        viewModel.setGalleryMode(GalleryMode.NORMAL)
+        navController.popBackStack()
+    }
 
     Scaffold(
         topBar = {
             Column {
                 if (isSelectionMode) {
                     TopAppBar(
-                        title = { Text("${selectedItems.size} Selected", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                        title = { Text("${selectedItems.size} " + "Selected".t, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                         navigationIcon = {
                             IconButton(onClick = { selectedItems.clear() }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear Selection")
+                                Icon(Icons.Default.Close, contentDescription = "Clear Selection".t)
                             }
                         },
                         actions = {
@@ -2094,13 +2472,13 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 if (selectedItems.size == allImages.size) selectedItems.clear()
                                 else { selectedItems.clear(); selectedItems.addAll(allImages) }
                             }) {
-                                Icon(Icons.Default.SelectAll, contentDescription = "Select All")
+                                Icon(Icons.Default.SelectAll, contentDescription = "Select All".t)
                             }
                             IconButton(onClick = {
                                 selectedItems.forEach { item -> viewModel.downloadImage(item) }
                                 selectedItems.clear()
                             }) {
-                                Icon(Icons.Default.Download, contentDescription = "Download Selected")
+                                Icon(Icons.Default.Download, contentDescription = "Download Selected".t)
                             }
                         },
                         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
@@ -2109,34 +2487,35 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     TopAppBar(
                         title = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Settings, contentDescription = "App Icon", modifier = Modifier.size(24.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Gallery", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                if (!isPromptPicker) {
+                                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(24.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(if (isPromptPicker) "Select Image for Prompt".t else "Gallery".t, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             }
                         },
                         navigationIcon = {
-                            IconButton(onClick = { navController.popBackStack() }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            IconButton(onClick = onBackClick) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
                             }
                         },
                         actions = {
                             IconButton(onClick = { isGridView = !isGridView }) {
-                                Icon(if (isGridView) Icons.Default.List else Icons.Default.GridView, contentDescription = "Toggle View")
+                                Icon(if (isGridView) Icons.Default.List else Icons.Default.GridView, contentDescription = "Toggle View".t)
                             }
                             if (isGridView) {
                                 IconButton(onClick = { showGridSlider = !showGridSlider }) {
-                                    Icon(Icons.Default.ViewColumn, contentDescription = "Adjust Columns")
+                                    Icon(Icons.Default.ViewColumn, contentDescription = "Adjust Columns".t)
                                 }
                             }
                         }
                     )
                 }
 
-                // Inject Dropdown Grid Slider cleanly beneath the Appbar
                 AnimatedVisibility(visible = showGridSlider && isGridView && !isSelectionMode) {
                     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Columns: ${config.galleryGridColumns}", modifier = Modifier.width(90.dp), fontWeight = FontWeight.Bold)
+                            Text("Columns: ".t + "${config.galleryGridColumns}", modifier = Modifier.width(100.dp), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             Slider(
                                 value = config.galleryGridColumns.toFloat(),
                                 onValueChange = { viewModel.updateGalleryGridColumns(it.roundToInt()) },
@@ -2163,7 +2542,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             viewModel.fetchGalleryFolder("Root")
                         }
                     }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.ArrowUpward, contentDescription = "Up")
+                        Icon(Icons.Default.ArrowUpward, null)
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                 }
@@ -2177,7 +2556,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     Text("Error: $errorMsg", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold, maxLines = 3)
                 }
             } else if (files.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Folder is empty.", color = Color.Gray) }
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Folder is empty.".t, color = Color.Gray) }
             } else {
                 if (isGridView) {
                     LazyVerticalGrid(columns = GridCells.Fixed(config.galleryGridColumns), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(4.dp)) {
@@ -2189,7 +2568,11 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                     .then(if (isSelected) Modifier.border(4.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium) else Modifier)
                                     .combinedClickable(
                                         onClick = {
-                                            if (isSelectionMode && !file.isDir) {
+                                            if (isPromptPicker && !file.isDir) {
+                                                viewModel.recoverPromptFromImage(file)
+                                                viewModel.setGalleryMode(GalleryMode.NORMAL)
+                                                navController.popBackStack()
+                                            } else if (isSelectionMode && !file.isDir) {
                                                 if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
                                             } else if (file.isDir) {
                                                 viewModel.fetchGalleryFolder(file.fullpath)
@@ -2198,7 +2581,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                             }
                                         },
                                         onLongClick = {
-                                            if (!file.isDir) {
+                                            if (!file.isDir && !isPromptPicker) {
                                                 if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
                                             }
                                         }
@@ -2211,7 +2594,15 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                     } else {
                                         AsyncImage(model = viewModel.getGalleryImageUrl(file), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                                     }
-                                    Text(file.name, color = Color.White, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color(0x88000000)).padding(4.dp))
+                                    Text(
+                                        text = file.name,
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0x88000000)).padding(4.dp)
+                                    )
                                 }
                             }
                         }
@@ -2225,7 +2616,11 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                     .then(if (isSelected) Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha=0.2f)) else Modifier)
                                     .combinedClickable(
                                         onClick = {
-                                            if (isSelectionMode && !file.isDir) {
+                                            if (isPromptPicker && !file.isDir) {
+                                                viewModel.recoverPromptFromImage(file)
+                                                viewModel.setGalleryMode(GalleryMode.NORMAL)
+                                                navController.popBackStack()
+                                            } else if (isSelectionMode && !file.isDir) {
                                                 if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
                                             } else if (file.isDir) {
                                                 viewModel.fetchGalleryFolder(file.fullpath)
@@ -2234,7 +2629,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                             }
                                         },
                                         onLongClick = {
-                                            if (!file.isDir) {
+                                            if (!file.isDir && !isPromptPicker) {
                                                 if (isSelected) selectedItems.remove(file) else selectedItems.add(file)
                                             }
                                         }
@@ -2260,7 +2655,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         }
     }
 
-    if (selectedImage != null) {
+    if (selectedImage != null && !isPromptPicker) {
         val scope = rememberCoroutineScope()
         val imageList = files.filter { !it.isDir }
         val initialIndex = imageList.indexOf(selectedImage)
@@ -2277,20 +2672,20 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
 
                 Row(modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(vertical = 4.dp, horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { selectedImage = null }) { Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White) }
+                    IconButton(onClick = { selectedImage = null }) { Icon(Icons.Default.Close, contentDescription = "Close".t, tint = Color.White) }
 
                     Text(selectedImage!!.name, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
 
                     IconButton(onClick = { viewModel.shareImage(selectedImage!!, context) }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
+                        Icon(Icons.Default.Share, contentDescription = "Share".t, tint = Color.White)
                     }
 
                     val showMetadata by viewModel.showGalleryMetadata.collectAsState()
                     IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {
-                        Icon(Icons.Default.Info, contentDescription = "Info", tint = Color.White, modifier = Modifier.then(if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier))
+                        Icon(Icons.Default.Info, contentDescription = "Info".t, tint = Color.White, modifier = Modifier.then(if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier))
                     }
                     IconButton(onClick = { viewModel.downloadImage(selectedImage!!) }) {
-                        Icon(Icons.Default.Save, contentDescription = "Save", tint = Color.White)
+                        Icon(Icons.Default.Save, contentDescription = "Save".t, tint = Color.White)
                     }
                 }
 
@@ -2326,7 +2721,6 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             metadata = currentMetadata,
                             onDismiss = { viewModel.toggleGalleryMetadata() },
                             onApplyAll = {
-                                // Since we are in the Gallery screen, we can use selectedImage
                                 viewModel.recoverPromptFromImage(selectedImage!!)
                                 viewModel.toggleGalleryMetadata()
                                 selectedImage = null
@@ -2334,12 +2728,12 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             },
                             onApplyPrompt = { pos, neg ->
                                 viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
-                                Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Prompts Applied".t, Toast.LENGTH_SHORT).show()
                                 viewModel.toggleGalleryMetadata()
                             },
                             onApplyModel = { model ->
                                 viewModel.changeCheckpoint(model)
-                                Toast.makeText(context, "Model Applied: $model", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Model Applied: ".t + model, Toast.LENGTH_SHORT).show()
                                 viewModel.toggleGalleryMetadata()
                             },
                             onApplyLoras = { loras ->
@@ -2350,7 +2744,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                     }
                                 }
                                 viewModel.updateState { it.copy(positivePrompt = currentPos) }
-                                Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "LoRAs Applied".t, Toast.LENGTH_SHORT).show()
                                 viewModel.toggleGalleryMetadata()
                             }
                         )
@@ -2365,7 +2759,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 else { selectedImage = imageList[currentIndex - 1] }
                             },
                             modifier = Modifier.align(Alignment.CenterStart).padding(8.dp).background(Color(0x88000000), CircleShape)
-                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = Color.White) }
+                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, tint = Color.White) }
                     }
 
                     if (currentIndex < imageList.size - 1 && currentIndex != -1) {
@@ -2375,65 +2769,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 else { selectedImage = imageList[currentIndex + 1] }
                             },
                             modifier = Modifier.align(Alignment.CenterEnd).padding(8.dp).background(Color(0x88000000), CircleShape)
-                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White) }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TerminalScreen(viewModel: ForgeViewModel, navController: NavHostController) {
-    val serverLogs by ForgeState.serverLogs.collectAsState()
-    val serverScrollState = rememberLazyListState()
-
-    LaunchedEffect(serverLogs.size) {
-        if (serverLogs.isNotEmpty()) serverScrollState.animateScrollToItem(serverLogs.size - 1)
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Server Terminal", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .background(MaterialTheme.colorScheme.background)
-        ) {
-            Column(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                Text(
-                    "Server Logs",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                LazyColumn(
-                    state = serverScrollState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .padding(8.dp)
-                ) {
-                    items(serverLogs) { log ->
-                        Text(
-                            text = log,
-                            color = Color(0xFF00FFFF), // Cyan for network
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
-                            lineHeight = 12.sp
-                        )
+                        ) { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Color.White) }
                     }
                 }
             }
