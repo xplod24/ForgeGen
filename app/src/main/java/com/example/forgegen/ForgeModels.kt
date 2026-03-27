@@ -8,6 +8,11 @@ data class ServerProfile(
     val url: String
 )
 
+data class GenerationPreset(
+    val name: String,
+    val state: AppState
+)
+
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
@@ -20,6 +25,8 @@ data class AppConfig(
     var silentNotifications: Boolean = false,
     var notificationVerbosity: String = "Full",
     var keepScreenOn: Boolean = false,
+    var screenDimming: Boolean = false,
+    var screenDimmingTimeout: Int = 5,
     var useDynamicColor: Boolean = true,
     var swipeToBrowseGallery: Boolean = true,
     var galleryGridColumns: Int = 3,
@@ -28,9 +35,10 @@ data class AppConfig(
     var useNativeSecurity: Boolean = false,
     var useBiometricLock: Boolean = false,
     var overnightMode: Boolean = false,
-    var autoIndexGallery: Boolean = false,
     var showGridAfterGeneration: Boolean = true,
-    var showActiveTagsUI: Boolean = true
+    var showActiveTagsUI: Boolean = true,
+    var defaultState: AppState = AppState(),
+    var presets: List<GenerationPreset> = emptyList()
 )
 
 // --- GENERATION STATE ---
@@ -60,7 +68,7 @@ data class PromptHistoryItem(
     val timestamp: Long
 )
 
-// --- API PAYLOADS ---
+// --- API PAYLOADS & RESPONSES ---
 data class ApiResource(
     val title: String,
     val path: String,
@@ -95,6 +103,38 @@ data class QueuedGeneration(
     val id: String,
     val positivePrompt: String,
     val payload: Txt2ImgPayload
+)
+
+data class ProgressState(
+    @SerializedName("job_count") val jobCount: Int = 0
+)
+
+data class ProgressResponse(
+    val progress: Double = 0.0,
+    @SerializedName("eta_relative") val etaRelative: Double = 0.0,
+    val state: ProgressState? = null,
+    @SerializedName("current_image") val currentImage: String? = null
+)
+
+data class Txt2ImgResponse(
+    val images: List<String> = emptyList()
+)
+
+data class OptionsResponse(
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null
+)
+
+data class NameResponse(val name: String)
+
+data class SdModelItem(
+    val title: String,
+    val filename: String?,
+    @SerializedName("model_name") val modelName: String
+)
+
+data class LoraItem(
+    val name: String,
+    val path: String?
 )
 
 // --- GALLERY MODELS ---

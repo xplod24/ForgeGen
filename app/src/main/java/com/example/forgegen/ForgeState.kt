@@ -13,9 +13,7 @@ object ForgeState {
     val generationQueue = MutableStateFlow<List<QueuedGeneration>>(emptyList())
     val isQueuePaused = MutableStateFlow(false)
     val oomAlert = MutableStateFlow(false)
-
-    // Background Tasks
-    val indexerStatus = MutableStateFlow("Idle")
+    val vramUsage = MutableStateFlow<String?>(null)
 
     val sessionImages = MutableStateFlow<List<String>>(emptyList())
     val currentSessionIndex = MutableStateFlow(-1)
