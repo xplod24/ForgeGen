@@ -68,7 +68,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -111,14 +110,14 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.system.exitProcess
 import com.yourname.forgegen.Translator.t
+import okhttp3.Request
+import java.util.concurrent.TimeUnit
 
 tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -152,6 +151,15 @@ fun countTokens(text: String): Int {
     if (text.isBlank()) return 0
     val words = text.split(Regex("[,\\s]+")).filter { it.isNotBlank() }
     return words.size
+}
+
+@Composable
+fun SectionHeader(title: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 8.dp))
+        HorizontalDivider(modifier = Modifier.weight(1f))
+    }
 }
 
 class MainActivity : ComponentActivity() {
@@ -498,8 +506,23 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
+                        // Loader overlay for prompt recovering
+                        val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
+                        if (isRestoringPrompt) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).zIndex(100f).clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text("Recovering prompt...".t, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                }
+                            }
+                        }
+
                         if (isScreenDimmed) {
-                            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.9f)).zIndex(999f))
+                            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.9f)).zIndex(99f))
                         }
                     }
                 }
@@ -1613,6 +1636,47 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
+    val imageLoader = LocalImageLoader.current
+
+    // --- PRELOAD ACTIVE PREVIEW IMAGES TO RAM ---
+    // Pobiera i kachuje w RAM podglądy z użyciem istniejących requestów w momencie,
+    // gdy zmieni się wybrany model lub aktywne LoRy (np. podczas startu lub odzyskiwania promptu).
+    LaunchedEffect(selectedModel, activeLoras, models, availableLoras) {
+        launch(Dispatchers.IO) {
+            // Preload aktywnego checkpointa
+            val currentModelResource = models.find { it.title == selectedModel }
+            if (currentModelResource != null) {
+                val url = viewModel.getPreviewUrl(currentModelResource.path, isLora = false)
+                if (url.isNotEmpty()) {
+                    val request = coil.request.ImageRequest.Builder(context)
+                        .data(url)
+                        .size(150) // Mały rozmiar, żeby nie obciążyć RAMu telefonu
+                        .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                        .build()
+                    imageLoader.enqueue(request)
+                }
+            }
+
+            // Preload aktywnych LoRA
+            activeLoras.forEach { activeLora ->
+                val loraResource = availableLoras.find { it.name == activeLora.name }
+                if (loraResource != null) {
+                    val url = viewModel.getPreviewUrl(loraResource.path, isLora = true)
+                    if (url.isNotEmpty()) {
+                        val request = coil.request.ImageRequest.Builder(context)
+                            .data(url)
+                            .size(150)
+                            .memoryCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .diskCachePolicy(coil.request.CachePolicy.ENABLED)
+                            .build()
+                        imageLoader.enqueue(request)
+                    }
+                }
+            }
+        }
+    }
+
     val onGalleryClick = rememberDebounced {
         showOverflowMenu = false
         viewModel.setGalleryMode(GalleryMode.NORMAL)
@@ -1635,7 +1699,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                 TopAppBar(
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(24.dp))
+                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text("Forge Generator", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1787,46 +1851,47 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
 
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    SectionHeader("Prompts".t)
+
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text("Prompts".t, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Row {
-                            IconButton(onClick = { showPresetsDialog = true }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Default.SettingsSuggest, contentDescription = "Manage Presets".t, tint = MaterialTheme.colorScheme.primary)
+                        TextButton(onClick = { showPresetsDialog = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                            Icon(Icons.Default.SettingsSuggest, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Manage Presets".t, fontSize = 12.sp)
+                        }
+                        Box {
+                            TextButton(onClick = { showRecoverMenu = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+                                Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Recover Prompt".t, fontSize = 12.sp)
                             }
-                            Box {
-                                TextButton(onClick = { showRecoverMenu = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
-                                    Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Recover Prompt".t, fontSize = 12.sp)
-                                }
-                                DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
-                                    DropdownMenuItem(
-                                        text = { Text("Last Generated Image".t, fontSize = 14.sp) },
-                                        leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                        onClick = {
-                                            showRecoverMenu = false
-                                            viewModel.recoverLastPrompt()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("From History".t, fontSize = 14.sp) },
-                                        leadingIcon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                        onClick = {
-                                            showRecoverMenu = false
-                                            showHistoryDialog = true
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("From Gallery Image".t, fontSize = 14.sp) },
-                                        leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                                        onClick = {
-                                            showRecoverMenu = false
-                                            viewModel.setGalleryMode(GalleryMode.PROMPT_PICKER)
-                                            viewModel.fetchGalleryFolder()
-                                            navController.navigate("gallery")
-                                        }
-                                    )
-                                }
+                            DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Last Generated Image".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        viewModel.recoverLastPrompt()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("From History".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        showHistoryDialog = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("From Gallery Image".t, fontSize = 14.sp) },
+                                    leadingIcon = { Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                    onClick = {
+                                        showRecoverMenu = false
+                                        viewModel.setGalleryMode(GalleryMode.PROMPT_PICKER)
+                                        viewModel.fetchGalleryFolder()
+                                        navController.navigate("gallery")
+                                    }
+                                )
                             }
                         }
                     }
@@ -1924,16 +1989,27 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Settings & LoRAs".t, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    }
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    SectionHeader("Settings".t)
 
-                    Column(modifier = Modifier.padding(horizontal = 0.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
                         var modelExpanded by remember { mutableStateOf(false) }
                         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                            OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(42.dp), contentPadding = PaddingValues(4.dp)) {
-                                Text("${"Model: ".t}${selectedModel.ifEmpty { "Loading...".t }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                            OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(54.dp), contentPadding = PaddingValues(8.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    val currentModelResource = models.find { it.title == selectedModel }
+                                    if (currentModelResource != null) {
+                                        AsyncImage(
+                                            model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                                .data(viewModel.getPreviewUrl(currentModelResource.path, isLora = false))
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(32.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Text("${"Model: ".t}${selectedModel.ifEmpty { "Loading...".t }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                                }
                             }
                             DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
                                 models.forEach { mod ->
@@ -1941,7 +2017,10 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                         text = {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 AsyncImage(
-                                                    model = viewModel.getPreviewUrl(mod.path, isLora = false),
+                                                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                                        .data(viewModel.getPreviewUrl(mod.path, isLora = false))
+                                                        .crossfade(true)
+                                                        .build(),
                                                     contentDescription = null,
                                                     modifier = Modifier.size(40.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
                                                     contentScale = ContentScale.Crop
@@ -2035,7 +2114,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                 modifier = Modifier.padding(horizontal = 8.dp).clickable { viewModel.updateState { it.copy(hiresFix = !it.hiresFix) } }
                             ) {
                                 Checkbox(checked = state.hiresFix, onCheckedChange = { v -> viewModel.updateState { it.copy(hiresFix = v) } })
-                                Text("Hires.fix".t, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text("Hires.fix".t, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
                             }
                             HorizontalDivider(modifier = Modifier.weight(1f))
                         }
@@ -2056,9 +2135,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
                         // --- End Hires.fix UI ---
 
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("LoRAs".t, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
 
+                    SectionHeader("LoRAs".t)
+
+                    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
                         var loraExpanded by remember { mutableStateOf(false) }
                         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                             OutlinedButton(onClick = { loraExpanded = true }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
@@ -2072,7 +2153,10 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                                         text = {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 AsyncImage(
-                                                    model = viewModel.getPreviewUrl(loraData.path, isLora = true),
+                                                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                                        .data(viewModel.getPreviewUrl(loraData.path, isLora = true))
+                                                        .crossfade(true)
+                                                        .build(),
                                                     contentDescription = null,
                                                     modifier = Modifier.size(40.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
                                                     contentScale = ContentScale.Crop
@@ -2090,24 +2174,38 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController, isSa
                         }
 
                         activeLoras.forEach { lora ->
-                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
-                                Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                        Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                                        IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
-                                            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                            val loraResource = availableLoras.find { it.name == lora.name }
+                            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant), shape = MaterialTheme.shapes.medium) {
+                                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    if (loraResource != null) {
+                                        AsyncImage(
+                                            model = coil.request.ImageRequest.Builder(LocalContext.current)
+                                                .data(viewModel.getPreviewUrl(loraResource.path, isLora = true))
+                                                .crossfade(true)
+                                                .build(),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(50.dp).padding(end = 8.dp).clip(RoundedCornerShape(6.dp)).background(Color.DarkGray),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                            Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                            IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
+                                                Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            }
                                         }
+                                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                            Text("Strength".t, fontSize = 10.sp)
+                                            Text(String.format(java.util.Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
+                                        }
+                                        Slider(
+                                            value = lora.strength,
+                                            onValueChange = { viewModel.updateLoraStrength(lora.name, it) },
+                                            valueRange = 0.1f..2.0f,
+                                            modifier = Modifier.height(24.dp)
+                                        )
                                     }
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                        Text("Strength".t, fontSize = 10.sp)
-                                        Text(String.format(java.util.Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
-                                    }
-                                    Slider(
-                                        value = lora.strength,
-                                        onValueChange = { viewModel.updateLoraStrength(lora.name, it) },
-                                        valueRange = 0.1f..2.0f,
-                                        modifier = Modifier.height(24.dp)
-                                    )
                                 }
                             }
                         }

@@ -160,7 +160,8 @@ object Translator {
         "Screen Dimming Mode" to "Wygaszacz ekranu (Screen Dimming)",
         "Dimming Timeout (Minutes)" to "Czas do wygaszenia (Minuty)",
         "Dims the screen instead of full wake lock when idle" to "Wygasza ekran zamiast pełnego podświetlenia podczas bezczynności",
-        "Requires removing battery restrictions first!" to "Wymaga najpierw usunięcia restrykcji baterii!"
+        "Requires removing battery restrictions first!" to "Wymaga najpierw usunięcia restrykcji baterii!",
+        "Recovering prompt..." to "Odzyskiwanie promptu..."
     )
 
     val String.t: String

@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -41,6 +43,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -159,6 +162,70 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         fetchApiData()
         loadTags()
         startQueueManager()
+        cleanupRecoveredImages()
+    }
+
+    private fun cleanupRecoveredImages() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                application.cacheDir.listFiles()?.forEach { file ->
+                    if (file.name.startsWith("recovered_") && file.name.endsWith(".png")) {
+                        file.delete()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error cleaning up recovered cache", e)
+            }
+        }
+    }
+
+    private suspend fun saveRecoveredImageToCache(bytes: ByteArray) {
+        withContext(Dispatchers.IO) {
+            try {
+                // Odczytaj tylko wymiary obrazu, aby oszczędzić RAM telefonu
+                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+
+                // Zmniejsz rozmiar obrazu tak, aby nie przekraczał np. 512x512
+                options.inSampleSize = calculateInSampleSize(options, 512, 512)
+                options.inJustDecodeBounds = false
+
+                // Wygeneruj małą bitmapę
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                val file = File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
+
+                FileOutputStream(file).use { out ->
+                    bitmap?.compress(Bitmap.CompressFormat.PNG, 85, out)
+                }
+                bitmap?.recycle()
+
+                // Zaktualizuj podgląd na żywo
+                withContext(Dispatchers.Main) {
+                    ForgeState.sessionImages.value = listOf(file.absolutePath)
+                    ForgeState.currentSessionIndex.value = 0
+                    ForgeState.currentBatchStartIndex.value = 0
+                    ForgeState.currentBatchEndIndex.value = 0
+                    ForgeState.isShowingGridPreview.value = false
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cache recovered image", e)
+            }
+        }
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val height = options.outHeight
+        val width = options.outWidth
+        var inSampleSize = 1
+
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
     }
 
     fun setAppForegroundState(isForeground: Boolean) {
@@ -973,6 +1040,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 }
 
                 if (imgBytes != null) {
+                    saveRecoveredImageToCache(imgBytes!!) // Automatycznie dodaje do podglądu sesji
                     return extractPngParameters(imgBytes!!)
                 }
             }
@@ -1071,6 +1139,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
                 if (imgBytes != null) {
                     val infoStr = extractPngParameters(imgBytes!!)
+                    saveRecoveredImageToCache(imgBytes!!) // Automatycznie dodaje do podglądu sesji
                     withContext(Dispatchers.Main) {
                         parseAndApplyPngInfo(infoStr)
                         _isRestoringPrompt.value = false
