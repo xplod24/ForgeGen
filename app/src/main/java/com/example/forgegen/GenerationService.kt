@@ -133,6 +133,11 @@ class GenerationService : Service() {
         }
 
         val etaString = if (currentEta > 0) " (ETA: ${String.format(Locale.US, "%.1f", currentEta)}s)" else ""
+
+        val jobNo = ForgeState.currentJobNo.value
+        val jobCount = ForgeState.currentJobCount.value
+        val samplingStep = ForgeState.currentSamplingStep.value
+        val samplingSteps = ForgeState.currentSamplingSteps.value
         val currentStep = (progress * steps).toInt()
 
         val notifText = when {
@@ -142,15 +147,15 @@ class GenerationService : Service() {
             isActivelyGenerating -> {
                 val mode = if (isGenerating) "Generating" else "External Task"
                 val progStr = "${(progress * 100).toInt()}%"
-                val stepStr = "Step $currentStep/$steps"
+                val stepStr = if (samplingSteps > 0) "Img ${jobNo + 1}/$jobCount | Step $samplingStep/$samplingSteps" else "Step $currentStep/$steps"
 
                 when (verbosity) {
                     "Simple" -> "$mode..."
                     "Brief" -> "$mode: $progStr"
-                    else -> "$mode: $progStr ($stepStr)$etaString\n$status" + if (queuedCount > 0) "\nQueued: $queuedCount" else ""
+                    else -> "$mode: $progStr ($stepStr)$etaString\n$status" + if (queuedCount > 0) "\nRemaining in queue: $queuedCount" else ""
                 }
             }
-            queuedCount > 0 -> if (verbosity == "Simple") "Queued: $queuedCount" else "Ready - Queued: $queuedCount items."
+            queuedCount > 0 -> if (verbosity == "Simple") "Queued: $queuedCount" else "Ready - Remaining in queue: $queuedCount"
             else -> if (verbosity == "Simple") "Ready" else "Ready - Connected to server."
         }
 

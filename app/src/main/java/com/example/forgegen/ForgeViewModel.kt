@@ -49,6 +49,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import com.yourname.forgegen.Translator.t
 
 // --- Idiomatic Extension for Non-Blocking OkHttp Calls ---
 suspend fun Call.await(): Response = suspendCancellableCoroutine { continuation ->
@@ -266,6 +267,14 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             try { gson.fromJson(json, AppConfig::class.java) } catch(e: Exception) { null }
         } else null
 
+        // Migracja ze starego "livePreviews" (boolean) na nowy "previewMode" (String)
+        val oldLivePreviewState = try {
+            val jsonObj = JSONObject(json ?: "{}")
+            jsonObj.optBoolean("livePreviews", false)
+        } catch(e: Exception) { false }
+
+        val finalPreviewMode = parsed?.previewMode ?: if (oldLivePreviewState) "Normal" else "Finished"
+
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             galleryPath = parsed?.galleryPath ?: "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
@@ -274,17 +283,17 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             language = parsed?.language ?: "en",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
+            checkpointTimeout = parsed?.checkpointTimeout ?: 45,
             receiveGenerationNotification = parsed?.receiveGenerationNotification ?: true,
             silentNotifications = parsed?.silentNotifications ?: false,
             notificationVerbosity = parsed?.notificationVerbosity ?: "Full",
             keepScreenOn = parsed?.keepScreenOn ?: false,
             screenDimming = parsed?.screenDimming ?: false,
             screenDimmingTimeout = parsed?.screenDimmingTimeout ?: 5,
-            useDynamicColor = parsed?.useDynamicColor ?: true,
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
             galleryGridColumns = parsed?.galleryGridColumns ?: 3,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
-            livePreviews = parsed?.livePreviews ?: false,
+            previewMode = finalPreviewMode,
             useNativeSecurity = parsed?.useNativeSecurity ?: false,
             useBiometricLock = parsed?.useBiometricLock ?: false,
             overnightMode = parsed?.overnightMode ?: false,
@@ -314,13 +323,13 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         val currentConfig = _config.value
         val newState = currentConfig.copy(defaultState = _appState.value.copy())
         saveConfig(newState)
-        Toast.makeText(application, "Domyślne ustawienia zaktualizowane".let { if (config.value.language=="en") "Default settings updated" else it }, Toast.LENGTH_SHORT).show()
+        Toast.makeText(application, "Set Current as Default".t, Toast.LENGTH_SHORT).show()
     }
 
     fun resetToDefaults() {
         _appState.value = _config.value.defaultState.copy()
         prefs.edit().putString("last_state", gson.toJson(_appState.value)).apply()
-        Toast.makeText(application, "Zresetowano do domyślnych".let { if (config.value.language=="en") "Reset to defaults" else it }, Toast.LENGTH_SHORT).show()
+        Toast.makeText(application, "Reset to Defaults".t, Toast.LENGTH_SHORT).show()
     }
 
     fun savePreset(name: String) {
@@ -335,7 +344,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         if (preset != null) {
             _appState.value = preset.state.copy()
             prefs.edit().putString("last_state", gson.toJson(_appState.value)).apply()
-            Toast.makeText(application, "Wczytano: ".let { if (config.value.language=="en") "Loaded: " else it } + name, Toast.LENGTH_SHORT).show()
+            Toast.makeText(application, "Loaded: ".t + name, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -481,7 +490,22 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
     fun resumeQueue() {
         ForgeState.isQueuePaused.value = false
         ForgeState.oomAlert.value = false
-        ForgeState.statusText.value = "Queue Resumed"
+        ForgeState.statusText.value = "Queue Resumed".t
+    }
+
+    fun interruptGeneration() {
+        viewModelScope.launch(workerDispatcher) {
+            try {
+                val url = _config.value.apiUrl.trimEnd('/')
+                val request = Request.Builder().url("$url/sdapi/v1/interrupt").post("{}".toRequestBody("application/json".toMediaType())).build()
+                client.newCall(request).await().close()
+                withContext(Dispatchers.Main) {
+                    ForgeState.statusText.value = "Interrupting...".t
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to interrupt", e)
+            }
+        }
     }
 
     private fun extractPngParameters(bytes: ByteArray): String {
@@ -526,7 +550,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
                         if (lastGenerationTime != 0L && timeSinceLast < 10000) {
                             val secondsLeft = (10000 - timeSinceLast) / 1000
-                            ForgeState.statusText.value = "Queue Cooldown (${secondsLeft}s)..."
+                            ForgeState.statusText.value = "Queue Cooldown".t + " (${secondsLeft}s)..."
                             delay(1000)
                             continue
                         }
@@ -569,18 +593,49 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
         ForgeState.generationQueue.update { it + item }
 
+        if (ForgeState.generationQueue.value.size == 1 && !ForgeState.isGenerating.value) {
+            ForgeState.totalQueueSize.value = 1
+            ForgeState.completedQueueItems.value = 0
+        } else {
+            ForgeState.totalQueueSize.update { it + 1 }
+        }
+
         saveToPromptHistory(state.positivePrompt, state.negativePrompt)
 
         if (ForgeState.isServerBusy.value && !ForgeState.isGenerating.value) {
-            Toast.makeText(application, "Dodano do kolejki (serwer zajęty)".let { if (config.value.language=="en") "External generation active. Added to queue." else it }, Toast.LENGTH_SHORT).show()
+            Toast.makeText(application, "External generation active. Added to queue.".t, Toast.LENGTH_SHORT).show()
         } else if (ForgeState.isGenerating.value) {
-            Toast.makeText(application, "Dodano do kolejki.".let { if (config.value.language=="en") "Added to queue." else it }, Toast.LENGTH_SHORT).show()
+            Toast.makeText(application, "Added to queue.".t, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    fun updateQueueItem(id: String, positivePrompt: String, negativePrompt: String) {
+        ForgeState.generationQueue.update { currentQueue ->
+            currentQueue.map {
+                if (it.id == id) {
+                    it.copy(
+                        positivePrompt = positivePrompt,
+                        payload = it.payload.copy(prompt = positivePrompt, negative_prompt = negativePrompt)
+                    )
+                } else it
+            }
+        }
+    }
+
+    fun clearQueue() {
+        ForgeState.generationQueue.value = emptyList()
+        ForgeState.totalQueueSize.value = 0
+        ForgeState.completedQueueItems.value = 0
     }
 
     fun removeFromQueue(id: String) {
         ForgeState.generationQueue.update { currentQueue ->
-            currentQueue.filter { it.id != id }
+            val prevSize = currentQueue.size
+            val newQueue = currentQueue.filter { it.id != id }
+            if (newQueue.size < prevSize) {
+                ForgeState.totalQueueSize.update { maxOf(ForgeState.completedQueueItems.value, it - 1) }
+            }
+            newQueue
         }
     }
 
@@ -615,7 +670,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             ForgeState.isShowingGridPreview.value = false
 
             val previewText = job.positivePrompt.take(30).replace("\n", " ")
-            ForgeState.statusText.value = "Generating: \"$previewText...\""
+            ForgeState.statusText.value = "Generating:".t + " \"$previewText...\""
 
             val serviceIntent = Intent(application, GenerationService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -656,7 +711,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                             ForgeState.currentBatchStartIndex.value = startIndex
                             ForgeState.currentBatchEndIndex.value = endIndex
                             ForgeState.currentSessionIndex.value = endIndex
-                            ForgeState.statusText.value = "Generation Complete"
+                            ForgeState.statusText.value = "Generation Complete".t
                             ForgeState.livePreviewImage.value = null
 
                             if (_config.value.showGridAfterGeneration && txt2ImgData.images.size > 1) {
@@ -672,7 +727,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                     val pendingIntent = PendingIntent.getActivity(application, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                                     val notif = NotificationCompat.Builder(application, "GenerationChannelAlert")
                                         .setSmallIcon(android.R.drawable.ic_menu_gallery)
-                                        .setContentTitle("Generation Finished")
+                                        .setContentTitle("Receive Generation Completion Notification".t) // Reused string for completion
                                         .setContentText("Batch completed: ${job.positivePrompt.take(35)}...")
                                         .setContentIntent(pendingIntent)
                                         .setAutoCancel(true)
@@ -685,33 +740,39 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                         }
                     }
 
-                    withContext(Dispatchers.Main) { removeFromQueue(job.id) }
-
                 } else {
                     if (response.code == 500 || responseBody.contains("OutOfMemoryError", true) || responseBody.contains("CUDA out of memory", true)) {
                         withContext(Dispatchers.Main) {
-                            ForgeState.statusText.value = "OOM Error - Queue Paused"
+                            ForgeState.statusText.value = "SERVER OUT OF MEMORY (OOM)".t
                             ForgeState.isQueuePaused.value = true
                             ForgeState.oomAlert.value = true
-                            removeFromQueue(job.id)
                         }
                     } else {
                         withContext(Dispatchers.Main) {
-                            ForgeState.statusText.value = "Error: ${response.code}"
-                            removeFromQueue(job.id)
+                            ForgeState.statusText.value = "Error:".t + " ${response.code}"
+                            if (!_config.value.overnightMode) ForgeState.isQueuePaused.value = true
                         }
                     }
                 }
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                ForgeState.statusText.value = "Failed: ${e.localizedMessage}"
+                ForgeState.statusText.value = "Failed:".t + " ${e.localizedMessage}"
                 if (!_config.value.overnightMode) {
-                    removeFromQueue(job.id)
+                    ForgeState.isQueuePaused.value = true
                 }
             }
         } finally {
             withContext(Dispatchers.Main) {
+                // Remove without triggering total size deduction
+                ForgeState.generationQueue.update { q -> q.filter { it.id != job.id } }
+                ForgeState.completedQueueItems.update { it + 1 }
+
+                if (ForgeState.generationQueue.value.isEmpty()) {
+                    ForgeState.totalQueueSize.value = 0
+                    ForgeState.completedQueueItems.value = 0
+                }
+
                 ForgeState.isGenerating.value = false
                 ForgeState.progress.value = 1f
                 ForgeState.currentEta.value = 0.0
@@ -727,7 +788,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     val url = _config.value.apiUrl.trimEnd('/')
                     if (url.isNotEmpty()) {
                         val start = System.currentTimeMillis()
-                        val skipImage = !(_config.value.livePreviews)
+                        val skipImage = _config.value.previewMode != "Normal"
 
                         // 1. Fetch Progress
                         val request = Request.Builder().url("$url/sdapi/v1/progress?skip_current_image=$skipImage").build()
@@ -745,7 +806,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                     val jobCount = progressData.state?.jobCount ?: 0
 
                                     val currentImageStr = progressData.currentImage ?: ""
-                                    if (currentImageStr.isNotEmpty()) {
+                                    if (currentImageStr.isNotEmpty() && !skipImage) {
                                         ForgeState.livePreviewImage.value = currentImageStr
                                     } else {
                                         if (!ForgeState.isGenerating.value) ForgeState.livePreviewImage.value = null
@@ -756,10 +817,17 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                     ForgeState.progress.value = progressVal
                                     ForgeState.currentEta.value = etaVal
 
+                                    progressData.state?.let { stateObj ->
+                                        ForgeState.currentJobNo.value = stateObj.jobNo
+                                        ForgeState.currentJobCount.value = stateObj.jobCount
+                                        ForgeState.currentSamplingStep.value = stateObj.samplingStep
+                                        ForgeState.currentSamplingSteps.value = stateObj.samplingSteps
+                                    }
+
                                     if (busy && !ForgeState.isGenerating.value) {
-                                        ForgeState.statusText.value = "External Task: ${(progressVal * 100).toInt()}%"
+                                        ForgeState.statusText.value = "External Task:".t + " ${(progressVal * 100).toInt()}%"
                                     } else if (!busy && !ForgeState.isGenerating.value) {
-                                        ForgeState.statusText.value = "Ready"
+                                        ForgeState.statusText.value = "Ready".t
                                     }
                                 }
                             } else if (response.code == 401 || response.code == 403) {
@@ -767,7 +835,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                 ForgeState.isServerBusy.value = false
                                 ForgeState.currentEta.value = 0.0
                                 failCount = 0
-                                ForgeState.statusText.value = "Auth Required (Check Settings)"
+                                ForgeState.statusText.value = "Authentication Required.".t
                             } else throw Exception("Bad Status")
                         }
 
@@ -804,7 +872,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     ForgeState.vramUsage.value = null
                     failCount++
                     if (failCount >= _config.value.connectionTimeout && !ForgeState.isGenerating.value) {
-                        ForgeState.statusText.value = "Connection Lost (Timeout)"
+                        ForgeState.statusText.value = "Connection Lost (Timeout)".t
                     }
                 }
 
@@ -828,12 +896,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             _currentImageMetadata.value = null
             return
         }
-        _currentImageMetadata.value = "Loading metadata..."
+        _currentImageMetadata.value = "Loading metadata...".t
         viewModelScope.launch(workerDispatcher) {
             try {
                 val imageUrl = getGalleryImageUrl(item)
                 if (imageUrl.isEmpty()) {
-                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "Invalid URL." }
+                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "Invalid URL.".t }
                     return@launch
                 }
                 val imgReq = Request.Builder().url(imageUrl).build()
@@ -846,23 +914,23 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
                 if (imgBytes != null) {
                     val infoStr = extractPngParameters(imgBytes!!)
-                    withContext(Dispatchers.Main) { _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found." }
+                    withContext(Dispatchers.Main) { _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found.".t }
                 } else {
-                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed to load image." }
+                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed to load image.".t }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed: ${e.message}" }
+                withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed:".t + " ${e.message}" }
             }
         }
     }
 
     fun loadMetadataForLocalFile(filePath: String) {
-        _currentImageMetadata.value = "Loading metadata..."
+        _currentImageMetadata.value = "Loading metadata...".t
         viewModelScope.launch(workerDispatcher) {
             try {
                 val file = java.io.File(filePath)
                 if (!file.exists()) {
-                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "File not found locally." }
+                    withContext(Dispatchers.Main) { _currentImageMetadata.value = "File not found locally.".t }
                     return@launch
                 }
 
@@ -870,10 +938,10 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 val infoStr = extractPngParameters(bytes)
 
                 withContext(Dispatchers.Main) {
-                    _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found."
+                    _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found.".t
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed: ${e.message}" }
+                withContext(Dispatchers.Main) { _currentImageMetadata.value = "Failed:".t + " ${e.message}" }
             }
         }
     }
@@ -1063,14 +1131,14 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 } else {
                     withContext(Dispatchers.Main) {
                         updateState { _lastPromptState.value.copy() }
-                        Toast.makeText(application, "Used local cache (No images found in gallery)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(application, "Used local cache (No images found in gallery)".t, Toast.LENGTH_SHORT).show()
                         _isRestoringPrompt.value = false
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     updateState { _lastPromptState.value.copy() }
-                    Toast.makeText(application, "Used local cache (Network error)", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(application, "Used local cache (Network error)".t, Toast.LENGTH_SHORT).show()
                     _isRestoringPrompt.value = false
                 }
             }
@@ -1097,19 +1165,19 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     withContext(Dispatchers.Main) {
                         if (foundSeed != null) {
                             updateState { it.copy(seed = foundSeed!!) }
-                            Toast.makeText(application, "Seed recovered: $foundSeed", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(application, "${"Seed recovered:".t} $foundSeed", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(application, "No seed found in last image", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(application, "No seed found in last image".t, Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(application, "Failed to find last image", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(application, "Failed to find last image".t, Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Network error recovering seed", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(application, "Network error recovering seed".t, Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1123,7 +1191,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             try {
                 val imageUrl = getGalleryImageUrl(item)
                 if (imageUrl.isEmpty()) {
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Invalid Image URL", Toast.LENGTH_SHORT).show() }
+                    withContext(Dispatchers.Main) { Toast.makeText(application, "Invalid Image URL".t, Toast.LENGTH_SHORT).show() }
                     _isRestoringPrompt.value = false
                     return@launch
                 }
@@ -1147,12 +1215,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                     return@launch
                 }
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Failed to extract data", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(application, "Failed to extract data".t, Toast.LENGTH_SHORT).show()
                     _isRestoringPrompt.value = false
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Network error", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(application, "Network error".t, Toast.LENGTH_SHORT).show()
                     _isRestoringPrompt.value = false
                 }
             }
@@ -1211,7 +1279,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
             }
             newState
         }
-        Toast.makeText(application, "Loaded generation data", Toast.LENGTH_SHORT).show()
+        Toast.makeText(application, "Loaded generation data".t, Toast.LENGTH_SHORT).show()
     }
 
     private fun fetchApiData() {
@@ -1297,14 +1365,14 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                             fetchGalleryFolder("Root")
                             return@launch
                         } else if (response.code == 401 || response.code == 403) {
-                            _galleryError.value = "Authentication Required."
+                            _galleryError.value = "Authentication Required.".t
                         } else {
-                            _galleryError.value = "Server returned Error ${response.code}"
+                            _galleryError.value = "Server returned Error ".t + "${response.code}"
                         }
                     }
                 }
             } catch (e: Exception) {
-                _galleryError.value = e.message ?: "Failed to reach server."
+                _galleryError.value = e.message ?: "Failed to reach server.".t
             } finally {
                 _isGalleryLoading.value = false
             }
@@ -1328,7 +1396,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         viewModelScope.launch(workerDispatcher) {
             try {
                 val file = File(localFilePath)
-                if (!file.exists()) throw Exception("Local file missing")
+                if (!file.exists()) throw Exception("Local file missing".t)
 
                 val bytes = file.readBytes()
                 val fileName = "Gen_${System.currentTimeMillis()}.png"
@@ -1351,11 +1419,11 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                 val uri = resolver.insert(insertUri, contentValues)
                 if (uri != null) {
                     resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads", Toast.LENGTH_SHORT).show() }
-                } else throw Exception("Failed to create file in MediaStore")
+                    withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads".t, Toast.LENGTH_SHORT).show() }
+                } else throw Exception("Failed to create file in MediaStore".t)
 
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed:".t + " ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
     }
@@ -1364,13 +1432,13 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         viewModelScope.launch(workerDispatcher) {
             try {
                 val url = getGalleryImageUrl(item)
-                if (url.isEmpty()) throw Exception("Invalid Gallery URL")
+                if (url.isEmpty()) throw Exception("Invalid Gallery URL".t)
 
                 val request = Request.Builder().url(url).build()
 
                 client.newCall(request).await().use { response ->
                     if (response.isSuccessful) {
-                        val bytes = response.body?.bytes() ?: throw Exception("Empty response body")
+                        val bytes = response.body?.bytes() ?: throw Exception("Empty response body".t)
                         val contentValues = ContentValues().apply {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, item.name)
                             put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
@@ -1390,12 +1458,12 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
 
                         if (uri != null) {
                             resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                            withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads", Toast.LENGTH_SHORT).show() }
-                        } else throw Exception("Failed to create file in MediaStore")
-                    } else throw Exception("Server returned ${response.code}")
+                            withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads".t, Toast.LENGTH_SHORT).show() }
+                        } else throw Exception("Failed to create file in MediaStore".t)
+                    } else throw Exception("Server returned ".t + "${response.code}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed:".t + " ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
     }
@@ -1404,7 +1472,7 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         viewModelScope.launch(workerDispatcher) {
             try {
                 val file = File(localFilePath)
-                if (!file.exists()) throw Exception("Local file missing")
+                if (!file.exists()) throw Exception("Local file missing".t)
 
                 val bytes = file.readBytes()
                 val fileName = "Shared_${System.currentTimeMillis()}.png"
@@ -1430,11 +1498,11 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }
                     withContext(Dispatchers.Main) {
-                        context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
+                        context.startActivity(Intent.createChooser(shareIntent, "Share Image".t))
                     }
-                } else throw Exception("Failed to prepare file for sharing")
+                } else throw Exception("Failed to prepare file for sharing".t)
             } catch(e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Share Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Share Failed:".t + " ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
     }
@@ -1443,13 +1511,13 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
         viewModelScope.launch(workerDispatcher) {
             try {
                 val url = getGalleryImageUrl(item)
-                if (url.isEmpty()) throw Exception("Invalid Gallery URL")
+                if (url.isEmpty()) throw Exception("Invalid Gallery URL".t)
 
                 val request = Request.Builder().url(url).build()
 
                 client.newCall(request).await().use { response ->
                     if (response.isSuccessful) {
-                        val bytes = response.body?.bytes() ?: throw Exception("Empty response body")
+                        val bytes = response.body?.bytes() ?: throw Exception("Empty response body".t)
                         val contentValues = ContentValues().apply {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, "Shared_${item.name}")
                             put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
@@ -1471,13 +1539,13 @@ class ForgeViewModel(private val application: Application) : AndroidViewModel(ap
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }
                             withContext(Dispatchers.Main) {
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Image"))
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Image".t))
                             }
-                        } else throw Exception("Failed to prepare file for sharing")
-                    } else throw Exception("Server returned ${response.code}")
+                        } else throw Exception("Failed to prepare file for sharing".t)
+                    } else throw Exception("Server returned ".t + "${response.code}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(context, "Share Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                withContext(Dispatchers.Main) { Toast.makeText(context, "Share Failed:".t + " ${e.message}", Toast.LENGTH_SHORT).show() }
             }
         }
     }

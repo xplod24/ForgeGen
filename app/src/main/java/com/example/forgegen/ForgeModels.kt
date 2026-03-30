@@ -21,17 +21,17 @@ data class AppConfig(
     var language: String = "en",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
+    var checkpointTimeout: Int = 45,
     var receiveGenerationNotification: Boolean = true,
     var silentNotifications: Boolean = false,
     var notificationVerbosity: String = "Full",
     var keepScreenOn: Boolean = false,
     var screenDimming: Boolean = false,
     var screenDimmingTimeout: Int = 5,
-    var useDynamicColor: Boolean = true,
     var swipeToBrowseGallery: Boolean = true,
     var galleryGridColumns: Int = 3,
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
-    var livePreviews: Boolean = false,
+    var previewMode: String = "Finished", // "None" (Loading circle), "Finished" (Last batch), "Normal" (Live)
     var useNativeSecurity: Boolean = false,
     var useBiometricLock: Boolean = false,
     var overnightMode: Boolean = false,
@@ -47,6 +47,7 @@ data class AppState(
     var negativePrompt: String = "",
     var cfgScale: Float = 7.0f,
     var steps: Int = 20,
+    var aspectRatio: String = "Custom",
     var width: Int = 512,
     var height: Int = 512,
     var batchCount: Int = 1,
@@ -106,7 +107,10 @@ data class QueuedGeneration(
 )
 
 data class ProgressState(
-    @SerializedName("job_count") val jobCount: Int = 0
+    @SerializedName("job_count") val jobCount: Int = 0,
+    @SerializedName("job_no") val jobNo: Int = 0,
+    @SerializedName("sampling_step") val samplingStep: Int = 0,
+    @SerializedName("sampling_steps") val samplingSteps: Int = 0
 )
 
 data class ProgressResponse(
