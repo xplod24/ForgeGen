@@ -60,7 +60,6 @@ fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            // Paski postępu dla kolejki
             if (isGenerating || queue.isNotEmpty()) {
                 Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -89,7 +88,7 @@ fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    items(queue) { item ->
+                    items(items = queue, key = { it.id }) { item ->
                         val isCurrentlyActive = isGenerating && queue.indexOf(item) == 0
 
                         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {

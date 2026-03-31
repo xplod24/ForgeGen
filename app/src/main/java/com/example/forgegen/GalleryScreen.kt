@@ -106,7 +106,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(4.dp)
                     ) {
-                        items(files.size) { index ->
+                        items(count = files.size, key = { files[it].fullpath }) { index ->
                             val file = files[index]
                             if (file.isDir) {
                                 Card(
@@ -141,7 +141,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     }
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(4.dp)) {
-                        items(files.size) { index ->
+                        items(count = files.size, key = { files[it].fullpath }) { index ->
                             val file = files[index]
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp).clickable {
@@ -206,7 +206,13 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             val currentItem = imagesOnly.getOrNull(pagerState.currentPage)
                             Text(currentItem?.name ?: "", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
 
-                            IconButton(onClick = { currentItem?.let { viewModel.shareImage(it, context) } }) { Icon(Icons.Default.Share, null, tint = Color.White) }
+                            IconButton(onClick = {
+                                currentItem?.let { item ->
+                                    viewModel.shareImage(item) { intent ->
+                                        context.startActivity(intent)
+                                    }
+                                }
+                            }) { Icon(Icons.Default.Share, null, tint = Color.White) }
 
                             val showMetadata by viewModel.showGalleryMetadata.collectAsStateWithLifecycle()
                             IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {

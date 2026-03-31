@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.example.forgegen.R
 import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.util.Locale
@@ -197,7 +198,7 @@ class GenerationService : Service() {
             builder.setFullScreenIntent(openPendingIntent, true)
             builder.setPriority(NotificationCompat.PRIORITY_MAX)
             builder.setCategory(NotificationCompat.CATEGORY_ERROR)
-            builder.setSmallIcon(android.R.drawable.ic_dialog_alert)
+            builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
         } else {
             builder.addAction(android.R.drawable.ic_menu_preferences, "Settings", settingsPendingIntent)
             builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Exit App", exitPendingIntent)
@@ -208,11 +209,11 @@ class GenerationService : Service() {
                 builder.setUsesChronometer(true)
                 builder.setWhen(generationStartTime)
                 // A transparent vector icon is strictly required for the pill to extract the shape correctly
-                builder.setSmallIcon(android.R.drawable.stat_sys_download)
+                builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
                 // Primary blue for the pill tint backdrop
                 builder.setColor(android.graphics.Color.parseColor("#005BFF"))
             } else {
-                builder.setSmallIcon(android.R.drawable.ic_menu_preferences)
+                builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
             }
         }
 

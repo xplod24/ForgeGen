@@ -15,8 +15,8 @@ android {
         applicationId = "com.example.forgegen"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.1-release-candidate"
+        versionCode = 2
+        versionName = "1.0.2-release-candidate"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -49,6 +49,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended:1.6.0")
+    implementation(libs.androidx.compose.ui.text)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

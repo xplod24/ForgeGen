@@ -358,7 +358,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val currentEta by ForgeState.currentEta.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
-    val status by viewModel.statusText.collectAsStateWithLifecycle()
     val vram by ForgeState.vramUsage.collectAsStateWithLifecycle()
 
     val isServerBusy by ForgeState.isServerBusy.collectAsStateWithLifecycle()
@@ -460,32 +459,28 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             topBar = {
                 TopAppBar(
                     title = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text("Forge Generator".t, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = if (isConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
-                                        contentDescription = null,
-                                        tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
+                        Column {
+                            Text("Forge Generator".t, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = if (isConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                    contentDescription = null,
+                                    tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (isConnected) "${pingMs}ms" else "Offline".t,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Normal
+                                )
+                                if (vram != null) {
                                     Text(
-                                        text = if (isConnected) "${pingMs}ms" else "Offline".t,
+                                        text = " | $vram",
                                         fontSize = 12.sp,
-                                        fontWeight = FontWeight.Normal
+                                        fontWeight = FontWeight.Normal,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha=0.7f)
                                     )
-                                    if (vram != null) {
-                                        Text(
-                                            text = " | ${"VRAM: ".t}$vram",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Normal,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha=0.7f)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -543,14 +538,12 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
 
                         if (isGenerating && config.previewMode == "None") {
-                            // MODE: LOADING CIRCLE
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Text("Generating...".t, color = Color.LightGray, fontSize = 12.sp)
                             }
                         } else if (isGenerating && !livePreviewBase64.isNullOrEmpty()) {
-                            // MODE: NORMAL PREVIEW (with base64 streaming)
                             val previewBitmap by produceState<android.graphics.Bitmap?>(initialValue = null, livePreviewBase64) {
                                 value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                                     try {
@@ -595,7 +588,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 }
                             }
                         } else if (currentSessionIndex >= 0 && sessionImages.isNotEmpty() && currentSessionIndex < sessionImages.size) {
-                            // MODE: LAST FINISHED BATCH (Fallback shows the last valid image from memory)
                             AsyncImage(
                                 model = sessionImages[currentSessionIndex],
                                 contentDescription = null,
@@ -1015,6 +1007,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 }
 
                 val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
+
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -1033,47 +1026,59 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         Text("${generationQueue.size}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    if (isActivelyGenerating || generationQueue.isNotEmpty()) {
+                    if (isActivelyGenerating) {
                         val queueGen = rememberDebounced { viewModel.queueGeneration() }
+                        val interruptGen = rememberDebounced { viewModel.interruptGeneration() }
 
-                        Box(
-                            modifier = Modifier
-                                .height(54.dp)
-                                .weight(1.2f)
-                                .shadow(8.dp, CircleShape)
-                                .clip(CircleShape)
-                                .background(Color.DarkGray)
-                                .clickable(enabled = isConnected && !isRestoringPrompt, onClick = queueGen)
-                        ) {
+                        Row(modifier = Modifier.weight(1.2f).height(54.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = interruptGen,
+                                modifier = Modifier.weight(0.25f).fillMaxHeight().shadow(8.dp, CircleShape),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Icon(Icons.Default.Stop, contentDescription = "Interrupt", tint = MaterialTheme.colorScheme.onError)
+                            }
+
                             Box(
                                 modifier = Modifier
+                                    .weight(0.75f)
                                     .fillMaxHeight()
-                                    .fillMaxWidth(progress.coerceIn(0f, 1f))
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                            Column(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalArrangement = Arrangement.Center,
-                                horizontalAlignment = Alignment.CenterHorizontally
+                                    .shadow(8.dp, CircleShape)
+                                    .clip(CircleShape)
+                                    .background(Color.DarkGray)
+                                    .clickable(enabled = isConnected && !isRestoringPrompt, onClick = queueGen)
                             ) {
-                                val percentage = (progress * 100).toInt()
-
-                                Text(
-                                    text = "ADD TO QUEUE • ".t + "$percentage%",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(progress.coerceIn(0f, 1f))
+                                        .background(MaterialTheme.colorScheme.primary)
                                 )
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    val percentage = (progress * 100).toInt()
 
-                                val stepStr = if (currentSamplingSteps > 0) "Img ${currentJobNo + 1}/$currentJobCount | Step $currentSamplingStep/$currentSamplingSteps".t else "Img ${currentJobNo + 1}/$currentJobCount | Step ${(progress * state.steps).toInt()}/${state.steps}".t
+                                    Text(
+                                        text = "ADD TO QUEUE • ".t + "$percentage%",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
+                                    )
 
-                                Text(
-                                    text = "$stepStr | ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
-                                    fontSize = 9.sp,
-                                    color = Color.LightGray,
-                                    style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
-                                )
+                                    val stepStr = if (currentSamplingSteps > 0) "Img ${currentJobNo + 1}/$currentJobCount | Step $currentSamplingStep/$currentSamplingSteps".t else "Img ${currentJobNo + 1}/$currentJobCount | Step ${(progress * state.steps).toInt()}/${state.steps}".t
+
+                                    Text(
+                                        text = "$stepStr | ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
+                                        fontSize = 9.sp,
+                                        color = Color.LightGray,
+                                        style = TextStyle(shadow = androidx.compose.ui.graphics.Shadow(color = Color.Black.copy(alpha=0.8f), blurRadius = 4f))
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -1302,7 +1307,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         }
 
         if (fullscreenImageIndex >= 0 && sessionImages.isNotEmpty()) {
-            val scope = rememberCoroutineScope()
             val pagerState = rememberPagerState(initialPage = fullscreenImageIndex, pageCount = { sessionImages.size })
             val currentFile = sessionImages.getOrNull(pagerState.currentPage) ?: ""
 
@@ -1322,7 +1326,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         IconButton(onClick = { fullscreenImageIndex = -1 }) { Icon(Icons.Default.Close, contentDescription = "Close".t, tint = Color.White) }
                         Text(File(currentFile).name, color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
 
-                        IconButton(onClick = { viewModel.shareSessionImage(currentFile, context) }) {
+                        IconButton(onClick = {
+                            viewModel.shareSessionImage(currentFile) { intent ->
+                                context.startActivity(intent)
+                            }
+                        }) {
                             Icon(Icons.Default.Share, contentDescription = "Share".t, tint = Color.White)
                         }
 

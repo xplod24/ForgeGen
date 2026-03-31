@@ -34,8 +34,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -47,16 +45,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.OffsetMapping
-import androidx.compose.ui.text.input.TransformedText
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -79,6 +71,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.isActive
 import kotlin.system.exitProcess
 import com.yourname.forgegen.Translator.t
+
+// --- GLOBAL UTILITIES & SHARED COMPONENTS ---
 
 tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
@@ -317,6 +311,8 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
         composable("queue") { QueueScreen(viewModel, navController) }
     }
 }
+
+// --- MAIN ACTIVITY ENTRY POINT ---
 
 class MainActivity : ComponentActivity() {
     val navEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
