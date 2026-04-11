@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.forgegen
 
 import android.app.Activity
@@ -23,8 +25,8 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -42,8 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -54,10 +54,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -66,8 +68,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import coil.ImageLoader
 import coil.compose.LocalImageLoader
+import coil.disk.DiskCache
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
-import java.util.regex.Pattern
+import kotlinx.coroutines.launch
 import kotlin.system.exitProcess
 
 // --- GLOBAL UTILITIES & SHARED COMPONENTS ---
@@ -80,7 +84,7 @@ tailrec fun Context.findActivity(): Activity? = when (this) {
 
 @Composable
 fun rememberDebounced(onClick: () -> Unit): () -> Unit {
-    var lastClickTime by remember { mutableStateOf(0L) }
+    var lastClickTime by remember { mutableLongStateOf(0L) }
     return remember(onClick) {
         {
             val now = System.currentTimeMillis()
@@ -97,7 +101,7 @@ fun checkConnectivity(connectivityManager: ConnectivityManager): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
         capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    } catch (e: SecurityException) { true }
+    } catch (_: SecurityException) { true }
 }
 
 @Composable
@@ -143,9 +147,9 @@ fun currentConnectivityStatus(context: Context): State<Boolean> {
             }
         }
 
-        try { connectivityManager.registerDefaultNetworkCallback(callback) } catch (e: SecurityException) {}
+        try { connectivityManager.registerDefaultNetworkCallback(callback) } catch (_: SecurityException) {}
 
-        onDispose { try { connectivityManager.unregisterNetworkCallback(callback) } catch (e: Exception) {} }
+        onDispose { try { connectivityManager.unregisterNetworkCallback(callback) } catch (_: Exception) {} }
     }
     return isConnected
 }
@@ -189,10 +193,9 @@ fun MetadataAlertDialog(
         posPrompt = posPrompt.trim()
         negPrompt = negPrompt.trim()
 
-        val loraPattern = Pattern.compile("<lora:([^:]+):([0-9.]+)>")
-        val matcher = loraPattern.matcher(posPrompt)
-        while (matcher.find()) {
-            loras.add(matcher.group(0) ?: "")
+        // Idiomatyczne wyciąganie tagów LoRA za pomocą wbudowanego Kotlin Regex
+        Regex("<lora:([^:]+):([0-9.]+)>").findAll(posPrompt).forEach { match ->
+            loras.add(match.value)
         }
     }
 
@@ -292,12 +295,13 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
 
     NavHost(
         navController = navController,
-        startDestination = "main",
+        startDestination = "welcome",
         enterTransition = { fadeIn(animationSpec = tween(0)) },
         exitTransition = { fadeOut(animationSpec = tween(0)) },
         popEnterTransition = { fadeIn(animationSpec = tween(0)) },
         popExitTransition = { fadeOut(animationSpec = tween(0)) }
     ) {
+        composable("welcome") { WelcomeScreen(navController) }
         composable("setup") { SetupScreen(viewModel, navController) }
         composable("main") { MainScreen(viewModel, navController) }
         composable("gallery") { GalleryScreen(viewModel, navController) }
@@ -318,6 +322,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Natychmiastowe ukrycie systemowego splash screena by oddać renderowanie WelcomeScreen
+        installSplashScreen().apply {
+            setKeepOnScreenCondition { false }
+        }
+
         super.onCreate(savedInstanceState)
 
         if (intent?.action == "ACTION_OPEN_SETTINGS") {
@@ -364,8 +373,28 @@ class MainActivity : ComponentActivity() {
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
             }
 
+            // Inicjalizacja biblioteki Coil ze zdefiniowanym kluczem Cache (2.5GB + Interceptor na 30 dni)
             val imageLoader = remember(config.connectionTimeout, config.apiUrl) {
-                ImageLoader.Builder(context).okHttpClient { viewModel.client }.build()
+                val customClient = viewModel.client.newBuilder()
+                    .addNetworkInterceptor { chain ->
+                        val originalResponse = chain.proceed(chain.request())
+                        // Wymuszenie na bibliotece zaufania, że plik będzie ważny przez 30 dni (2592000 sekund)
+                        originalResponse.newBuilder()
+                            .header("Cache-Control", "public, max-age=2592000")
+                            .build()
+                    }
+                    .build()
+
+                ImageLoader.Builder(context)
+                    .okHttpClient { customClient }
+                    .diskCache {
+                        DiskCache.Builder()
+                            .directory(context.cacheDir.resolve("image_cache"))
+                            // Twardy limit wielkości cache dyskowego: 2.5 GB
+                            .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
+                            .build()
+                    }
+                    .build()
             }
 
             var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
@@ -404,18 +433,9 @@ class MainActivity : ComponentActivity() {
                 return@setContent
             }
 
-            var lastTouchTime by remember { mutableStateOf(System.currentTimeMillis()) }
-            var isScreenDimmed by remember { mutableStateOf(false) }
-
             LaunchedEffect(config.keepScreenOn) {
                 if (config.keepScreenOn) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            }
-
-            LaunchedEffect(isScreenDimmed) {
-                val lp = activity.window.attributes
-                lp.screenBrightness = if (isScreenDimmed) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-                activity.window.attributes = lp
             }
 
             val isOnline by currentConnectivityStatus(this)
@@ -486,17 +506,8 @@ class MainActivity : ComponentActivity() {
 
             CompositionLocalProvider(LocalImageLoader provides imageLoader) {
                 MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
-                    Box(modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    awaitPointerEvent(PointerEventPass.Initial)
-                                    lastTouchTime = System.currentTimeMillis()
-                                }
-                            }
-                        }
-                    ) {
+                    // Całkowicie wyczyszczony Box ze śmieci po pointerInput
+                    Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -508,7 +519,10 @@ class MainActivity : ComponentActivity() {
 
                         if (shouldBlur) {
                             Box(
-                                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).clickable(enabled = false) {},
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .clickable(enabled = false) {},
                                 contentAlignment = Alignment.Center
                             ) {
                                 Card(shape = MaterialTheme.shapes.large, elevation = CardDefaults.cardElevation(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -545,7 +559,11 @@ class MainActivity : ComponentActivity() {
                         val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
                         if (isRestoringPrompt) {
                             Box(
-                                modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)).zIndex(100f).clickable(enabled = false) {},
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .zIndex(100f)
+                                    .clickable(enabled = false) {},
                                 contentAlignment = Alignment.Center
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -554,10 +572,6 @@ class MainActivity : ComponentActivity() {
                                     Text("Recovering prompt...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 }
                             }
-                        }
-
-                        if (isScreenDimmed) {
-                            Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.9f)).zIndex(99f))
                         }
                     }
                 }

@@ -4,22 +4,31 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
+import android.app.DownloadManager
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.icu.text.SimpleDateFormat
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import androidx.core.content.edit
+import androidx.core.content.FileProvider
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -31,6 +40,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -52,6 +62,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
@@ -59,6 +70,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+/* ============================================================================
+ * JETPACK DATASTORE (ASYNC PREFERENCES)
+ * ============================================================================ */
+val Context.dataStore by preferencesDataStore(name = "forge_settings")
 
 /* ============================================================================
  * IDIOMATIC COROUTINES EXTENSIONS
@@ -96,9 +112,15 @@ object ForgeRepository {
     private const val TAG = "ForgeAPI"
 
     private lateinit var application: Application
-    private lateinit var prefs: SharedPreferences
     private lateinit var db: ForgeDatabase
     private val gson = Gson()
+
+    private val CONFIG_KEY = stringPreferencesKey("config")
+    private val STATE_KEY = stringPreferencesKey("last_state")
+    private val HISTORY_KEY = stringPreferencesKey("prompt_history")
+    private val QUEUE_KEY = stringPreferencesKey("saved_queue")
+    private val STATS_KEY = stringPreferencesKey("saved_server_stats")
+    private val SHOW_META_KEY = booleanPreferencesKey("show_gallery_meta")
 
     val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -211,11 +233,20 @@ object ForgeRepository {
     private val _selectedModel = MutableStateFlow("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
 
-    val samplers = MutableStateFlow<List<String>>(emptyList())
-    val schedulers = MutableStateFlow<List<String>>(emptyList())
-    val models = MutableStateFlow<List<ApiResource>>(emptyList())
-    val upscalers = MutableStateFlow<List<String>>(emptyList())
-    val availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
+    private val _samplers = MutableStateFlow<List<String>>(emptyList())
+    val samplers: StateFlow<List<String>> = _samplers.asStateFlow()
+
+    private val _schedulers = MutableStateFlow<List<String>>(emptyList())
+    val schedulers: StateFlow<List<String>> = _schedulers.asStateFlow()
+
+    private val _models = MutableStateFlow<List<ApiResource>>(emptyList())
+    val models: StateFlow<List<ApiResource>> = _models.asStateFlow()
+
+    private val _upscalers = MutableStateFlow<List<String>>(emptyList())
+    val upscalers: StateFlow<List<String>> = _upscalers.asStateFlow()
+
+    private val _availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
+    val availableLoras: StateFlow<List<ApiResource>> = _availableLoras.asStateFlow()
 
     private val _galleryFiles = MutableStateFlow<List<GalleryItem>>(emptyList())
     val galleryFiles: StateFlow<List<GalleryItem>> = _galleryFiles.asStateFlow()
@@ -238,35 +269,279 @@ object ForgeRepository {
     private val _galleryMode = MutableStateFlow(GalleryMode.NORMAL)
     val galleryMode: StateFlow<GalleryMode> = _galleryMode.asStateFlow()
 
+    private val _isCurrentFavorite = MutableStateFlow(false)
+    val isCurrentFavorite: StateFlow<Boolean> = _isCurrentFavorite.asStateFlow()
+
+    private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
+    val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
+
+    // --- IN-APP UPDATER STATES ---
+    private val _updateManifest = MutableStateFlow<UpdateManifest?>(null)
+    val updateManifest: StateFlow<UpdateManifest?> = _updateManifest.asStateFlow()
+
+    private val _isUpdateDownloading = MutableStateFlow(false)
+    val isUpdateDownloading: StateFlow<Boolean> = _isUpdateDownloading.asStateFlow()
+
+    private val _updateDownloadProgress = MutableStateFlow(0f)
+    val updateDownloadProgress: StateFlow<Float> = _updateDownloadProgress.asStateFlow()
+
     private var isInitialized = false
 
     fun init(app: Application) {
         if (isInitialized) return
         application = app
-        prefs = app.getSharedPreferences("ForgeGenPrefs", Context.MODE_PRIVATE)
 
         db = Room.databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-            .fallbackToDestructiveMigration(false)
+            .fallbackToDestructiveMigration()
             .build()
 
-        _config.value = loadConfig()
-        _appState.value = loadState()
-        _promptHistory.value = loadPromptHistory()
-        _showGalleryMetadata.value = prefs.getBoolean("show_gallery_meta", false)
+        // Asynchroniczne ładowanie konfiguracji z DataStore bez blokowania UI
+        repositoryScope.launch(Dispatchers.IO) {
+            val prefs = application.dataStore.data.first()
+            _config.value = loadConfig(prefs)
+            _appState.value = loadState(prefs)
+            _promptHistory.value = loadPromptHistory(prefs)
+            _showGalleryMetadata.value = prefs[SHOW_META_KEY] ?: false
 
-        client = createClient(_config.value.connectionTimeout)
+            client = createClient(_config.value.connectionTimeout)
 
-        loadQueueState()
-        loadServerStats()
-        manageServiceState(_config.value.enablePersistentService)
-        startBackgroundPing()
-        startStatsMaintenance()
-        fetchApiData()
-        loadTags()
-        startQueueManager()
-        cleanupRecoveredImages()
+            loadFavoritePaths()
+            loadQueueState(prefs)
+            loadServerStats(prefs)
+            manageServiceState(_config.value.enablePersistentService)
 
-        isInitialized = true
+            startBackgroundPing()
+            startStatsMaintenance()
+            fetchApiData()
+            loadTags()
+            startQueueManager()
+            cleanupRecoveredImages()
+
+            checkForUpdates(manual = false)
+            isInitialized = true
+        }
+    }
+
+    /* ============================================================================
+     * IN-APP UPDATER (SHA-256 Validated & Token Authenticated)
+     * ============================================================================ */
+
+    fun checkForUpdates(manual: Boolean = false) {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                val updateBaseUrl = "https://xplod24.ddns.net"
+                val channel = _config.value.updateChannel
+                val updatePath = if (channel.equals("Beta", ignoreCase = true)) "/beta/update.json" else "/release/update.json"
+                val fullUrl = "$updateBaseUrl$updatePath"
+
+                Log.d(TAG, "--- SPRAWDZANIE AKTUALIZACJI ---")
+                Log.d(TAG, "URL: $fullUrl")
+                Log.d(TAG, "Wybrany kanał w aplikacji: $channel")
+
+                val requestBuilder = Request.Builder().url(fullUrl)
+
+                if (channel.equals("Beta", ignoreCase = true)) {
+                    val token = _config.value.betaToken
+                    if (token.isNotEmpty()) {
+                        requestBuilder.addHeader("Beta-Tester", token)
+                        Log.d(TAG, "Wstrzyknięto nagłówek Beta-Tester")
+                    } else {
+                        Log.w(TAG, "BRAK TOKENU BETA! Zapytanie zostanie odrzucone przez Nginx (403).")
+                        if (manual) {
+                            withContext(Dispatchers.Main) { Toast.makeText(application, "Brak tokenu Beta w ustawieniach!", Toast.LENGTH_LONG).show() }
+                        }
+                    }
+                }
+
+                val request = requestBuilder.build()
+
+                client.newCall(request).awaitResponse().use { response ->
+                    Log.d(TAG, "Odpowiedź serwera Nginx: ${response.code} ${response.message}")
+
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: return@use
+                        Log.d(TAG, "Pobrano manifest: $body")
+                        val manifest = gson.fromJson(body, UpdateManifest::class.java)
+
+                        val pInfo = application.packageManager.getPackageInfo(application.packageName, 0)
+                        val currentVersionCode = if (Build.VERSION.SDK_INT >= 28) pInfo.longVersionCode.toInt() else pInfo.versionCode
+
+                        Log.d(TAG, "Wersja lokalna aplikacji: $currentVersionCode, Wersja z serwera: ${manifest.versionCode}")
+
+                        if (!manifest.channel.equals(channel, ignoreCase = true)) {
+                            Log.e(TAG, "BŁĄD SPÓJNOŚCI KANAŁU: Użytkownik jest na kanale '$channel', a JSON pobrany z serwera należy do kanału '${manifest.channel}'!")
+                            if (manual) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(application, "Błąd serwera: Znaleziono wersję ${manifest.channel} w folderze kanału $channel. Zgłoś to administratorowi.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            return@use
+                        }
+
+                        if (manifest.versionCode > currentVersionCode) {
+                            Log.d(TAG, "Znaleziono nowszą wersję. Wyświetlam powiadomienie.")
+                            _updateManifest.value = manifest
+                            if (manual) {
+                                withContext(Dispatchers.Main) {
+                                    Toast.makeText(application, "Dostępna aktualizacja: ${manifest.versionName}", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        } else {
+                            Log.d(TAG, "Lokalna aplikacja jest aktualna (lub nowsza od tej na serwerze).")
+                            if (manual) {
+                                withContext(Dispatchers.Main) { Toast.makeText(application, "Aplikacja jest aktualna (Lokalna: $currentVersionCode, Serwer: ${manifest.versionCode})", Toast.LENGTH_LONG).show() }
+                            }
+                        }
+                    } else {
+                        Log.e(TAG, "BŁĄD SIECI: Serwer odrzucił połączenie. Kod HTTP: ${response.code}")
+                        if (manual) {
+                            val msg = if (response.code == 403) "Odmowa dostępu (HTTP 403). Sprawdź token Beta!" else "Błąd serwera (HTTP ${response.code})"
+                            withContext(Dispatchers.Main) { Toast.makeText(application, msg, Toast.LENGTH_LONG).show() }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Wyjątek podczas sprawdzania aktualizacji: ", e)
+                if (manual) {
+                    withContext(Dispatchers.Main) { Toast.makeText(application, "Błąd połączenia: ${e.message}", Toast.LENGTH_SHORT).show() }
+                }
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate() {
+        val manifest = _updateManifest.value ?: return
+        if (_isUpdateDownloading.value) return
+
+        Log.d(TAG, "--- ROZPOCZĘCIE POBIERANIA APK ---")
+        Log.d(TAG, "URL docelowy APK: ${manifest.url}")
+
+        _isUpdateDownloading.value = true
+        _updateDownloadProgress.value = 0f
+
+        val downloadManager = application.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val uri = Uri.parse(manifest.url)
+        val request = DownloadManager.Request(uri).apply {
+            setTitle("ForgeGen Update")
+            setDescription("Downloading version ${manifest.versionName}")
+            setDestinationInExternalFilesDir(application, Environment.DIRECTORY_DOWNLOADS, "ForgeGen_Update.apk")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
+
+            if (manifest.channel.equals("Beta", ignoreCase = true) && _config.value.betaToken.isNotEmpty()) {
+                Log.d(TAG, "Dodano nagłówek Beta-Tester do systemowego DownloadManager")
+                addRequestHeader("Beta-Tester", _config.value.betaToken)
+            }
+        }
+
+        val downloadId = downloadManager.enqueue(request)
+
+        repositoryScope.launch(Dispatchers.IO) {
+            var downloading = true
+            while (downloading && isActive) {
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                val cursor = downloadManager.query(query)
+                if (cursor.moveToFirst()) {
+                    val bytesDownloadedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                    val bytesTotalIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                    val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+
+                    if (bytesDownloadedIndex != -1 && bytesTotalIndex != -1 && statusIndex != -1) {
+                        val bytesDownloaded = cursor.getInt(bytesDownloadedIndex)
+                        val bytesTotal = cursor.getInt(bytesTotalIndex)
+                        val status = cursor.getInt(statusIndex)
+
+                        if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
+                            downloading = false
+                            _updateDownloadProgress.value = 1f
+                            if (status == DownloadManager.STATUS_FAILED) {
+                                Log.e(TAG, "DownloadManager zgłosił błąd pobierania (np. 403 Forbidden).")
+                            }
+                        } else if (bytesTotal > 0) {
+                            _updateDownloadProgress.value = bytesDownloaded.toFloat() / bytesTotal.toFloat()
+                        }
+                    }
+                }
+                cursor.close()
+                delay(500)
+            }
+        }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                if (id == downloadId) {
+                    application.unregisterReceiver(this)
+                    _isUpdateDownloading.value = false
+
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor.moveToFirst()) {
+                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        if (statusIndex != -1 && cursor.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL) {
+                            Log.d(TAG, "Pobieranie zakończone sukcesem. Przechodzę do walidacji SHA-256.")
+                            verifyAndInstallApk(manifest.sha256)
+                        } else {
+                            Toast.makeText(application, "Pobieranie nie powiodło się", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    cursor.close()
+                }
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            application.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_EXPORTED)
+        } else {
+            application.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
+        }
+    }
+
+    private fun verifyAndInstallApk(expectedSha256: String) {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                val file = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
+                if (!file.exists()) {
+                    withContext(Dispatchers.Main) { Toast.makeText(application, "Update file missing", Toast.LENGTH_SHORT).show() }
+                    return@launch
+                }
+
+                val digest = MessageDigest.getInstance("SHA-256")
+                file.inputStream().use { fis ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    while (fis.read(buffer).also { bytesRead = it } != -1) {
+                        digest.update(buffer, 0, bytesRead)
+                    }
+                }
+                val hashBytes = digest.digest()
+                val calculatedSha256 = hashBytes.joinToString("") { "%02x".format(it) }
+
+                Log.d(TAG, "Oczekiwane SHA-256: $expectedSha256")
+                Log.d(TAG, "Obliczone SHA-256: $calculatedSha256")
+
+                if (calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
+                    val installUri = FileProvider.getUriForFile(application, "${application.packageName}.fileprovider", file)
+                    val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(installUri, "application/vnd.android.package-archive")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    }
+                    withContext(Dispatchers.Main) {
+                        application.startActivity(installIntent)
+                    }
+                } else {
+                    file.delete()
+                    Log.e(TAG, "BŁĄD BEZPIECZEŃSTWA: SHA-256 pobranego pliku nie zgadza się z manifestem! Plik został usunięty.")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(application, "Security Error: Checksum mismatch. File deleted.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to verify/install update", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(application, "Update failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     /* ============================================================================
@@ -277,6 +552,57 @@ object ForgeRepository {
         return withContext(Dispatchers.IO) {
             val entity = db.loraTagDao().getTagsByHash(hash)
             entity?.trainedWords?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+        }
+    }
+
+    /* ============================================================================
+     * FAVORITES MANAGEMENT (Virtual Folder System)
+     * ============================================================================ */
+
+    private fun loadFavoritePaths() {
+        repositoryScope.launch(Dispatchers.IO) {
+            val favs = db.favoriteImageDao().getAllFavorites()
+            _favoritePaths.value = favs.map { it.fullpath }.toSet()
+        }
+    }
+
+    fun checkIfFavorite(path: String) {
+        if (path.isEmpty()) {
+            _isCurrentFavorite.value = false
+            return
+        }
+        repositoryScope.launch(Dispatchers.IO) {
+            _isCurrentFavorite.value = db.favoriteImageDao().isFavorite(path)
+        }
+    }
+
+    fun toggleFavorite(item: GalleryItem) {
+        repositoryScope.launch(Dispatchers.IO) {
+            val dao = db.favoriteImageDao()
+            val isFav = dao.isFavorite(item.fullpath)
+
+            if (isFav) {
+                dao.deleteFavorite(item.fullpath)
+                _isCurrentFavorite.value = false
+                _favoritePaths.update { it - item.fullpath }
+
+                if (_currentGalleryPath.value == "virtual://favorites") {
+                    val currentList = _galleryFiles.value.toMutableList()
+                    currentList.removeAll { it.fullpath == item.fullpath }
+                    _galleryFiles.value = currentList
+                }
+            } else {
+                dao.insertFavorite(
+                    FavoriteImageEntity(
+                        fullpath = item.fullpath,
+                        name = item.name,
+                        date = item.date,
+                        savedAt = System.currentTimeMillis()
+                    )
+                )
+                _isCurrentFavorite.value = true
+                _favoritePaths.update { it + item.fullpath }
+            }
         }
     }
 
@@ -321,23 +647,27 @@ object ForgeRepository {
         }
     }
 
-    private fun loadServerStats() {
-        val json = prefs.getString("saved_server_stats", null)
-        if (!json.isNullOrEmpty()) {
-            try {
-                val type = object : TypeToken<List<ServerStatRecord>>() {}.type
-                val loaded: List<ServerStatRecord> = gson.fromJson(json, type)
-                _serverStats.value = loaded
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load saved stats", e)
+    private fun loadServerStats(prefs: Preferences? = null) {
+        repositoryScope.launch(Dispatchers.IO) {
+            val p = prefs ?: application.dataStore.data.first()
+            val json = p[STATS_KEY]
+            if (!json.isNullOrEmpty()) {
+                try {
+                    val type = object : TypeToken<List<ServerStatRecord>>() {}.type
+                    val loaded: List<ServerStatRecord> = gson.fromJson(json, type)
+                    _serverStats.value = loaded
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load saved stats", e)
+                }
             }
         }
     }
 
     private fun saveServerStats() {
         try {
-            val json = gson.toJson(_serverStats.value)
-            prefs.edit { putString("saved_server_stats", json) }
+            repositoryScope.launch(Dispatchers.IO) {
+                application.dataStore.edit { it[STATS_KEY] = gson.toJson(_serverStats.value) }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save stats", e)
         }
@@ -362,27 +692,31 @@ object ForgeRepository {
      * QUEUE FAILSAFE MECHANISM (LOCAL STORAGE)
      * ============================================================================ */
 
-    private fun loadQueueState() {
-        val json = prefs.getString("saved_queue", null)
-        if (!json.isNullOrEmpty()) {
-            try {
-                val type = object : TypeToken<List<QueuedGeneration>>() {}.type
-                val q: List<QueuedGeneration> = gson.fromJson(json, type)
-                if (q.isNotEmpty()) {
-                    _generationQueue.value = q
-                    _totalQueueSize.value = q.size
-                    _completedQueueItems.value = 0
+    private fun loadQueueState(prefs: Preferences? = null) {
+        repositoryScope.launch(Dispatchers.IO) {
+            val p = prefs ?: application.dataStore.data.first()
+            val json = p[QUEUE_KEY]
+            if (!json.isNullOrEmpty()) {
+                try {
+                    val type = object : TypeToken<List<QueuedGeneration>>() {}.type
+                    val q: List<QueuedGeneration> = gson.fromJson(json, type)
+                    if (q.isNotEmpty()) {
+                        _generationQueue.value = q
+                        _totalQueueSize.value = q.size
+                        _completedQueueItems.value = 0
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to load saved queue", e)
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load saved queue", e)
             }
         }
     }
 
     private fun saveQueueState() {
         try {
-            val q = _generationQueue.value
-            prefs.edit { putString("saved_queue", gson.toJson(q)) }
+            repositoryScope.launch(Dispatchers.IO) {
+                application.dataStore.edit { it[QUEUE_KEY] = gson.toJson(_generationQueue.value) }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save queue", e)
         }
@@ -490,8 +824,8 @@ object ForgeRepository {
             .build()
     }
 
-    private fun loadConfig(): AppConfig {
-        val json = prefs.getString("config", null)
+    private fun loadConfig(prefs: Preferences): AppConfig {
+        val json = prefs[CONFIG_KEY]
         val parsed = if (json != null) {
             try { gson.fromJson(json, AppConfig::class.java) } catch(_: Exception) { null }
         } else null
@@ -505,9 +839,8 @@ object ForgeRepository {
 
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
-            galleryPath = parsed?.galleryPath ?: "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
-            checkpointPath = parsed?.checkpointPath ?: "C:\\webui_forge_cu124_torch24\\webui\\models\\Stable-diffusion",
-            loraPath = parsed?.loraPath ?: "C:\\webui_forge_cu124_torch24\\webui\\models\\Lora",
+            serverBasePath = parsed?.serverBasePath ?: "",
+            galleryPath = parsed?.galleryPath ?: "",
             language = parsed?.language ?: "en",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
@@ -526,6 +859,8 @@ object ForgeRepository {
             overnightMode = parsed?.overnightMode ?: false,
             showGridAfterGeneration = parsed?.showGridAfterGeneration ?: true,
             showActiveTagsUI = parsed?.showActiveTagsUI ?: true,
+            updateChannel = parsed?.updateChannel ?: "Stable",
+            betaToken = parsed?.betaToken ?: "",
             defaultState = parsed?.defaultState ?: AppState(),
             presets = parsed?.presets ?: emptyList(),
         )
@@ -538,10 +873,14 @@ object ForgeRepository {
         }
 
         val oldPersistent = _config.value.enablePersistentService
+        val oldUrl = _config.value.apiUrl
         val updatedConfig = newConfig.copy(apiUrl = cleanUrl)
 
         _config.value = updatedConfig
-        prefs.edit { putString("config", gson.toJson(updatedConfig)) }
+
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it[CONFIG_KEY] = gson.toJson(updatedConfig) }
+        }
 
         client = client.newBuilder()
             .connectTimeout(updatedConfig.connectionTimeout.toLong(), TimeUnit.SECONDS)
@@ -549,6 +888,10 @@ object ForgeRepository {
 
         if (updatedConfig.enablePersistentService != oldPersistent) {
             manageServiceState(updatedConfig.enablePersistentService)
+        }
+
+        if (cleanUrl != oldUrl) {
+            fetchApiData() // Natychmiastowe sprawdzanie modeli po zmianie API URL
         }
     }
 
@@ -561,7 +904,9 @@ object ForgeRepository {
 
     fun resetToDefaults() {
         _appState.value = _config.value.defaultState.copy()
-        prefs.edit { putString("last_state", gson.toJson(_appState.value)) }
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
+        }
         Toast.makeText(application, "Reset to Defaults", Toast.LENGTH_SHORT).show()
     }
 
@@ -576,7 +921,9 @@ object ForgeRepository {
         val preset = _config.value.presets.find { it.name == name }
         if (preset != null) {
             _appState.value = preset.state.copy()
-            prefs.edit { putString("last_state", gson.toJson(_appState.value)) }
+            repositoryScope.launch(Dispatchers.IO) {
+                application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
+            }
             Toast.makeText(application, "Loaded: $name", Toast.LENGTH_SHORT).show()
         }
     }
@@ -587,6 +934,54 @@ object ForgeRepository {
         saveConfig(_config.value.copy(presets = currentPresets))
     }
 
+    fun fetchAutoConfig() {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                val url = _config.value.apiUrl.trimEnd('/')
+                if (url.isEmpty()) return@launch
+
+                val reqGlobal = Request.Builder().url("$url/infinite_image_browsing/global_setting").build()
+                client.newCall(reqGlobal).awaitResponse().use { res ->
+                    if (res.isSuccessful) {
+                        val body = res.body?.string() ?: return@use
+                        val json = JSONObject(body)
+                        val sdCwd = json.optString("sd_cwd", "")
+                        val globalSetting = json.optJSONObject("global_setting")
+                        val outdirTxt2Img = globalSetting?.optString("outdir_txt2img_samples", "") ?: ""
+
+                        if (sdCwd.isNotEmpty()) {
+                            val separator = if (sdCwd.contains("\\")) "\\" else "/"
+                            val cleanOutdir = outdirTxt2Img.trimStart('/', '\\')
+                            val galleryPath = if (cleanOutdir.isNotEmpty()) "$sdCwd$separator$cleanOutdir" else sdCwd
+
+                            val newConfig = _config.value.copy(
+                                serverBasePath = sdCwd,
+                                galleryPath = galleryPath
+                            )
+                            saveConfig(newConfig)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(application, "Auto-config applied successfully", Toast.LENGTH_SHORT).show()
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(application, "Failed to read path from server", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(application, "Server returned HTTP ${res.code}", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to auto configure", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(application, "Network error during auto-config", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     /* ============================================================================
      * PREVIEW AND NETWORK UTILS
      * ============================================================================ */
@@ -595,20 +990,17 @@ object ForgeRepository {
         if (originalPath.isEmpty()) return ""
         val urlStr = _config.value.apiUrl.trimEnd('/')
 
-        val fullPath = if (!originalPath.contains("\\") && !originalPath.contains("/")) {
-            val dir = if (isLora) _config.value.loraPath else _config.value.checkpointPath
-            val separator = if (dir.contains("\\")) "\\" else "/"
-            if (dir.isNotEmpty()) "$dir$separator$originalPath" else originalPath
-        } else originalPath
+        val sdCwd = _config.value.serverBasePath
+        val fullPath = if (sdCwd.isNotEmpty() && !originalPath.contains("\\") && !originalPath.contains("/")) {
+            val separator = if (sdCwd.contains("\\")) "\\" else "/"
+            val subDir = if (isLora) "models${separator}Lora" else "models${separator}Stable-diffusion"
+            "$sdCwd$separator$subDir$separator$originalPath"
+        } else {
+            originalPath
+        }
 
         val basePath = fullPath.substringBeforeLast(".safetensors").substringBeforeLast(".ckpt").substringBeforeLast(".pt")
         return "$urlStr/file=$basePath.preview.png"
-    }
-
-    fun updateGalleryGridColumns(cols: Int) {
-        val newConfig = _config.value.copy(galleryGridColumns = cols)
-        _config.value = newConfig
-        prefs.edit { putString("config", gson.toJson(newConfig)) }
     }
 
     fun addServerProfile(name: String, url: String) {
@@ -624,24 +1016,26 @@ object ForgeRepository {
         saveConfig(_config.value.copy(serverProfiles = currentProfiles))
     }
 
-    private fun loadState(): AppState {
-        val json = prefs.getString("last_state", null)
+    private fun loadState(prefs: Preferences): AppState {
+        val json = prefs[STATE_KEY]
         val parsed = if (json != null) {
             try { gson.fromJson(json, AppState::class.java) } catch(_: Exception) { null }
         } else null
 
         if (parsed != null) return parsed
-        return loadConfig().defaultState.copy()
+        return _config.value.defaultState.copy()
     }
 
     fun updateState(update: (AppState) -> AppState) {
         val newState = update(_appState.value)
         _appState.value = newState
-        prefs.edit { putString("last_state", gson.toJson(newState)) }
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it[STATE_KEY] = gson.toJson(newState) }
+        }
     }
 
-    private fun loadPromptHistory(): List<PromptHistoryItem> {
-        val json = prefs.getString("prompt_history", null)
+    private fun loadPromptHistory(prefs: Preferences): List<PromptHistoryItem> {
+        val json = prefs[HISTORY_KEY]
         if (json.isNullOrEmpty()) return emptyList()
         return try {
             val type = object : TypeToken<List<PromptHistoryItem>>() {}.type
@@ -664,12 +1058,17 @@ object ForgeRepository {
 
         val trimmedList = currentList.take(20)
         _promptHistory.value = trimmedList
-        prefs.edit { putString("prompt_history", gson.toJson(trimmedList)) }
+
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it[HISTORY_KEY] = gson.toJson(trimmedList) }
+        }
     }
 
     fun clearPromptHistory() {
         _promptHistory.value = emptyList()
-        prefs.edit { remove("prompt_history") }
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it.remove(HISTORY_KEY) }
+        }
     }
 
     fun resumeQueue() {
@@ -966,7 +1365,7 @@ object ForgeRepository {
                                     .setAutoCancel(true)
 
                                 val lastImage = currentList.lastOrNull()
-                                if (lastImage != null) {
+                                if (lastImage != null && _config.value.notifImagePreview) {
                                     try {
                                         val bitmap = BitmapFactory.decodeFile(lastImage)
                                         if (bitmap != null) {
@@ -984,7 +1383,6 @@ object ForgeRepository {
                                     }
                                 }
 
-                                // UNIQUE NOTIFICATION ID TO PREVENT OVERWRITING
                                 val uniqueNotifId = System.currentTimeMillis().toInt()
                                 notifManager.notify(uniqueNotifId, builder.build())
                             } catch (e: Exception) {
@@ -1190,7 +1588,9 @@ object ForgeRepository {
     fun toggleGalleryMetadata() {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
-        prefs.edit { putBoolean("show_gallery_meta", newVal) }
+        repositoryScope.launch(Dispatchers.IO) {
+            application.dataStore.edit { it[SHOW_META_KEY] = newVal }
+        }
     }
 
     fun loadMetadataForImage(item: GalleryItem?) {
@@ -1217,7 +1617,7 @@ object ForgeRepository {
                 val bytes = imgBytes
                 if (bytes != null) {
                     val infoStr = extractPngParameters(bytes)
-                    _currentImageMetadata.value = infoStr.ifBlank { "No generation data found." }
+                    _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found."
                 } else {
                     _currentImageMetadata.value = "Failed to load image."
                 }
@@ -1240,7 +1640,7 @@ object ForgeRepository {
                 val bytes = file.readBytes()
                 val infoStr = extractPngParameters(bytes)
 
-                _currentImageMetadata.value = infoStr.ifBlank { "No generation data found." }
+                _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found."
             } catch (e: Exception) {
                 _currentImageMetadata.value = "Failed: ${e.message}"
             }
@@ -1593,6 +1993,24 @@ object ForgeRepository {
         repositoryScope.launch(Dispatchers.IO) {
             val url = _config.value.apiUrl.trimEnd('/')
             if (url.isEmpty()) return@launch
+
+            // Pobranie sd_cwd w tle
+            launch {
+                try {
+                    val reqGlobal = Request.Builder().url("$url/infinite_image_browsing/global_setting").build()
+                    client.newCall(reqGlobal).awaitResponse().use { res ->
+                        if (res.isSuccessful) {
+                            val bodyStr = res.body?.string() ?: "{}"
+                            val sdCwd = JSONObject(bodyStr).optString("sd_cwd", "")
+                            if (sdCwd.isNotEmpty() && _config.value.serverBasePath != sdCwd) {
+                                _config.update { it.copy(serverBasePath = sdCwd) }
+                                saveConfig(_config.value)
+                            }
+                        }
+                    }
+                } catch(e: Exception) { /* ignore silently */ }
+            }
+
             try {
                 val listType = object : TypeToken<List<NameResponse>>() {}.type
 
@@ -1602,9 +2020,9 @@ object ForgeRepository {
                         if (res.isSuccessful) {
                             val list = gson.fromJson<List<NameResponse>>(res.body?.string() ?: "[]", listType).map { it.name }
                             when(endpoint) {
-                                "samplers" -> samplers.value = list
-                                "schedulers" -> schedulers.value = list
-                                "upscalers" -> upscalers.value = list
+                                "samplers" -> _samplers.value = list
+                                "schedulers" -> _schedulers.value = list
+                                "upscalers" -> _upscalers.value = list
                             }
                         }
                     }
@@ -1615,7 +2033,7 @@ object ForgeRepository {
                     if (res.isSuccessful) {
                         val type = object : TypeToken<List<SdModelItem>>() {}.type
                         val sdModels = gson.fromJson<List<SdModelItem>>(res.body?.string() ?: "[]", type)
-                        models.value = sdModels.map {
+                        _models.value = sdModels.map {
                             ApiResource(title = it.title, path = it.filename ?: "", name = it.modelName, hash = null)
                         }
                     }
@@ -1670,7 +2088,7 @@ object ForgeRepository {
                                 }
                             }
                         }
-                        availableLoras.value = parsedLoras
+                        _availableLoras.value = parsedLoras
                     }
                 }
 
@@ -1693,6 +2111,23 @@ object ForgeRepository {
 
         repositoryScope.launch(Dispatchers.IO) {
             try {
+                if (path == "virtual://favorites") {
+                    val favorites = db.favoriteImageDao().getAllFavorites()
+                    val items = favorites.map {
+                        GalleryItem(
+                            name = it.name,
+                            fullpath = it.fullpath,
+                            type = "file",
+                            date = it.date,
+                            createdTime = null,
+                            size = null
+                        )
+                    }
+                    _galleryFiles.value = items
+                    _currentGalleryPath.value = path
+                    return@launch
+                }
+
                 val baseUrlStr = _config.value.apiUrl.trimEnd('/')
                 val builder = baseUrlStr.toHttpUrlOrNull()?.newBuilder()
                     ?.addPathSegments("infinite_image_browsing/files")
@@ -1708,7 +2143,17 @@ object ForgeRepository {
                     val responseBody = response.body?.string() ?: ""
                     when {
                         response.isSuccessful -> {
-                            _galleryFiles.value = parseGalleryItems(responseBody).sortedWith(compareBy({ !it.isDir }, { it.name }))
+                            val allItems = parseGalleryItems(responseBody).sortedWith(compareBy({ !it.isDir }, { it.name })).toMutableList()
+
+                            if (path == "Root" || path == _config.value.galleryPath) {
+                                allItems.add(0, GalleryItem(
+                                    name = "⭐ Favorites",
+                                    fullpath = "virtual://favorites",
+                                    type = "dir"
+                                ))
+                            }
+
+                            _galleryFiles.value = allItems
                             _currentGalleryPath.value = path
                         }
                         response.code == 400 && path.isNotEmpty() && path != "Root" -> {

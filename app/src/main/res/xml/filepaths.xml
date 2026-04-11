@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- TO JEST KLUCZOWE: Zezwala instalatorowi na dostęp do pobranego pliku APK w getExternalFilesDir() -->
+    <external-files-path name="external_files" path="." />
+
+    <!-- Dla pewności dodajemy ścieżkę konkretnie do folderu Download -->
+    <external-files-path name="download_files" path="Download/" />
+
+    <!-- Inne standardowe ścieżki przydatne np. przy udostępnianiu obrazków z cache -->
+    <cache-path name="cache_files" path="." />
+    <external-cache-path name="external_cache_files" path="." />
+    <external-path name="external_storage_root" path="." />
+</paths>

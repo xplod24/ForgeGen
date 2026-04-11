@@ -29,14 +29,15 @@ data class GenerationPreset(
 
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
-    var galleryPath: String = "C:\\webui_forge_cu124_torch24\\webui\\outputs\\txt2img-images",
-    var checkpointPath: String = "C:\\webui_forge_cu124_torch24\\webui\\models\\Stable-diffusion",
-    var loraPath: String = "C:\\webui_forge_cu124_torch24\\webui\\models\\Lora",
+    var serverBasePath: String = "", // Pobierane z API (sd_cwd)
+    var galleryPath: String = "", // Ustawiane przez AUTO config
     var language: String = "en",
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
     var checkpointTimeout: Int = 45,
     var receiveGenerationNotification: Boolean = true,
+    var notifImagePreview: Boolean = true, // Nowe: przeniesione z DataStore (luzem)
+    var notifQueueStatus: Boolean = false, // Nowe: przeniesione z DataStore (luzem)
     var notificationPriority: String = "Normal", // "High", "Normal", "Low"
     var notificationVerbosity: String = "Full",
     var keepScreenOn: Boolean = false,
@@ -50,6 +51,8 @@ data class AppConfig(
     var overnightMode: Boolean = false,
     var showGridAfterGeneration: Boolean = true,
     var showActiveTagsUI: Boolean = true,
+    var updateChannel: String = "Stable", // "Stable" lub "Beta"
+    var betaToken: String = "", // Tajny token dostępu do aktualizacji Beta
     var defaultState: AppState = AppState(),
     var presets: List<GenerationPreset> = emptyList()
 )
@@ -117,6 +120,17 @@ data class ServerStatRecord(
  * Structures mapped directly to the Forge/Automatic1111 API JSON endpoints.
  * ============================================================================ */
 
+data class UpdateManifest(
+    val versionCode: Int,
+    val versionName: String,
+    val url: String,
+    val channel: String,
+    val sha256: String,
+    val releaseDate: String? = null,
+    val isCritical: Boolean = false,
+    val changelog: Map<String, List<String>>? = null
+)
+
 data class ApiResource(
     val title: String,
     val path: String,
@@ -180,19 +194,8 @@ data class SdModelItem(
     @SerializedName("model_name") val modelName: String
 )
 
-data class LoraMetadata(
-    @SerializedName("ss_new_sd_model_hash") val ssNewSdModelHash: String?,
-    @SerializedName("sshs_model_hash") val sshsModelHash: String?
-)
-
-data class LoraItem(
-    val name: String,
-    val path: String?,
-    val metadata: LoraMetadata? = null
-)
-
 /* ============================================================================
- * ROOM DATABASE COMPONENTS (LoRA Tag Cache)
+ * ROOM DATABASE COMPONENTS (LoRA Tag Cache & Favorites)
  * Local cache to prevent API rate limits and drastically improve UI speed.
  * ============================================================================ */
 
@@ -219,10 +222,34 @@ interface LoraTagDao {
     suspend fun clearAll()
 }
 
-// BUMP WERSJI DO 3, by wymusić usunięcie złych powiązań tagów
-@Database(entities = [LoraTagEntity::class], version = 3, exportSchema = false)
+@Entity(tableName = "favorite_images")
+data class FavoriteImageEntity(
+    @PrimaryKey val fullpath: String,
+    val name: String,
+    val date: String?,
+    val savedAt: Long // Znacznik czasu dodania do ulubionych (do sortowania)
+)
+
+@Dao
+interface FavoriteImageDao {
+    @Query("SELECT * FROM favorite_images ORDER BY savedAt DESC")
+    suspend fun getAllFavorites(): List<FavoriteImageEntity>
+
+    @Query("SELECT EXISTS(SELECT 1 FROM favorite_images WHERE fullpath = :path)")
+    suspend fun isFavorite(path: String): Boolean
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFavorite(entity: FavoriteImageEntity)
+
+    @Query("DELETE FROM favorite_images WHERE fullpath = :path")
+    suspend fun deleteFavorite(path: String)
+}
+
+// BUMP WERSJI DO 5, by wygenerować tabele na nowo (używamy destructive migration)
+@Database(entities = [LoraTagEntity::class, FavoriteImageEntity::class], version = 5, exportSchema = false)
 abstract class ForgeDatabase : RoomDatabase() {
     abstract fun loraTagDao(): LoraTagDao
+    abstract fun favoriteImageDao(): FavoriteImageDao
 }
 
 /* ============================================================================

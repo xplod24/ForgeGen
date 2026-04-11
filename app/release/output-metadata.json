@@ -11,8 +11,8 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 2,
-      "versionName": "1.0.2-release-candidate",
+      "versionCode": 22,
+      "versionName": "1.2026.00001-0022",
       "outputFile": "app-release.apk"
     }
   ],
@@ -33,5 +33,5 @@
       ]
     }
   ],
-  "minSdkVersionForDexing": 24
+  "minSdkVersionForDexing": 31
 }

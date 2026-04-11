@@ -1,5 +1,3 @@
-@file:Suppress("UNUSED_VALUE", "ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-
 package com.example.forgegen
 
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -151,8 +149,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     vram = vram,
                     onStatsClick = { showStatsDialog = true },
                     onGalleryClick = onGalleryClick,
-                    onSettingsClick = onSettingsClick,
-                    onRefreshServer = { viewModel.fetchApiData() }
+                    onSettingsClick = onSettingsClick
                 )
             }
         ) { padding ->

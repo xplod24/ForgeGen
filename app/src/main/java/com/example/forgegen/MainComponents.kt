@@ -1,5 +1,3 @@
-@file:Suppress("UNUSED_VALUE", "ASSIGNED_BUT_NEVER_ACCESSED_VARIABLE")
-
 package com.example.forgegen
 
 import android.content.ClipData
@@ -71,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
+import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
@@ -80,7 +79,6 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
-import java.util.regex.Pattern
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -115,24 +113,19 @@ fun countTokens(text: String): Int {
 
 fun getTagStrength(tag: String): String {
     val trimmed = tag.trim()
-    val pattern = Pattern.compile("^\\((.*):([0-9.]+)\\)$")
-    val matcher = pattern.matcher(trimmed)
-    if (matcher.find() && matcher.groupCount() >= 2) {
-        return matcher.group(2) ?: "1.0"
-    }
-    return "1.0"
+    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
+    return match?.groupValues?.getOrNull(2) ?: "1.0"
 }
 
 fun adjustTagStrength(tag: String, delta: Float): String {
     val trimmed = tag.trim()
-    val pattern = Pattern.compile("^\\((.*):([0-9.]+)\\)$")
-    val matcher = pattern.matcher(trimmed)
+    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
 
-    if (matcher.find() && matcher.groupCount() >= 2) {
-        val base = matcher.group(1)
-        val currentStrength = matcher.group(2)?.toFloatOrNull() ?: 1.0f
+    if (match != null && match.groupValues.size >= 3) {
+        val base = match.groupValues[1]
+        val currentStrength = match.groupValues[2].toFloatOrNull() ?: 1.0f
         val newStrength = (currentStrength + delta).coerceIn(0.1f, 3.0f)
-        if (abs(newStrength - 1.0f) < 0.05f) return base ?: ""
+        if (abs(newStrength - 1.0f) < 0.05f) return base
         return "($base:${String.format(Locale.US, "%.1f", newStrength)})"
     } else {
         val newStrength = (1.0f + delta).coerceIn(0.1f, 3.0f)
@@ -379,8 +372,7 @@ fun ForgeTopAppBar(
     vram: String?,
     onStatsClick: () -> Unit,
     onGalleryClick: () -> Unit,
-    onSettingsClick: () -> Unit,
-    @Suppress("UNUSED_PARAMETER") onRefreshServer: () -> Unit // Zostawione dla zachowania kompatybilności wstecznej
+    onSettingsClick: () -> Unit
 ) {
     TopAppBar(
         title = {
@@ -458,7 +450,7 @@ fun ServerStatsDialog(
                                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
                                 .clickable {
                                     timeRangeMinutes = mins
-                                    prefs.edit().putInt("stats_time_range", mins).apply()
+                                    prefs.edit { putInt("stats_time_range", mins) }
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -1761,8 +1753,19 @@ fun FullscreenImageViewer(
                 val currentMetadata by viewModel.currentImageMetadata.collectAsStateWithLifecycle()
 
                 if (showMetadata) {
+                    val fileInfo = remember(currentFile) {
+                        val file = File(currentFile)
+                        if (file.exists()) {
+                            val sizeKb = file.length() / 1024
+                            "${file.name} • $sizeKb KB"
+                        } else {
+                            file.name
+                        }
+                    }
+
                     MetadataAlertDialog(
                         metadata = currentMetadata,
+                        fileInfo = fileInfo,
                         onDismiss = { viewModel.toggleGalleryMetadata() },
                         onApplyAll = null,
                         onApplyPrompt = { pos, neg ->
@@ -1790,6 +1793,112 @@ fun FullscreenImageViewer(
                             Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
                         }
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MetadataAlertDialog(
+    metadata: String?,
+    fileInfo: String? = null,
+    onDismiss: () -> Unit,
+    onApplyPrompt: (String, String) -> Unit,
+    onApplyModel: (String) -> Unit,
+    onApplyLoras: (List<String>) -> Unit,
+    onApplyAll: (() -> Unit)? = null
+) {
+    var posPrompt = ""
+    var negPrompt = ""
+    var modelName = ""
+    val loras = mutableListOf<String>()
+
+    if (metadata != null && !metadata.startsWith("Loading") && !metadata.startsWith("Failed") && !metadata.startsWith("Invalid") && !metadata.startsWith("Server")) {
+        val lines = metadata.split("\n")
+        var currentMode = 0
+        for (line in lines) {
+            if (line.startsWith("Negative prompt:")) {
+                currentMode = 1
+                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
+            } else if (line.startsWith("Steps:")) {
+                currentMode = 2
+                val params = line.split(",")
+                params.forEach { p ->
+                    val kv = p.split(":")
+                    if (kv.size >= 2 && kv[0].trim() == "Model") {
+                        modelName = kv[1].trim()
+                    }
+                }
+            } else {
+                if (currentMode == 0) posPrompt += line + "\n"
+                else if (currentMode == 1) negPrompt += line + "\n"
+            }
+        }
+        posPrompt = posPrompt.trim()
+        negPrompt = negPrompt.trim()
+
+        Regex("<lora:([^:]+):([0-9.]+)>").findAll(posPrompt).forEach { match ->
+            loras.add(match.value)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Generation Data", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = if (fileInfo != null) 4.dp else 8.dp))
+
+                if (fileInfo != null) {
+                    Text(fileInfo, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
+                }
+
+                Box(modifier = Modifier.weight(1f, fill = false).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
+                    Text(
+                        text = metadata ?: "Loading...",
+                        fontSize = 11.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    )
+                }
+
+                if (metadata != null && posPrompt.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (onApplyAll != null) {
+                            Button(onClick = onApplyAll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Apply All", fontSize = 12.sp)
+                            }
+                        }
+
+                        OutlinedButton(onClick = { onApplyPrompt(posPrompt, negPrompt) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                            Text("Prompt", fontSize = 12.sp)
+                        }
+
+                        if (modelName.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyModel(modelName) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Model", fontSize = 12.sp)
+                            }
+                        }
+
+                        if (loras.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyLoras(loras) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Close")
                 }
             }
         }

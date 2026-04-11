@@ -76,6 +76,15 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val currentImageMetadata: StateFlow<String?> = ForgeRepository.currentImageMetadata
     val galleryMode: StateFlow<GalleryMode> = ForgeRepository.galleryMode
 
+    // DELEGACJA STANU ULUBIONYCH
+    val isCurrentFavorite: StateFlow<Boolean> = ForgeRepository.isCurrentFavorite
+    val favoritePaths: StateFlow<Set<String>> = ForgeRepository.favoritePaths
+
+    // DELEGACJA STANU UPDATERA
+    val updateManifest: StateFlow<UpdateManifest?> = ForgeRepository.updateManifest
+    val isUpdateDownloading: StateFlow<Boolean> = ForgeRepository.isUpdateDownloading
+    val updateDownloadProgress: StateFlow<Float> = ForgeRepository.updateDownloadProgress
+
     // --- DELEGACJA AKCJI (FUNCTIONS) ---
     suspend fun getTagsForLora(hash: String) = ForgeRepository.getTagsForLora(hash)
 
@@ -89,8 +98,9 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     fun loadPreset(name: String) = ForgeRepository.loadPreset(name)
     fun deletePreset(name: String) = ForgeRepository.deletePreset(name)
 
+    fun fetchAutoConfig() = ForgeRepository.fetchAutoConfig()
+
     fun getPreviewUrl(originalPath: String, isLora: Boolean = false) = ForgeRepository.getPreviewUrl(originalPath, isLora)
-    fun updateGalleryGridColumns(cols: Int) = ForgeRepository.updateGalleryGridColumns(cols)
     fun addServerProfile(name: String, url: String) = ForgeRepository.addServerProfile(name, url)
     fun removeServerProfile(name: String) = ForgeRepository.removeServerProfile(name)
 
@@ -132,4 +142,12 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissGridPreview(index: Int? = null) = ForgeRepository.dismissGridPreview(index)
     fun sessionPrev() = ForgeRepository.sessionPrev()
     fun sessionNext() = ForgeRepository.sessionNext()
+
+    // DELEGACJA AKCJI ULUBIONYCH
+    fun checkIfFavorite(path: String) = ForgeRepository.checkIfFavorite(path)
+    fun toggleFavorite(item: GalleryItem) = ForgeRepository.toggleFavorite(item)
+
+    // DELEGACJA AKCJI UPDATERA
+    fun checkForUpdates(manual: Boolean = false) = ForgeRepository.checkForUpdates(manual)
+    fun downloadAndInstallUpdate() = ForgeRepository.downloadAndInstallUpdate()
 }

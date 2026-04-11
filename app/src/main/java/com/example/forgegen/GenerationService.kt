@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.example.forgegen
 
 import android.annotation.SuppressLint
@@ -17,7 +19,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.graphics.toColorInt
 import kotlinx.coroutines.*
-import org.json.JSONObject
 import java.util.Locale
 
 /* ============================================================================
@@ -73,7 +74,7 @@ class GenerationService : Service() {
             return START_NOT_STICKY
         }
 
-        // Natychmiastowa aktualizacja stanu na podstawie przesłanej akcji (np. z ustawień)
+        // Natychmiastowa aktualizacja stanu na podstawie przesłanej akcji
         updateNotificationAndServiceState(action)
 
         return START_STICKY
@@ -88,28 +89,30 @@ class GenerationService : Service() {
         val currentEta = ForgeRepository.currentEta.value
         val oomAlert = ForgeRepository.oomAlert.value
 
+        // ZMIANA: Pobieramy dane błyskawicznie wprost z pamięci repozytorium
+        // Zamiast blokującego parsowania JSON z SharedPreferences!
+        val config = ForgeRepository.config.value
+        val state = ForgeRepository.appState.value
+
+        val verbosity = config.notificationVerbosity
+        val enablePersistentService = config.enablePersistentService
+
+        // Te wartości tymczasowo odczytujemy ze starych prefs (usunęliśmy JSONa) dopóki nie przeniesiemy ich do AppConfig
         val prefs = getSharedPreferences("ForgeGenPrefs", MODE_PRIVATE)
-        val configJson = prefs.getString("config", "{}") ?: "{}"
-        val stateJson = prefs.getString("last_state", "{}") ?: "{}"
+        val showQueueStatus = prefs.getBoolean("notifQueueStatus", false)
 
-        val verbosity = try { JSONObject(configJson).optString("notificationVerbosity", "Full") } catch(_: Exception) { "Full" }
-        val priority = try { JSONObject(configJson).optString("notificationPriority", "Normal") } catch(_: Exception) { "Normal" }
-        val showQueueStatus = try { JSONObject(configJson).optBoolean("notifQueueStatus", true) } catch(_: Exception) { true }
-        val enablePersistentService = try { JSONObject(configJson).optBoolean("enablePersistentService", false) } catch(_: Exception) { false }
-
-        val steps = try { JSONObject(stateJson).optInt("steps", 20) } catch(_: Exception) { 20 }
-        val batchCount = try { JSONObject(stateJson).optInt("batchCount", 1) } catch(_: Exception) { 1 }
-        val batchSize = try { JSONObject(stateJson).optInt("batchSize", 1) } catch(_: Exception) { 1 }
+        val steps = state.steps
+        val batchCount = state.batchCount
+        val batchSize = state.batchSize
 
         val isActivelyGenerating = isGenerating || isServerBusy || queuedCount > 0
 
         // BUG #3 FIX: Overnight Batch Mode & OOM Protection
-        // WakeLock aktywowany JEDYNIE dla ciężkich zadań, chroniony przed brakiem uprawnień (SecurityException)
         val isHeavyTask = (batchCount >= 50 || batchSize >= 8)
         if (isActivelyGenerating && isHeavyTask) {
             try {
                 if (partialWakeLock?.isHeld == false) {
-                    partialWakeLock?.acquire(12 * 60 * 60 * 1000L) // Ograniczenie awaryjne: 12 godzin
+                    partialWakeLock?.acquire(12 * 60 * 60 * 1000L)
                 }
             } catch (e: SecurityException) {
                 Log.e("GenerationService", "Missing WAKE_LOCK permission in Manifest", e)
@@ -131,33 +134,30 @@ class GenerationService : Service() {
         }
         wasGenerating = isActivelyGenerating
 
-        // Czy usługa powinna nadal zachowywać najwyższy priorytet (Foreground)?
         val shouldBeForeground = isActivelyGenerating || enablePersistentService
 
         val notification = buildNotification(
             isGenerating, progress, status, isServerBusy, queuedCount,
-            currentEta, oomAlert, verbosity, priority, steps, showQueueStatus,
-            isOngoing = shouldBeForeground // BUG #5 FIX: Dynamiczne sterowanie flagą Ongoing
+            currentEta, oomAlert, verbosity, steps, showQueueStatus,
+            isOngoing = shouldBeForeground
         )
 
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
-        // BUG #5 FIX: Logika przełączania usługi na "usuwalną" w locie
+        // BUG #5 FIX: Logika przełączania usługi
         if (shouldBeForeground) {
+            // Kod zoptymalizowany pod minimum SDK 31 (odrzucenie starych instrukcji)
             startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            // Zdejmujemy flagę Foreground (usuwa "klej"), ale aktualizujemy powiadomienie jako zwykłe (dismissible)
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             manager.notify(notificationId, notification)
 
-            // Jeżeli akcja pochodzi z odznaczenia opcji w UI lub zakończenia kolejki, ubij usługę dla oszczędności baterii
             if (intentAction == "ACTION_UPDATE_PERSISTENCE" || intentAction == "ACTION_QUEUE_FINISHED") {
                 stopSelf()
             }
         }
     }
 
-    @Suppress("DEPRECATION")
     @SuppressLint("FullScreenIntentPolicy")
     private fun buildNotification(
         isGenerating: Boolean,
@@ -168,18 +168,15 @@ class GenerationService : Service() {
         currentEta: Double,
         oomAlert: Boolean,
         verbosity: String,
-        priority: String,
         steps: Int,
         showQueueStatus: Boolean,
         isOngoing: Boolean
     ): Notification {
         val isActivelyGenerating = isGenerating || isServerBusy
 
-        val activeChannelId = if (oomAlert) "forge_high" else when (priority) {
-            "High" -> "forge_high"
-            "Low" -> "forge_low"
-            else -> "forge_default"
-        }
+        // BUG #6 FIX: Powiadomienie statusowe ZAWSZE używa cichego kanału (oprócz alertu krytycznego OOM).
+        // Głośne notyfikacje o ukończeniu (Priority High/Normal) pochodzą teraz z oddzielnego ID w ForgeRepository.
+        val activeChannelId = if (oomAlert) "forge_high" else "forge_low"
 
         val notifTitle = when {
             oomAlert -> "CRITICAL: Server OOM Error!"
@@ -237,8 +234,8 @@ class GenerationService : Service() {
             .setContentText(notifText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notifText))
             .setOngoing(isOngoing)
-            .setOnlyAlertOnce(!oomAlert && isActivelyGenerating) // Zapobiega ciągłemu dźwiękowi podczas aktualizacji progressu
-            .setSilent(isActivelyGenerating && !oomAlert)
+            .setOnlyAlertOnce(true) // BUG #6 FIX: Uniemożliwia wielokrotne "pikanie" podczas aktualizacji stanu
+            .setSilent(true)        // Wymusza całkowitą ciszę dla paska postępu
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPendingIntent)
             .setDeleteIntent(exitPendingIntent)
@@ -292,9 +289,9 @@ class GenerationService : Service() {
         val defaultChannel = NotificationChannel("forge_default", "Standard Alerts", NotificationManager.IMPORTANCE_DEFAULT)
         val lowChannel = NotificationChannel("forge_low", "Silent Alerts", NotificationManager.IMPORTANCE_LOW)
 
-        manager?.createNotificationChannel(highChannel)
-        manager?.createNotificationChannel(defaultChannel)
-        manager?.createNotificationChannel(lowChannel)
+        manager.createNotificationChannel(highChannel)
+        manager.createNotificationChannel(defaultChannel)
+        manager.createNotificationChannel(lowChannel)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
