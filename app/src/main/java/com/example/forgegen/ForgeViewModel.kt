@@ -4,8 +4,14 @@ package com.example.forgegen
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
 
 /* ============================================================================
@@ -26,6 +32,7 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val client: OkHttpClient get() = ForgeRepository.client
     val appState: StateFlow<AppState> = ForgeRepository.appState
     val promptHistory: StateFlow<List<PromptHistoryItem>> = ForgeRepository.promptHistory
+    val promptStyles: StateFlow<List<PromptStyleEntity>> = ForgeRepository.promptStyles
     val activeLoras: StateFlow<List<ActiveLora>> = ForgeRepository.activeLoras
 
     val isConnected: StateFlow<Boolean> = ForgeRepository.isConnected
@@ -85,8 +92,29 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val isUpdateDownloading: StateFlow<Boolean> = ForgeRepository.isUpdateDownloading
     val updateDownloadProgress: StateFlow<Float> = ForgeRepository.updateDownloadProgress
 
+    // STAN DLA IMPORTOWANEGO OBRAZU (Share Intent)
+    private val _importedImageMetadata = MutableStateFlow<String?>(null)
+    val importedImageMetadata: StateFlow<String?> = _importedImageMetadata.asStateFlow()
+
+    // NOWE: GLOBALNY SYSTEM SNACKBARÓW (Zastępuje Toasty)
+    // Używamy SharedFlow, ponieważ jest to jednorazowy Event ("Fire and forget")
+    private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 10)
+    val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
+
     // --- DELEGACJA AKCJI (FUNCTIONS) ---
+
+    // NOWE: Funkcja do pokazywania globalnego snackbara w całej aplikacji
+    fun showSnackbar(message: String) {
+        _snackbarMessage.tryEmit(message)
+    }
+
     suspend fun getTagsForLora(hash: String) = ForgeRepository.getTagsForLora(hash)
+
+    // LOGIKA STYLÓW I IMPORTU ZEWNĘTRZNEGO
+    fun savePromptStyle(name: String, positivePrompt: String, negativePrompt: String) = ForgeRepository.savePromptStyle(name, positivePrompt, negativePrompt)
+    fun deletePromptStyle(style: PromptStyleEntity) = ForgeRepository.deletePromptStyle(style)
+    fun setImportedImageMetadata(data: String?) { _importedImageMetadata.value = data }
+    suspend fun extractMetadataFromUri(uri: Uri): String? = ForgeRepository.extractMetadataFromUri(uri)
 
     fun setAppForegroundState(isForeground: Boolean) = ForgeRepository.setAppForegroundState(isForeground)
     fun setGalleryMode(mode: GalleryMode) = ForgeRepository.setGalleryMode(mode)

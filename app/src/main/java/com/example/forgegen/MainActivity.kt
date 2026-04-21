@@ -15,6 +15,7 @@ import android.hardware.biometrics.BiometricPrompt
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
@@ -31,6 +32,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -59,7 +61,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -69,9 +70,11 @@ import androidx.navigation.compose.rememberNavController
 import coil.ImageLoader
 import coil.compose.LocalImageLoader
 import coil.disk.DiskCache
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.Locale
 import kotlin.system.exitProcess
 
 // --- GLOBAL UTILITIES & SHARED COMPONENTS ---
@@ -154,131 +157,6 @@ fun currentConnectivityStatus(context: Context): State<Boolean> {
     return isConnected
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun MetadataAlertDialog(
-    metadata: String?,
-    onDismiss: () -> Unit,
-    onApplyPrompt: (String, String) -> Unit,
-    onApplyModel: (String) -> Unit,
-    onApplyLoras: (List<String>) -> Unit,
-    onApplyAll: (() -> Unit)? = null
-) {
-    var posPrompt = ""
-    var negPrompt = ""
-    var modelName = ""
-    val loras = mutableListOf<String>()
-
-    if (metadata != null && !metadata.startsWith("Loading") && !metadata.startsWith("Failed") && !metadata.startsWith("Invalid") && !metadata.startsWith("Server")) {
-        val lines = metadata.split("\n")
-        var currentMode = 0
-        for (line in lines) {
-            if (line.startsWith("Negative prompt:")) {
-                currentMode = 1
-                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
-            } else if (line.startsWith("Steps:")) {
-                currentMode = 2
-                val params = line.split(",")
-                params.forEach { p ->
-                    val kv = p.split(":")
-                    if (kv.size >= 2 && kv[0].trim() == "Model") {
-                        modelName = kv[1].trim()
-                    }
-                }
-            } else {
-                if (currentMode == 0) posPrompt += line + "\n"
-                else if (currentMode == 1) negPrompt += line + "\n"
-            }
-        }
-        posPrompt = posPrompt.trim()
-        negPrompt = negPrompt.trim()
-
-        // Idiomatyczne wyciąganie tagów LoRA za pomocą wbudowanego Kotlin Regex
-        Regex("<lora:([^:]+):([0-9.]+)>").findAll(posPrompt).forEach { match ->
-            loras.add(match.value)
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Generation Data", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
-
-                Box(modifier = Modifier.weight(1f, fill = false).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
-                    Text(
-                        text = metadata ?: "Loading...",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.verticalScroll(rememberScrollState())
-                    )
-                }
-
-                if (metadata != null && posPrompt.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (onApplyAll != null) {
-                            Button(onClick = onApplyAll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("Apply All", fontSize = 12.sp)
-                            }
-                        }
-
-                        OutlinedButton(onClick = { onApplyPrompt(posPrompt, negPrompt) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                            Text("Prompt", fontSize = 12.sp)
-                        }
-
-                        if (modelName.isNotEmpty()) {
-                            OutlinedButton(onClick = { onApplyModel(modelName) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("Model", fontSize = 12.sp)
-                            }
-                        }
-
-                        if (loras.isNotEmpty()) {
-                            OutlinedButton(onClick = { onApplyLoras(loras) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Close")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ForgeSlider(
-    title: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    decimals: Int,
-    onValueChange: (Float) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(title, modifier = Modifier.weight(1f), fontSize = 12.sp)
-        Text(String.format(java.util.Locale.US, "%.${decimals}f", value), fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            modifier = Modifier.weight(2f)
-        )
-    }
-}
-
 @Composable
 fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
     val context = LocalContext.current
@@ -313,11 +191,14 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
 
 class MainActivity : ComponentActivity() {
     val navEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val pendingIntents = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (intent.action == "ACTION_OPEN_SETTINGS") {
             navEvents.tryEmit("setup")
+        } else {
+            pendingIntents.tryEmit(intent)
         }
     }
 
@@ -331,6 +212,8 @@ class MainActivity : ComponentActivity() {
 
         if (intent?.action == "ACTION_OPEN_SETTINGS") {
             navEvents.tryEmit("setup")
+        } else if (intent != null) {
+            pendingIntents.tryEmit(intent)
         }
 
         setContent {
@@ -338,6 +221,27 @@ class MainActivity : ComponentActivity() {
             val viewModel: ForgeViewModel = viewModel()
             val config by viewModel.config.collectAsStateWithLifecycle()
             val activity = context.findActivity() ?: return@setContent
+
+            // Wychwytywanie intencji udostępniania z zewnątrz i ekstrakcja danych
+            LaunchedEffect(Unit) {
+                pendingIntents.collect { receivedIntent ->
+                    if (receivedIntent.action == Intent.ACTION_SEND && receivedIntent.type?.startsWith("image/") == true) {
+                        val uri = receivedIntent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                        if (uri != null) {
+                            launch(Dispatchers.IO) {
+                                val metadata = viewModel.extractMetadataFromUri(uri)
+                                withContext(Dispatchers.Main) {
+                                    if (metadata != null) {
+                                        viewModel.setImportedImageMetadata(metadata)
+                                    } else {
+                                        viewModel.showSnackbar("No generation data found in this image.")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             DisposableEffect(context) {
                 val receiver = object : BroadcastReceiver() {
@@ -504,9 +408,45 @@ class MainActivity : ComponentActivity() {
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
             val onSetupClick = rememberDebounced { navController.navigate("setup") }
 
+            // GLOBAL UPDATER STATES
+            val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
+            val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
+            val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+
+            val snackbarHostState = remember { SnackbarHostState() }
+            var showUpdateDialog by remember { mutableStateOf(false) }
+            var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
+
+            // GLOBALNY EVENT BUS DLA SNACKBARÓW Z EFEKTEM MARQUEE
+            LaunchedEffect(Unit) {
+                viewModel.snackbarMessage.collect { message ->
+                    snackbarHostState.currentSnackbarData?.dismiss()
+                    snackbarHostState.showSnackbar(
+                        message = message,
+                        duration = SnackbarDuration.Short
+                    )
+                }
+            }
+
+            // LOGIKA SNACKBARA AKTUALIZACYJNEGO
+            LaunchedEffect(updateManifest, isUpdateDownloading) {
+                val manifest = updateManifest
+                if (manifest != null && manifest.versionCode > dismissedUpdateVersion && !isUpdateDownloading) {
+                    val result = snackbarHostState.showSnackbar(
+                        message = "Update Available: ${manifest.versionName}",
+                        actionLabel = "OK",
+                        duration = SnackbarDuration.Indefinite
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        showUpdateDialog = true
+                    } else {
+                        dismissedUpdateVersion = manifest.versionCode
+                    }
+                }
+            }
+
             CompositionLocalProvider(LocalImageLoader provides imageLoader) {
                 MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
-                    // Całkowicie wyczyszczony Box ze śmieci po pointerInput
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
                             modifier = Modifier
@@ -572,6 +512,133 @@ class MainActivity : ComponentActivity() {
                                     Text("Recovering prompt...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                                 }
                             }
+                        }
+
+                        // SNACKBAR WYŚWIETLANY NA DOLE Z EFEKTEM MARQUEE (Nienachalny UI)
+                        SnackbarHost(
+                            hostState = snackbarHostState,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 16.dp)
+                                .zIndex(200f),
+                            snackbar = { data ->
+                                Snackbar(
+                                    modifier = Modifier.padding(12.dp),
+                                    action = {
+                                        data.visuals.actionLabel?.let { actionLabel ->
+                                            TextButton(onClick = { data.performAction() }) {
+                                                Text(actionLabel, color = MaterialTheme.colorScheme.inversePrimary)
+                                            }
+                                        }
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.inverseSurface,
+                                    contentColor = MaterialTheme.colorScheme.inverseOnSurface
+                                ) {
+                                    Text(
+                                        text = data.visuals.message,
+                                        modifier = Modifier.basicMarquee(),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        )
+
+                        // GLOBALNE OKNO AKTUALIZACJI
+                        if (showUpdateDialog && updateManifest != null && !isUpdateDownloading) {
+                            val manifest = updateManifest!!
+                            AlertDialog(
+                                onDismissRequest = {
+                                    if (!manifest.isCritical) {
+                                        dismissedUpdateVersion = manifest.versionCode
+                                        showUpdateDialog = false
+                                    }
+                                },
+                                title = { Text("Update Available", fontWeight = FontWeight.Bold) },
+                                text = {
+                                    Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                                        Text("Version ${manifest.versionName} (${manifest.channel})", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                        if (!manifest.releaseDate.isNullOrEmpty()) {
+                                            Text("Released: ${manifest.releaseDate}", fontSize = 12.sp, color = Color.Gray)
+                                        }
+                                        Spacer(Modifier.height(12.dp))
+
+                                        val lang = Locale.getDefault().language
+                                        val changelogText = manifest.changelog?.get(lang) ?: manifest.changelog?.get("en") ?: emptyList()
+
+                                        if (changelogText.isNotEmpty()) {
+                                            Text("What's new:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                            Spacer(Modifier.height(4.dp))
+                                            changelogText.forEach { item ->
+                                                Row(modifier = Modifier.padding(bottom = 4.dp)) {
+                                                    Text("• ", fontSize = 14.sp)
+                                                    Text(item, fontSize = 14.sp)
+                                                }
+                                            }
+                                        } else {
+                                            Text("Do you want to download and install the new version?", fontSize = 14.sp)
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    Button(onClick = {
+                                        showUpdateDialog = false
+                                        viewModel.downloadAndInstallUpdate()
+                                    }) { Text("Update") }
+                                },
+                                dismissButton = {
+                                    if (!manifest.isCritical) {
+                                        TextButton(onClick = {
+                                            dismissedUpdateVersion = manifest.versionCode
+                                            showUpdateDialog = false
+                                        }) { Text("Later") }
+                                    }
+                                }
+                            )
+                        }
+
+                        // GLOBALNE OKNO POBIERANIA
+                        if (isUpdateDownloading) {
+                            AlertDialog(
+                                onDismissRequest = { },
+                                title = { Text("Downloading Update") },
+                                text = {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                                        LinearProgressIndicator(
+                                            progress = { updateDownloadProgress },
+                                            modifier = Modifier.fillMaxWidth().padding(16.dp)
+                                        )
+                                        Text("${(updateDownloadProgress * 100).toInt()}%")
+                                    }
+                                },
+                                confirmButton = { }
+                            )
+                        }
+
+                        // GLOBALNE OKNO METADANYCH Z ZEWNĘTRZNEGO IMPORTU
+                        val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
+                        if (importedImageMetadata != null) {
+                            MetadataAlertDialog(
+                                metadata = importedImageMetadata,
+                                onDismiss = { viewModel.setImportedImageMetadata(null) },
+                                onApplyPrompt = { pos, neg ->
+                                    viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
+                                    viewModel.setImportedImageMetadata(null)
+                                    viewModel.showSnackbar("Prompts Applied")
+                                },
+                                onApplyModel = { modelName ->
+                                    viewModel.changeCheckpoint(modelName)
+                                    viewModel.setImportedImageMetadata(null)
+                                    viewModel.showSnackbar("Model Applied: $modelName")
+                                },
+                                onApplyLoras = { loras ->
+                                    loras.forEach { loraTag ->
+                                        val loraName = loraTag.substringAfter("<lora:").substringBefore(":")
+                                        if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
+                                    }
+                                    viewModel.setImportedImageMetadata(null)
+                                    viewModel.showSnackbar("LoRAs Applied")
+                                }
+                            )
                         }
                     }
                 }

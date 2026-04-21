@@ -4,6 +4,7 @@ package com.example.forgegen
 
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Delete
 import androidx.room.Entity
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -36,14 +37,16 @@ data class AppConfig(
     var connectionTimeout: Int = 10,
     var checkpointTimeout: Int = 45,
     var receiveGenerationNotification: Boolean = true,
-    var notifImagePreview: Boolean = true, // Nowe: przeniesione z DataStore (luzem)
-    var notifQueueStatus: Boolean = false, // Nowe: przeniesione z DataStore (luzem)
+    var notifImagePreview: Boolean = true,
+    var notifQueueStatus: Boolean = false,
     var notificationPriority: String = "Normal", // "High", "Normal", "Low"
-    var notificationVerbosity: String = "Full",
+    var notificationMode: String = "Simple", // "Simple" lub "Disabled"
     var keepScreenOn: Boolean = false,
     var enablePersistentService: Boolean = false,
     var swipeToBrowseGallery: Boolean = true,
     var galleryGridColumns: Int = 3,
+    var bottomSheetExpandedByDefault: Boolean = false,
+    var enableCivitaiSync: Boolean = false, // NOWE: Ręczne/Opcjonalne pobieranie z Civitai
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
     var previewMode: String = "Finished", // "None" (Loading circle), "Finished" (Last batch), "Normal" (Live)
     var useNativeSecurity: Boolean = false,
@@ -195,30 +198,37 @@ data class SdModelItem(
 )
 
 /* ============================================================================
- * ROOM DATABASE COMPONENTS (LoRA Tag Cache & Favorites)
+ * ROOM DATABASE COMPONENTS (Civitai, Favorites & Global Styles)
  * Local cache to prevent API rate limits and drastically improve UI speed.
  * ============================================================================ */
 
-@Entity(tableName = "lora_tags")
-data class LoraTagEntity(
-    @PrimaryKey val loraHash: String,
-    val loraName: String,
-    val trainedWords: String, // comma-separated string mapping List<String> natively
-    val lastUpdated: Long
+@Entity(tableName = "civitai_models")
+data class CivitaiModelEntity(
+    @PrimaryKey val sha256: String,
+    val type: String, // "checkpoint" lub "lora"
+    val name: String,
+    val trainedWords: String, // Połączone przecinkami (comma-separated string)
+    val previewImage: String? // URL do miniatury z Civitai, nullable
 )
 
 @Dao
-interface LoraTagDao {
-    @Query("SELECT * FROM lora_tags WHERE loraHash = :hash")
-    suspend fun getTagsByHash(hash: String): LoraTagEntity?
+interface CivitaiModelDao {
+    @Query("SELECT * FROM civitai_models ORDER BY name ASC")
+    suspend fun getAllModels(): List<CivitaiModelEntity>
 
-    @Query("SELECT * FROM lora_tags")
-    suspend fun getAllTags(): List<LoraTagEntity>
+    @Query("SELECT * FROM civitai_models WHERE type = :type ORDER BY name ASC")
+    suspend fun getModelsByType(type: String): List<CivitaiModelEntity>
+
+    @Query("SELECT * FROM civitai_models WHERE sha256 = :sha256")
+    suspend fun getModelByHash(sha256: String): CivitaiModelEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertTags(entity: LoraTagEntity)
+    suspend fun insertModel(model: CivitaiModelEntity)
 
-    @Query("DELETE FROM lora_tags")
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertModels(models: List<CivitaiModelEntity>)
+
+    @Query("DELETE FROM civitai_models")
     suspend fun clearAll()
 }
 
@@ -245,11 +255,36 @@ interface FavoriteImageDao {
     suspend fun deleteFavorite(path: String)
 }
 
-// BUMP WERSJI DO 5, by wygenerować tabele na nowo (używamy destructive migration)
-@Database(entities = [LoraTagEntity::class, FavoriteImageEntity::class], version = 5, exportSchema = false)
+@Entity(tableName = "prompt_styles")
+data class PromptStyleEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val name: String,
+    val positivePrompt: String,
+    val negativePrompt: String
+)
+
+@Dao
+interface PromptStyleDao {
+    @Query("SELECT * FROM prompt_styles ORDER BY name ASC")
+    suspend fun getAllStyles(): List<PromptStyleEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStyle(style: PromptStyleEntity)
+
+    @Delete
+    suspend fun deleteStyle(style: PromptStyleEntity)
+}
+
+// BUMP WERSJI DO 7, by usunąć lora_tags i wygenerować nową tabelę dla Civitai
+@Database(
+    entities = [CivitaiModelEntity::class, FavoriteImageEntity::class, PromptStyleEntity::class],
+    version = 7,
+    exportSchema = false
+)
 abstract class ForgeDatabase : RoomDatabase() {
-    abstract fun loraTagDao(): LoraTagDao
+    abstract fun civitaiModelDao(): CivitaiModelDao
     abstract fun favoriteImageDao(): FavoriteImageDao
+    abstract fun promptStyleDao(): PromptStyleDao
 }
 
 /* ============================================================================

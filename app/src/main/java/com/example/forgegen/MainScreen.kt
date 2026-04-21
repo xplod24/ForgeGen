@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,7 @@ import kotlinx.coroutines.launch
 /* ============================================================================
  * MAIN SCREEN (Orchestrator)
  * Czysty szkielet UI. Wszystkie duże komponenty pochodzą z MainComponents.kt
+ * Integruje BottomSheetScaffold dla wysuwanej szuflady z ustawieniami.
  * ============================================================================ */
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -51,11 +53,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val batchStart by viewModel.currentBatchStartIndex.collectAsStateWithLifecycle()
     val batchEnd by viewModel.currentBatchEndIndex.collectAsStateWithLifecycle()
 
-    val currentJobNo by viewModel.currentJobNo.collectAsStateWithLifecycle()
-    val currentJobCount by viewModel.currentJobCount.collectAsStateWithLifecycle()
-    val currentSamplingStep by viewModel.currentSamplingStep.collectAsStateWithLifecycle()
-    val currentSamplingSteps by viewModel.currentSamplingSteps.collectAsStateWithLifecycle()
-
     val models by viewModel.models.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
     val samplers by viewModel.samplers.collectAsStateWithLifecycle()
@@ -64,7 +61,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val activeLoras by viewModel.activeLoras.collectAsStateWithLifecycle()
     val upscalers by viewModel.upscalers.collectAsStateWithLifecycle()
 
-    val tagSuggestions by viewModel.tagSuggestions.collectAsStateWithLifecycle()
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
 
@@ -86,7 +82,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     LaunchedEffect(selectedModel, activeLoras, models, availableLoras) {
         launch(Dispatchers.IO) {
-            val currentModelResource = models.find { it.title == selectedModel }
+            val currentModelResource = models.find { it.name == selectedModel || it.title == selectedModel }
             if (currentModelResource != null) {
                 val url = viewModel.getPreviewUrl(currentModelResource.path, isLora = false)
                 if (url.isNotEmpty()) {
@@ -129,6 +125,22 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     val blurModifier = if (isRestoringPrompt) Modifier.blur(10.dp) else Modifier
 
+    // Twarde, matematyczne wyliczenie wysokości paska nawigacyjnego urządzenia
+    val density = LocalDensity.current
+    val navBarHeightDp = with(density) {
+        WindowInsets.navigationBars.getBottom(this).toDp()
+    }
+
+    // Podnosimy uchwyt szuflady (40.dp to wysokość widocznego uchwytu) ponad systemową nawigację
+    val peekHeight = 40.dp + navBarHeightDp
+
+    // Konfiguracja stanu szuflady na podstawie AppConfig
+    val sheetState = rememberStandardBottomSheetState(
+        initialValue = if (config.bottomSheetExpandedByDefault) SheetValue.Expanded else SheetValue.PartiallyExpanded,
+        skipHiddenState = true
+    )
+    val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
+
     // Główny kontener ekranu przechwytujący dotknięcia
     Box(
         modifier = Modifier
@@ -140,8 +152,11 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 })
             }
     ) {
-        Scaffold(
+        BottomSheetScaffold(
             modifier = blurModifier,
+            scaffoldState = scaffoldState,
+            sheetPeekHeight = peekHeight,
+            sheetContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             topBar = {
                 ForgeTopAppBar(
                     isConnected = isConnected,
@@ -150,6 +165,17 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     onStatsClick = { showStatsDialog = true },
                     onGalleryClick = onGalleryClick,
                     onSettingsClick = onSettingsClick
+                )
+            },
+            sheetContent = {
+                BottomControlsSection(
+                    viewModel = viewModel,
+                    state = state,
+                    generationQueueSize = generationQueue.size,
+                    isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
+                    progress = progress,
+                    currentEta = currentEta,
+                    onQueueClick = onQueueClick
                 )
             }
         ) { padding ->
@@ -181,7 +207,6 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         viewModel = viewModel,
                         state = state,
                         config = config,
-                        tagSuggestions = tagSuggestions,
                         promptHistory = promptHistory,
                         navController = navController
                     )
@@ -209,25 +234,9 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         }
                     )
 
-                    Spacer(modifier = Modifier.height(100.dp))
+                    // Margines na dole zawartości, aby ostatnie kontrolki można było swobodnie przewinąć nad szufladę
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
-
-                BottomControlsSection(
-                    viewModel = viewModel,
-                    state = state,
-                    generationQueueSize = generationQueue.size,
-                    isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
-                    progress = progress,
-                    currentEta = currentEta,
-                    currentJobNo = currentJobNo,
-                    currentJobCount = currentJobCount,
-                    currentSamplingStep = currentSamplingStep,
-                    currentSamplingSteps = currentSamplingSteps,
-                    isConnected = isConnected,
-                    isRestoringPrompt = isRestoringPrompt,
-                    onQueueClick = onQueueClick,
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
             }
         }
 
@@ -271,7 +280,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     val filteredTags = availableTagsForPopup.filter { !promptTags.contains(it) }
 
                     if (filteredTags.isEmpty()) {
-                        Text("Brak nowych tagów. Odśwież API, jeśli model został zaktualizowany.", fontSize = 14.sp)
+                        Text("Brak nowych tagów. Odśwież API, jeśli model został zaktualizowany na Civitai.", fontSize = 14.sp)
                     } else {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),

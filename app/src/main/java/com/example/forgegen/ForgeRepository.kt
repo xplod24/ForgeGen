@@ -21,7 +21,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import androidx.datastore.preferences.core.Preferences
@@ -35,10 +34,16 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -124,6 +129,14 @@ object ForgeRepository {
 
     val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    // --- EVENT BUS DLA SNACKBARÓW ---
+    private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 10)
+    val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
+
+    fun showSnackbar(message: String) {
+        _snackbarMessage.tryEmit(message)
+    }
+
     private val _config = MutableStateFlow(AppConfig())
     val config: StateFlow<AppConfig> = _config.asStateFlow()
 
@@ -135,6 +148,9 @@ object ForgeRepository {
 
     private val _promptHistory = MutableStateFlow<List<PromptHistoryItem>>(emptyList())
     val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
+
+    private val _promptStyles = MutableStateFlow<List<PromptStyleEntity>>(emptyList())
+    val promptStyles: StateFlow<List<PromptStyleEntity>> = _promptStyles.asStateFlow()
 
     @Suppress("RedundantCollectionOperation")
     val activeLoras: StateFlow<List<ActiveLora>> = _appState.map { state ->
@@ -222,8 +238,6 @@ object ForgeRepository {
     private val _currentBatchEndIndex = MutableStateFlow(-1)
     val currentBatchEndIndex: StateFlow<Int> = _currentBatchEndIndex.asStateFlow()
 
-    private var _allTags = emptyList<String>()
-
     private val _tagSuggestions = MutableStateFlow<List<String>>(emptyList())
     val tagSuggestions: StateFlow<List<String>> = _tagSuggestions.asStateFlow()
 
@@ -275,7 +289,6 @@ object ForgeRepository {
     private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
 
-    // --- IN-APP UPDATER STATES ---
     private val _updateManifest = MutableStateFlow<UpdateManifest?>(null)
     val updateManifest: StateFlow<UpdateManifest?> = _updateManifest.asStateFlow()
 
@@ -295,7 +308,6 @@ object ForgeRepository {
             .fallbackToDestructiveMigration()
             .build()
 
-        // Asynchroniczne ładowanie konfiguracji z DataStore bez blokowania UI
         repositoryScope.launch(Dispatchers.IO) {
             val prefs = application.dataStore.data.first()
             _config.value = loadConfig(prefs)
@@ -306,6 +318,7 @@ object ForgeRepository {
             client = createClient(_config.value.connectionTimeout)
 
             loadFavoritePaths()
+            loadPromptStyles()
             loadQueueState(prefs)
             loadServerStats(prefs)
             manageServiceState(_config.value.enablePersistentService)
@@ -313,7 +326,6 @@ object ForgeRepository {
             startBackgroundPing()
             startStatsMaintenance()
             fetchApiData()
-            loadTags()
             startQueueManager()
             cleanupRecoveredImages()
 
@@ -321,10 +333,6 @@ object ForgeRepository {
             isInitialized = true
         }
     }
-
-    /* ============================================================================
-     * IN-APP UPDATER (SHA-256 Validated & Token Authenticated)
-     * ============================================================================ */
 
     fun checkForUpdates(manual: Boolean = false) {
         repositoryScope.launch(Dispatchers.IO) {
@@ -347,9 +355,7 @@ object ForgeRepository {
                         Log.d(TAG, "Wstrzyknięto nagłówek Beta-Tester")
                     } else {
                         Log.w(TAG, "BRAK TOKENU BETA! Zapytanie zostanie odrzucone przez Nginx (403).")
-                        if (manual) {
-                            withContext(Dispatchers.Main) { Toast.makeText(application, "Brak tokenu Beta w ustawieniach!", Toast.LENGTH_LONG).show() }
-                        }
+                        if (manual) showSnackbar("Brak tokenu Beta w ustawieniach!")
                     }
                 }
 
@@ -366,45 +372,31 @@ object ForgeRepository {
                         val pInfo = application.packageManager.getPackageInfo(application.packageName, 0)
                         val currentVersionCode = if (Build.VERSION.SDK_INT >= 28) pInfo.longVersionCode.toInt() else pInfo.versionCode
 
-                        Log.d(TAG, "Wersja lokalna aplikacji: $currentVersionCode, Wersja z serwera: ${manifest.versionCode}")
-
                         if (!manifest.channel.equals(channel, ignoreCase = true)) {
                             Log.e(TAG, "BŁĄD SPÓJNOŚCI KANAŁU: Użytkownik jest na kanale '$channel', a JSON pobrany z serwera należy do kanału '${manifest.channel}'!")
-                            if (manual) {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(application, "Błąd serwera: Znaleziono wersję ${manifest.channel} w folderze kanału $channel. Zgłoś to administratorowi.", Toast.LENGTH_LONG).show()
-                                }
-                            }
+                            if (manual) showSnackbar("Błąd serwera: Znaleziono wersję ${manifest.channel} w folderze kanału $channel. Zgłoś to administratorowi.")
                             return@use
                         }
 
                         if (manifest.versionCode > currentVersionCode) {
                             Log.d(TAG, "Znaleziono nowszą wersję. Wyświetlam powiadomienie.")
                             _updateManifest.value = manifest
-                            if (manual) {
-                                withContext(Dispatchers.Main) {
-                                    Toast.makeText(application, "Dostępna aktualizacja: ${manifest.versionName}", Toast.LENGTH_SHORT).show()
-                                }
-                            }
+                            if (manual) showSnackbar("Dostępna aktualizacja: ${manifest.versionName}")
                         } else {
                             Log.d(TAG, "Lokalna aplikacja jest aktualna (lub nowsza od tej na serwerze).")
-                            if (manual) {
-                                withContext(Dispatchers.Main) { Toast.makeText(application, "Aplikacja jest aktualna (Lokalna: $currentVersionCode, Serwer: ${manifest.versionCode})", Toast.LENGTH_LONG).show() }
-                            }
+                            if (manual) showSnackbar("Aplikacja jest aktualna (Lokalna: $currentVersionCode, Serwer: ${manifest.versionCode})")
                         }
                     } else {
                         Log.e(TAG, "BŁĄD SIECI: Serwer odrzucił połączenie. Kod HTTP: ${response.code}")
                         if (manual) {
                             val msg = if (response.code == 403) "Odmowa dostępu (HTTP 403). Sprawdź token Beta!" else "Błąd serwera (HTTP ${response.code})"
-                            withContext(Dispatchers.Main) { Toast.makeText(application, msg, Toast.LENGTH_LONG).show() }
+                            showSnackbar(msg)
                         }
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Wyjątek podczas sprawdzania aktualizacji: ", e)
-                if (manual) {
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Błąd połączenia: ${e.message}", Toast.LENGTH_SHORT).show() }
-                }
+                if (manual) showSnackbar("Błąd połączenia: ${e.message}")
             }
         }
     }
@@ -414,7 +406,16 @@ object ForgeRepository {
         if (_isUpdateDownloading.value) return
 
         Log.d(TAG, "--- ROZPOCZĘCIE POBIERANIA APK ---")
-        Log.d(TAG, "URL docelowy APK: ${manifest.url}")
+
+        try {
+            val oldFile = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
+            if (oldFile.exists()) {
+                val deleted = oldFile.delete()
+                Log.d(TAG, "Usunięto stary plik aktualizacji z pamięci (Sukces: $deleted).")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Błąd podczas usuwania starego pliku APK przed nowym pobraniem", e)
+        }
 
         _isUpdateDownloading.value = true
         _updateDownloadProgress.value = 0f
@@ -428,43 +429,11 @@ object ForgeRepository {
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
 
             if (manifest.channel.equals("Beta", ignoreCase = true) && _config.value.betaToken.isNotEmpty()) {
-                Log.d(TAG, "Dodano nagłówek Beta-Tester do systemowego DownloadManager")
                 addRequestHeader("Beta-Tester", _config.value.betaToken)
             }
         }
 
         val downloadId = downloadManager.enqueue(request)
-
-        repositoryScope.launch(Dispatchers.IO) {
-            var downloading = true
-            while (downloading && isActive) {
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = downloadManager.query(query)
-                if (cursor.moveToFirst()) {
-                    val bytesDownloadedIndex = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                    val bytesTotalIndex = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                    val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-
-                    if (bytesDownloadedIndex != -1 && bytesTotalIndex != -1 && statusIndex != -1) {
-                        val bytesDownloaded = cursor.getInt(bytesDownloadedIndex)
-                        val bytesTotal = cursor.getInt(bytesTotalIndex)
-                        val status = cursor.getInt(statusIndex)
-
-                        if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
-                            downloading = false
-                            _updateDownloadProgress.value = 1f
-                            if (status == DownloadManager.STATUS_FAILED) {
-                                Log.e(TAG, "DownloadManager zgłosił błąd pobierania (np. 403 Forbidden).")
-                            }
-                        } else if (bytesTotal > 0) {
-                            _updateDownloadProgress.value = bytesDownloaded.toFloat() / bytesTotal.toFloat()
-                        }
-                    }
-                }
-                cursor.close()
-                delay(500)
-            }
-        }
 
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -474,17 +443,17 @@ object ForgeRepository {
                     _isUpdateDownloading.value = false
 
                     val query = DownloadManager.Query().setFilterById(downloadId)
-                    val cursor = downloadManager.query(query)
-                    if (cursor.moveToFirst()) {
-                        val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                        if (statusIndex != -1 && cursor.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL) {
-                            Log.d(TAG, "Pobieranie zakończone sukcesem. Przechodzę do walidacji SHA-256.")
-                            verifyAndInstallApk(manifest.sha256)
-                        } else {
-                            Toast.makeText(application, "Pobieranie nie powiodło się", Toast.LENGTH_SHORT).show()
+                    downloadManager.query(query).use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            if (statusIndex != -1 && cursor.getInt(statusIndex) == DownloadManager.STATUS_SUCCESSFUL) {
+                                _updateDownloadProgress.value = 1f
+                                verifyAndInstallApk(manifest.sha256)
+                            } else {
+                                showSnackbar("Pobieranie nie powiodło się")
+                            }
                         }
                     }
-                    cursor.close()
                 }
             }
         }
@@ -501,7 +470,7 @@ object ForgeRepository {
             try {
                 val file = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
                 if (!file.exists()) {
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Update file missing", Toast.LENGTH_SHORT).show() }
+                    showSnackbar("Update file missing")
                     return@launch
                 }
 
@@ -516,9 +485,6 @@ object ForgeRepository {
                 val hashBytes = digest.digest()
                 val calculatedSha256 = hashBytes.joinToString("") { "%02x".format(it) }
 
-                Log.d(TAG, "Oczekiwane SHA-256: $expectedSha256")
-                Log.d(TAG, "Obliczone SHA-256: $calculatedSha256")
-
                 if (calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
                     val installUri = FileProvider.getUriForFile(application, "${application.packageName}.fileprovider", file)
                     val installIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -530,34 +496,45 @@ object ForgeRepository {
                     }
                 } else {
                     file.delete()
-                    Log.e(TAG, "BŁĄD BEZPIECZEŃSTWA: SHA-256 pobranego pliku nie zgadza się z manifestem! Plik został usunięty.")
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(application, "Security Error: Checksum mismatch. File deleted.", Toast.LENGTH_LONG).show()
-                    }
+                    showSnackbar("Security Error: Checksum mismatch. File deleted.")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to verify/install update", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Update failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
+                showSnackbar("Update failed: ${e.message}")
             }
         }
     }
 
-    /* ============================================================================
-     * LOCAL METADATA TAGS DATABASE INTERACTION
-     * ============================================================================ */
-
     suspend fun getTagsForLora(hash: String): List<String> {
         return withContext(Dispatchers.IO) {
-            val entity = db.loraTagDao().getTagsByHash(hash)
+            val entity = db.civitaiModelDao().getModelByHash(hash)
             entity?.trainedWords?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
         }
     }
 
-    /* ============================================================================
-     * FAVORITES MANAGEMENT (Virtual Folder System)
-     * ============================================================================ */
+    fun searchTags(query: String) {}
+
+    private fun loadPromptStyles() {
+        repositoryScope.launch(Dispatchers.IO) {
+            _promptStyles.value = db.promptStyleDao().getAllStyles()
+        }
+    }
+
+    fun savePromptStyle(name: String, positivePrompt: String, negativePrompt: String) {
+        repositoryScope.launch(Dispatchers.IO) {
+            db.promptStyleDao().insertStyle(
+                PromptStyleEntity(name = name, positivePrompt = positivePrompt, negativePrompt = negativePrompt)
+            )
+            loadPromptStyles()
+        }
+    }
+
+    fun deletePromptStyle(style: PromptStyleEntity) {
+        repositoryScope.launch(Dispatchers.IO) {
+            db.promptStyleDao().deleteStyle(style)
+            loadPromptStyles()
+        }
+    }
 
     private fun loadFavoritePaths() {
         repositoryScope.launch(Dispatchers.IO) {
@@ -605,10 +582,6 @@ object ForgeRepository {
             }
         }
     }
-
-    /* ============================================================================
-     * SMART DOWNSAMPLING & STATS MAINTENANCE
-     * ============================================================================ */
 
     private fun startStatsMaintenance() {
         repositoryScope.launch(Dispatchers.Default) {
@@ -673,10 +646,6 @@ object ForgeRepository {
         }
     }
 
-    /* ============================================================================
-     * FOREGROUND SERVICE MANAGEMENT
-     * ============================================================================ */
-
     private fun manageServiceState(enablePersistent: Boolean) {
         val serviceIntent = Intent(application, GenerationService::class.java).apply {
             action = "ACTION_UPDATE_PERSISTENCE"
@@ -687,10 +656,6 @@ object ForgeRepository {
             Log.e(TAG, "Failed to start service", e)
         }
     }
-
-    /* ============================================================================
-     * QUEUE FAILSAFE MECHANISM (LOCAL STORAGE)
-     * ============================================================================ */
 
     private fun loadQueueState(prefs: Preferences? = null) {
         repositoryScope.launch(Dispatchers.IO) {
@@ -721,10 +686,6 @@ object ForgeRepository {
             Log.e(TAG, "Failed to save queue", e)
         }
     }
-
-    /* ============================================================================
-     * CACHE AND FILE RECOVERY MANAGEMENT
-     * ============================================================================ */
 
     private fun cleanupRecoveredImages() {
         repositoryScope.launch(Dispatchers.IO) {
@@ -785,10 +746,6 @@ object ForgeRepository {
         return inSampleSize
     }
 
-    /* ============================================================================
-     * SETTINGS & STATE CONFIGURATION
-     * ============================================================================ */
-
     fun setAppForegroundState(isForeground: Boolean) {
         _isAppInForeground.value = isForeground
         if (!isForeground) {
@@ -846,12 +803,16 @@ object ForgeRepository {
             connectionTimeout = parsed?.connectionTimeout ?: 10,
             checkpointTimeout = parsed?.checkpointTimeout ?: 45,
             receiveGenerationNotification = parsed?.receiveGenerationNotification ?: true,
+            notifImagePreview = parsed?.notifImagePreview ?: true,
+            notifQueueStatus = parsed?.notifQueueStatus ?: false,
             notificationPriority = parsed?.notificationPriority ?: "Normal",
-            notificationVerbosity = parsed?.notificationVerbosity ?: "Full",
+            notificationMode = parsed?.notificationMode ?: "Simple",
             keepScreenOn = parsed?.keepScreenOn ?: false,
             enablePersistentService = parsed?.enablePersistentService ?: false,
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
             galleryGridColumns = parsed?.galleryGridColumns ?: 3,
+            bottomSheetExpandedByDefault = parsed?.bottomSheetExpandedByDefault ?: false,
+            enableCivitaiSync = parsed?.enableCivitaiSync ?: false,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
             previewMode = finalPreviewMode,
             useNativeSecurity = parsed?.useNativeSecurity ?: false,
@@ -891,7 +852,7 @@ object ForgeRepository {
         }
 
         if (cleanUrl != oldUrl) {
-            fetchApiData() // Natychmiastowe sprawdzanie modeli po zmianie API URL
+            fetchApiData()
         }
     }
 
@@ -899,7 +860,7 @@ object ForgeRepository {
         val currentConfig = _config.value
         val newState = currentConfig.copy(defaultState = _appState.value.copy())
         saveConfig(newState)
-        Toast.makeText(application, "Set Current as Default", Toast.LENGTH_SHORT).show()
+        showSnackbar("Set Current as Default")
     }
 
     fun resetToDefaults() {
@@ -907,7 +868,7 @@ object ForgeRepository {
         repositoryScope.launch(Dispatchers.IO) {
             application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
         }
-        Toast.makeText(application, "Reset to Defaults", Toast.LENGTH_SHORT).show()
+        showSnackbar("Reset to Defaults")
     }
 
     fun savePreset(name: String) {
@@ -924,7 +885,7 @@ object ForgeRepository {
             repositoryScope.launch(Dispatchers.IO) {
                 application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
             }
-            Toast.makeText(application, "Loaded: $name", Toast.LENGTH_SHORT).show()
+            showSnackbar("Loaded: $name")
         }
     }
 
@@ -959,35 +920,27 @@ object ForgeRepository {
                                 galleryPath = galleryPath
                             )
                             saveConfig(newConfig)
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(application, "Auto-config applied successfully", Toast.LENGTH_SHORT).show()
-                            }
+                            showSnackbar("Auto-config applied successfully")
                         } else {
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(application, "Failed to read path from server", Toast.LENGTH_SHORT).show()
-                            }
+                            showSnackbar("Failed to read path from server")
                         }
                     } else {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(application, "Server returned HTTP ${res.code}", Toast.LENGTH_SHORT).show()
-                        }
+                        showSnackbar("Server returned HTTP ${res.code}")
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to auto configure", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Network error during auto-config", Toast.LENGTH_SHORT).show()
-                }
+                showSnackbar("Network error during auto-config")
             }
         }
     }
 
-    /* ============================================================================
-     * PREVIEW AND NETWORK UTILS
-     * ============================================================================ */
-
     fun getPreviewUrl(originalPath: String, isLora: Boolean = false): String {
         if (originalPath.isEmpty()) return ""
+        if (originalPath.startsWith("http://") || originalPath.startsWith("https://")) {
+            return originalPath
+        }
+
         val urlStr = _config.value.apiUrl.trimEnd('/')
 
         val sdCwd = _config.value.serverBasePath
@@ -1117,39 +1070,35 @@ object ForgeRepository {
         return ""
     }
 
-    /* ============================================================================
-     * QUEUE ORCHESTRATION & GENERATION EXECUTION
-     * ============================================================================ */
+    suspend fun extractMetadataFromUri(uri: Uri): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val bytes = application.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes != null) {
+                    val infoStr = extractPngParameters(bytes)
+                    infoStr.takeIf { it.isNotBlank() }
+                } else null
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to read URI for metadata", e)
+                null
+            }
+        }
+    }
 
     private fun startQueueManager() {
         repositoryScope.launch(Dispatchers.IO) {
-            var lastGenerationTime = 0L
             while (isActive) {
                 try {
                     val queue = _generationQueue.value
-                    val isBusy = _isServerBusy.value
-                    val isGeneratingLocally = _isGenerating.value
-                    val isPaused = _isQueuePaused.value
-
-                    if (queue.isNotEmpty() && !isBusy && !isGeneratingLocally && !isPaused) {
-                        val timeSinceLast = System.currentTimeMillis() - lastGenerationTime
-
-                        if (lastGenerationTime != 0L && timeSinceLast < 10000) {
-                            val secondsLeft = (10000 - timeSinceLast) / 1000
-                            _statusText.value = "Queue Cooldown (${secondsLeft}s)..."
-                            delay(1000)
-                            continue
-                        }
-
-                        val nextJob = queue.first()
+                    if (queue.isNotEmpty() && !_isGenerating.value && !_isServerBusy.value && !_isQueuePaused.value) {
                         _isGenerating.value = true
-                        executeGeneration(nextJob)
-                        lastGenerationTime = System.currentTimeMillis()
+                        executeGeneration(queue.first())
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Queue Manager Exception", e)
+                    _isGenerating.value = false
                 }
-                delay(1000)
+                delay(500)
             }
         }
     }
@@ -1191,19 +1140,27 @@ object ForgeRepository {
         _generationQueue.update { it + item }
         saveQueueState()
 
-        if (_generationQueue.value.size == 1 && !_isGenerating.value) {
+        val qSize = _generationQueue.value.size
+        if (qSize == 1) {
             _totalQueueSize.value = 1
             _completedQueueItems.value = 0
+
+            if (!_isGenerating.value && !_isServerBusy.value && !_isQueuePaused.value) {
+                _isGenerating.value = true
+                repositoryScope.launch(Dispatchers.IO) {
+                    executeGeneration(item)
+                }
+            }
         } else {
             _totalQueueSize.update { it + 1 }
         }
 
         saveToPromptHistory(state.positivePrompt, state.negativePrompt)
 
-        if (_isServerBusy.value && !_isGenerating.value) {
-            Toast.makeText(application, "External generation active. Added to queue.", Toast.LENGTH_SHORT).show()
-        } else if (_isGenerating.value) {
-            Toast.makeText(application, "Added to queue.", Toast.LENGTH_SHORT).show()
+        if (_isServerBusy.value && qSize > 1) {
+            showSnackbar("External generation active. Added to queue.")
+        } else if (qSize > 1) {
+            showSnackbar("Added to queue.")
         }
     }
 
@@ -1433,10 +1390,6 @@ object ForgeRepository {
         }
     }
 
-    /* ============================================================================
-     * BACKGROUND PING POLLING
-     * ============================================================================ */
-
     private fun startBackgroundPing() {
         repositoryScope.launch(Dispatchers.IO) {
             var failCount = 0
@@ -1581,10 +1534,6 @@ object ForgeRepository {
         }
     }
 
-    /* ============================================================================
-     * METADATA & PNG CHUNK UTILITIES
-     * ============================================================================ */
-
     fun toggleGalleryMetadata() {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
@@ -1688,46 +1637,6 @@ object ForgeRepository {
         if (newPrompt.endsWith(",")) newPrompt = newPrompt.substring(0, newPrompt.length - 1).trim()
         updateState { it.copy(positivePrompt = newPrompt) }
     }
-
-    private fun loadTags() {
-        repositoryScope.launch(Dispatchers.IO) {
-            val cachePath = application.cacheDir.absolutePath
-            val file = File("$cachePath/tags.csv")
-            if (!file.exists()) {
-                try {
-                    val url = "https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru.csv"
-                    val request = Request.Builder().url(url).build()
-                    client.newCall(request).awaitResponse().use { res ->
-                        if (res.isSuccessful) file.writeText(res.body?.string() ?: "")
-                    }
-                } catch (_: Exception) {}
-            }
-            if (file.exists()) {
-                val tempTags = mutableListOf<String>()
-                file.useLines { lines ->
-                    lines.forEach { line ->
-                        val parts = line.split(",")
-                        if (parts.isNotEmpty() && parts[0].isNotBlank()) tempTags.add(parts[0])
-                    }
-                }
-                _allTags = tempTags.toList()
-            }
-        }
-    }
-
-    fun searchTags(query: String) {
-        if (query.length < 2) {
-            _tagSuggestions.value = emptyList()
-            return
-        }
-        repositoryScope.launch(Dispatchers.IO) {
-            _tagSuggestions.value = _allTags.filter { it.startsWith(query, ignoreCase = true) }.take(8)
-        }
-    }
-
-    /* ============================================================================
-     * REMOTE INFINITE IMAGE BROWSING RECOVERY & PARSING
-     * ============================================================================ */
 
     private fun parseGalleryItems(json: String): List<GalleryItem> {
         val list = mutableListOf<GalleryItem>()
@@ -1834,18 +1743,14 @@ object ForgeRepository {
                         _isRestoringPrompt.value = false
                     }
                 } else {
-                    withContext(Dispatchers.Main) {
-                        updateState { _lastPromptState.value.copy() }
-                        Toast.makeText(application, "Used local cache (No images found in gallery)", Toast.LENGTH_SHORT).show()
-                        _isRestoringPrompt.value = false
-                    }
-                }
-            } catch (_: Exception) {
-                withContext(Dispatchers.Main) {
                     updateState { _lastPromptState.value.copy() }
-                    Toast.makeText(application, "Used local cache (Network error)", Toast.LENGTH_SHORT).show()
+                    showSnackbar("Used local cache (No images found in gallery)")
                     _isRestoringPrompt.value = false
                 }
+            } catch (_: Exception) {
+                updateState { _lastPromptState.value.copy() }
+                showSnackbar("Used local cache (Network error)")
+                _isRestoringPrompt.value = false
             }
         }
     }
@@ -1867,23 +1772,18 @@ object ForgeRepository {
                             }
                         }
                     }
-                    withContext(Dispatchers.Main) {
-                        if (foundSeed != null) {
-                            updateState { it.copy(seed = foundSeed!!) }
-                            Toast.makeText(application, "Seed recovered: $foundSeed", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(application, "No seed found in last image", Toast.LENGTH_SHORT).show()
-                        }
+                    if (foundSeed != null) {
+                        updateState { it.copy(seed = foundSeed!!) }
+                        showSnackbar("Seed recovered: $foundSeed")
+                    } else {
+                        showSnackbar("No seed found in last image")
                     }
                 } else {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(application, "Failed to find last image", Toast.LENGTH_SHORT).show()
-                    }
+                    showSnackbar("Failed to find last image")
                 }
-            } catch (_: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Network error recovering seed", Toast.LENGTH_SHORT).show()
-                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Network error recovering seed", e)
+                showSnackbar("Network error recovering seed")
             }
         }
     }
@@ -1896,7 +1796,7 @@ object ForgeRepository {
             try {
                 val imageUrl = getGalleryImageUrl(item)
                 if (imageUrl.isEmpty()) {
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Invalid Image URL", Toast.LENGTH_SHORT).show() }
+                    showSnackbar("Invalid Image URL")
                     _isRestoringPrompt.value = false
                     return@launch
                 }
@@ -1921,15 +1821,12 @@ object ForgeRepository {
                     return@launch
                 }
 
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Failed to extract data", Toast.LENGTH_SHORT).show()
-                    _isRestoringPrompt.value = false
-                }
-            } catch (_: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(application, "Network error", Toast.LENGTH_SHORT).show()
-                    _isRestoringPrompt.value = false
-                }
+                showSnackbar("Failed to extract data")
+                _isRestoringPrompt.value = false
+            } catch (e: Exception) {
+                Log.e(TAG, "Network error", e)
+                showSnackbar("Network error")
+                _isRestoringPrompt.value = false
             }
         }
     }
@@ -1986,8 +1883,12 @@ object ForgeRepository {
             }
             newState
         }
-        Toast.makeText(application, "Loaded generation data", Toast.LENGTH_SHORT).show()
+        showSnackbar("Loaded generation data")
     }
+
+    /* ============================================================================
+     * DATA SYNCHRONIZATION (CIVITAI / CUSTOM API / A1111)
+     * ============================================================================ */
 
     fun fetchApiData() {
         repositoryScope.launch(Dispatchers.IO) {
@@ -2014,90 +1915,196 @@ object ForgeRepository {
             try {
                 val listType = object : TypeToken<List<NameResponse>>() {}.type
 
-                listOf("samplers", "schedulers", "upscalers").forEach { endpoint ->
-                    val request = Request.Builder().url("$url/sdapi/v1/$endpoint").build()
-                    client.newCall(request).awaitResponse().use { res ->
-                        if (res.isSuccessful) {
-                            val list = gson.fromJson<List<NameResponse>>(res.body?.string() ?: "[]", listType).map { it.name }
-                            when(endpoint) {
-                                "samplers" -> _samplers.value = list
-                                "schedulers" -> _schedulers.value = list
-                                "upscalers" -> _upscalers.value = list
-                            }
-                        }
-                    }
-                }
-
-                val modelReq = Request.Builder().url("$url/sdapi/v1/sd-models").build()
-                client.newCall(modelReq).awaitResponse().use { res ->
-                    if (res.isSuccessful) {
-                        val type = object : TypeToken<List<SdModelItem>>() {}.type
-                        val sdModels = gson.fromJson<List<SdModelItem>>(res.body?.string() ?: "[]", type)
-                        _models.value = sdModels.map {
-                            ApiResource(title = it.title, path = it.filename ?: "", name = it.modelName, hash = null)
-                        }
-                    }
-                }
-
-                val loraReq = Request.Builder().url("$url/sdapi/v1/loras").build()
-                client.newCall(loraReq).awaitResponse().use { res ->
-                    if (res.isSuccessful) {
-                        val bodyStr = res.body?.string() ?: "[]"
-                        val jsonArray = JSONArray(bodyStr)
-                        val parsedLoras = mutableListOf<ApiResource>()
-
-                        val dao = db.loraTagDao()
-                        val existingHashes = dao.getAllTags().map { it.loraHash }.toSet()
-
-                        for (i in 0 until jsonArray.length()) {
-                            val itemObj = jsonArray.getJSONObject(i)
-                            val name = itemObj.optString("name", "Unknown")
-                            val path = itemObj.optString("path", "")
-                            val meta = itemObj.optJSONObject("metadata")
-
-                            val hash = meta?.optString("sshs_model_hash")?.takeIf { it.isNotEmpty() } ?: name
-
-                            parsedLoras.add(ApiResource(title = name, path = path, name = name, hash = hash))
-
-                            if (!existingHashes.contains(hash)) {
-                                val tagFrequencies = mutableMapOf<String, Int>()
-                                val freqObj = meta?.optJSONObject("ss_tag_frequency")
-                                    ?: try { JSONObject(meta?.optString("ss_tag_frequency") ?: "{}") } catch (_: Exception) { null }
-
-                                if (freqObj != null) {
-                                    val datasetKeys = freqObj.keys()
-                                    while (datasetKeys.hasNext()) {
-                                        val dataset = freqObj.optJSONObject(datasetKeys.next())
-                                        if (dataset != null) {
-                                            val tagKeys = dataset.keys()
-                                            while(tagKeys.hasNext()) {
-                                                val tag = tagKeys.next()
-                                                val freq = dataset.optInt(tag, 0)
-                                                tagFrequencies[tag] = tagFrequencies.getOrDefault(tag, 0) + freq
-                                            }
+                coroutineScope {
+                    // Opcje standardowe Automatic1111 (szybkie)
+                    val defs = listOf("samplers", "schedulers", "upscalers").map { endpoint ->
+                        async {
+                            try {
+                                val request = Request.Builder().url("$url/sdapi/v1/$endpoint").build()
+                                client.newCall(request).awaitResponse().use { res ->
+                                    if (res.isSuccessful) {
+                                        val list = gson.fromJson<List<NameResponse>>(res.body?.string() ?: "[]", listType).map { it.name }
+                                        when(endpoint) {
+                                            "samplers" -> _samplers.value = list
+                                            "schedulers" -> _schedulers.value = list
+                                            "upscalers" -> _upscalers.value = list
                                         }
                                     }
                                 }
+                            } catch (e: Exception) { Log.e(TAG, "Failed $endpoint", e) }
+                        }
+                    }
 
-                                val sortedTags = tagFrequencies.entries
-                                    .sortedByDescending { it.value }
-                                    .map { it.key }
+                    // Modele: Potężny cykl Custom API -> Room DB -> Civitai Fallback
+                    val defModelsAndLoras = async {
+                        var customApiSuccess = false
+                        try {
+                            val customApiReq = Request.Builder().url("$url/custom-api/v1/all-models-hashes").build()
+                            client.newCall(customApiReq).awaitResponse().use { res ->
+                                if (res.isSuccessful) {
+                                    val bodyStr = res.body?.string() ?: "{}"
+                                    val json = JSONObject(bodyStr)
+                                    val modelsArray = json.optJSONArray("models") ?: JSONArray()
 
-                                if (sortedTags.isNotEmpty()) {
-                                    dao.insertTags(LoraTagEntity(hash, name, sortedTags.joinToString(", "), System.currentTimeMillis()))
+                                    val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                                    val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
+
+                                    data class TempModel(val type: String, val name: String, val filename: String, val sha256: String)
+                                    val parsedApiModels = mutableListOf<TempModel>()
+
+                                    for (i in 0 until modelsArray.length()) {
+                                        val item = modelsArray.getJSONObject(i)
+                                        val type = item.optString("type")
+                                        val name = item.optString("name")
+                                        val filename = item.optString("filename")
+                                        val sha256 = item.optString("sha256")
+
+                                        if (sha256.isEmpty()) continue
+                                        parsedApiModels.add(TempModel(type, name, filename, sha256))
+
+                                        // Weryfikacja brakujących modeli względem bazy Room i opcjonalne pobieranie z Civitai
+                                        if (!localDbModels.containsKey(sha256)) {
+                                            var civName = name
+                                            val civType = type // Wymuszamy typ lokalny by uniknąć problemów z dziwnymi nazwami kategorii na Civitai
+                                            var trainedWords = ""
+                                            var previewImage: String? = null
+
+                                            if (_config.value.enableCivitaiSync) {
+                                                delay(500) // Zabezpieczenie przed błędem 429 Civitai API (Throttle)
+                                                try {
+                                                    Log.d(TAG, "Civitai Request: $sha256")
+                                                    val civReq = Request.Builder().url("https://civitai.com/api/v1/model-versions/by-hash/$sha256").build()
+                                                    client.newCall(civReq).awaitResponse().use { civRes ->
+                                                        if (civRes.isSuccessful) {
+                                                            val civBody = civRes.body?.string() ?: "{}"
+                                                            Log.d(TAG, "Civitai Response: ${civBody.take(250)}...")
+
+                                                            val civJson = JSONObject(civBody)
+
+                                                            val modelObj = civJson.optJSONObject("model")
+                                                            if (modelObj != null) {
+                                                                civName = modelObj.optString("name", name)
+                                                            }
+
+                                                            val wordsArr = civJson.optJSONArray("trainedWords")
+                                                            if (wordsArr != null) {
+                                                                val wList = mutableListOf<String>()
+                                                                for (w in 0 until wordsArr.length()) wList.add(wordsArr.getString(w))
+                                                                trainedWords = wList.joinToString(", ")
+                                                            }
+
+                                                            val imgArr = civJson.optJSONArray("images")
+                                                            if (imgArr != null && imgArr.length() > 0) {
+                                                                // Optymalizacja rozmiaru obrazka do cache'owania przez Coil
+                                                                previewImage = imgArr.getJSONObject(0).optString("url", "").replace("original=true", "original=false")
+                                                            }
+                                                        } else {
+                                                            Log.w(TAG, "Civitai API zwróciło błąd ${civRes.code} dla haszu $sha256")
+                                                        }
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Log.e(TAG, "Civitai API fetch error for $sha256", e)
+                                                }
+                                            }
+
+                                            newModelsToInsert.add(CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage))
+                                        }
+                                    }
+
+                                    if (newModelsToInsert.isNotEmpty()) {
+                                        db.civitaiModelDao().insertModels(newModelsToInsert)
+                                    }
+
+                                    // Ponowny odczyt bazy (teraz zsynchronizowanej) i budowanie ostatecznych StateFlow
+                                    val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+
+                                    val checkpoints = parsedApiModels.filter { it.type == "checkpoint" }.map { cam ->
+                                        val dbEntity = updatedDbModels[cam.sha256]
+                                        ApiResource(
+                                            title = dbEntity?.name ?: cam.name, // Wyświetla dłuższą nazwę z Civitai w UI
+                                            name = cam.name, // KRYTYCZNE: Wysyła oryginalną nazwę pliku do A1111/Forge
+                                            path = dbEntity?.previewImage ?: cam.filename, // Link do obrazka (Civitai lub Fallback)
+                                            hash = cam.sha256
+                                        )
+                                    }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                    val loras = parsedApiModels.filter { it.type == "lora" }.map { cam ->
+                                        val dbEntity = updatedDbModels[cam.sha256]
+                                        ApiResource(
+                                            title = dbEntity?.name ?: cam.name,
+                                            name = cam.name,
+                                            path = dbEntity?.previewImage ?: cam.filename,
+                                            hash = cam.sha256
+                                        )
+                                    }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                    _models.value = checkpoints
+                                    _availableLoras.value = loras
+                                    customApiSuccess = true
+                                } else {
+                                    Log.w(TAG, "Custom API not found (HTTP ${res.code}). Fallback initiated.")
+                                    showSnackbar("Custom API missing. Falling back to standard models.")
                                 }
                             }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Custom API fetch failed", e)
+                            showSnackbar("Failed to reach Custom API. Falling back.")
                         }
-                        _availableLoras.value = parsedLoras
-                    }
-                }
 
-                val reqOpts = Request.Builder().url("$url/sdapi/v1/options").build()
-                client.newCall(reqOpts).awaitResponse().use { res ->
-                    if (res.isSuccessful) {
-                        val optionsData = gson.fromJson(res.body?.string() ?: "{}", OptionsResponse::class.java)
-                        _selectedModel.value = optionsData.sdModelCheckpoint ?: ""
+                        // --- BEZPIECZNY FALLBACK DO STANDARDOWYCH ENDPOINTÓW ---
+                        if (!customApiSuccess) {
+                            try {
+                                val modelReq = Request.Builder().url("$url/sdapi/v1/sd-models").build()
+                                client.newCall(modelReq).awaitResponse().use { res ->
+                                    if (res.isSuccessful) {
+                                        val type = object : TypeToken<List<SdModelItem>>() {}.type
+                                        val sdModels = gson.fromJson<List<SdModelItem>>(res.body?.string() ?: "[]", type)
+                                        _models.value = sdModels.map {
+                                            ApiResource(title = it.title, path = it.filename ?: "", name = it.modelName, hash = null)
+                                        }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                    }
+                                }
+
+                                val loraReq = Request.Builder().url("$url/sdapi/v1/loras").build()
+                                client.newCall(loraReq).awaitResponse().use { res ->
+                                    if (res.isSuccessful) {
+                                        val bodyStr = res.body?.string() ?: "[]"
+                                        val jsonArray = JSONArray(bodyStr)
+                                        val parsedLoras = mutableListOf<ApiResource>()
+
+                                        for (i in 0 until jsonArray.length()) {
+                                            val itemObj = jsonArray.getJSONObject(i)
+                                            val name = itemObj.optString("name", "Unknown")
+                                            val path = itemObj.optString("path", "")
+                                            val meta = itemObj.optJSONObject("metadata")
+
+                                            val hash = meta?.optString("sshs_model_hash")?.takeIf { it.isNotEmpty() } ?: name
+
+                                            parsedLoras.add(ApiResource(title = name, path = path, name = name, hash = hash))
+                                        }
+                                        _availableLoras.value = parsedLoras.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Fallback API fetch failed", e)
+                                showSnackbar("Failed to fetch models completely.")
+                            }
+                        }
                     }
+
+                    val defOpts = async {
+                        try {
+                            val reqOpts = Request.Builder().url("$url/sdapi/v1/options").build()
+                            client.newCall(reqOpts).awaitResponse().use { res ->
+                                if (res.isSuccessful) {
+                                    val optionsData = gson.fromJson(res.body?.string() ?: "{}", OptionsResponse::class.java)
+                                    _selectedModel.value = optionsData.sdModelCheckpoint ?: ""
+                                }
+                            }
+                        } catch (e: Exception) { Log.e(TAG, "Failed options", e) }
+                    }
+
+                    awaitAll(*defs.toTypedArray(), defModelsAndLoras, defOpts)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to synchronize API definitions: ${e.message}")
@@ -2209,11 +2216,12 @@ object ForgeRepository {
                 val uri = resolver.insert(insertUri, contentValues)
                 if (uri != null) {
                     resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads", Toast.LENGTH_SHORT).show() }
+                    showSnackbar("Saved to Downloads")
                 } else throw Exception("Failed to create file in MediaStore")
 
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                Log.e(TAG, "Download Failed", e)
+                showSnackbar("Download Failed: ${e.message}")
             }
         }
     }
@@ -2241,12 +2249,13 @@ object ForgeRepository {
 
                         if (uri != null) {
                             resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                            withContext(Dispatchers.Main) { Toast.makeText(application, "Saved to Downloads", Toast.LENGTH_SHORT).show() }
+                            showSnackbar("Saved to Downloads")
                         } else throw Exception("Failed to create file in MediaStore")
                     } else throw Exception("Server returned ${response.code}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Download Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                Log.e(TAG, "Download Failed", e)
+                showSnackbar("Download Failed: ${e.message}")
             }
         }
     }
@@ -2283,7 +2292,8 @@ object ForgeRepository {
                     }
                 } else throw Exception("Failed to prepare file for sharing")
             } catch(e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Share Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                Log.e(TAG, "Share Failed", e)
+                showSnackbar("Share Failed: ${e.message}")
             }
         }
     }
@@ -2324,7 +2334,8 @@ object ForgeRepository {
                     } else throw Exception("Server returned ${response.code}")
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { Toast.makeText(application, "Share Failed: ${e.message}", Toast.LENGTH_SHORT).show() }
+                Log.e(TAG, "Share Failed", e)
+                showSnackbar("Share Failed: ${e.message}")
             }
         }
     }

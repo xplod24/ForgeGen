@@ -48,6 +48,8 @@ class GenerationService : Service() {
             Log.e("GenerationService", "Failed to initialize WakeLock", e)
         }
 
+        // Pętla odczytuje teraz dane WYŁĄCZNIE z pamięci RAM (StateFlow z repozytorium)
+        // Usunięto odczyty SharedPreferences z I/O, co zapobiega drenażowi baterii
         serviceScope.launch {
             while (isActive) {
                 updateNotificationAndServiceState(intentAction = null)
@@ -89,17 +91,13 @@ class GenerationService : Service() {
         val currentEta = ForgeRepository.currentEta.value
         val oomAlert = ForgeRepository.oomAlert.value
 
-        // ZMIANA: Pobieramy dane błyskawicznie wprost z pamięci repozytorium
-        // Zamiast blokującego parsowania JSON z SharedPreferences!
+        // Odczyt konfiguracji prosto z pamięci Cache w Repository (0 operacji I/O)
         val config = ForgeRepository.config.value
         val state = ForgeRepository.appState.value
 
-        val verbosity = config.notificationVerbosity
+        val notificationMode = config.notificationMode
         val enablePersistentService = config.enablePersistentService
-
-        // Te wartości tymczasowo odczytujemy ze starych prefs (usunęliśmy JSONa) dopóki nie przeniesiemy ich do AppConfig
-        val prefs = getSharedPreferences("ForgeGenPrefs", MODE_PRIVATE)
-        val showQueueStatus = prefs.getBoolean("notifQueueStatus", false)
+        val showQueueStatus = config.notifQueueStatus
 
         val steps = state.steps
         val batchCount = state.batchCount
@@ -107,7 +105,7 @@ class GenerationService : Service() {
 
         val isActivelyGenerating = isGenerating || isServerBusy || queuedCount > 0
 
-        // BUG #3 FIX: Overnight Batch Mode & OOM Protection
+        // Overnight Batch Mode & OOM Protection
         val isHeavyTask = (batchCount >= 50 || batchSize >= 8)
         if (isActivelyGenerating && isHeavyTask) {
             try {
@@ -138,16 +136,19 @@ class GenerationService : Service() {
 
         val notification = buildNotification(
             isGenerating, progress, status, isServerBusy, queuedCount,
-            currentEta, oomAlert, verbosity, steps, showQueueStatus,
+            currentEta, oomAlert, notificationMode, showQueueStatus,
             isOngoing = shouldBeForeground
         )
 
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
-        // BUG #5 FIX: Logika przełączania usługi
+        // Logika przełączania usługi
         if (shouldBeForeground) {
-            // Kod zoptymalizowany pod minimum SDK 31 (odrzucenie starych instrukcji)
-            startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(notificationId, notification)
+            }
         } else {
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
             manager.notify(notificationId, notification)
@@ -167,15 +168,14 @@ class GenerationService : Service() {
         queuedCount: Int,
         currentEta: Double,
         oomAlert: Boolean,
-        verbosity: String,
-        steps: Int,
+        notificationMode: String,
         showQueueStatus: Boolean,
         isOngoing: Boolean
     ): Notification {
         val isActivelyGenerating = isGenerating || isServerBusy
 
-        // BUG #6 FIX: Powiadomienie statusowe ZAWSZE używa cichego kanału (oprócz alertu krytycznego OOM).
-        // Głośne notyfikacje o ukończeniu (Priority High/Normal) pochodzą teraz z oddzielnego ID w ForgeRepository.
+        // Powiadomienie statusowe ZAWSZE używa cichego kanału (oprócz alertu krytycznego OOM).
+        // Głośne notyfikacje o ukończeniu (Priority High/Normal) pochodzą z oddzielnego ID w ForgeRepository.
         val activeChannelId = if (oomAlert) "forge_high" else "forge_low"
 
         val notifTitle = when {
@@ -185,32 +185,23 @@ class GenerationService : Service() {
         }
 
         val etaString = if (currentEta > 0) " (ETA: ${String.format(Locale.US, "%.1f", currentEta)}s)" else ""
-
-        val jobNo = ForgeRepository.currentJobNo.value
-        val jobCount = ForgeRepository.currentJobCount.value
-        val samplingStep = ForgeRepository.currentSamplingStep.value
-        val samplingSteps = ForgeRepository.currentSamplingSteps.value
-        val currentStep = (progress * steps).toInt()
-
         val queueText = if (showQueueStatus && queuedCount > 0) "\nRemaining in queue: $queuedCount" else ""
 
         val notifText = when {
             oomAlert -> "Out of Memory on Server. Queue has been paused. Tap to manage."
-            status.contains("Connection Lost", true) -> if (verbosity == "Simple") "Disconnected" else "Server Offline or Unreachable."
+            status.contains("Connection Lost", true) -> "Server Offline or Unreachable."
             status.contains("Restoring", true) -> "Restoring prompt..."
             isActivelyGenerating -> {
-                val mode = if (isGenerating) "Generating" else "External Task"
-                val progStr = "${(progress * 100).toInt()}%"
-                val stepStr = if (samplingSteps > 0) "Img ${jobNo + 1}/$jobCount | Step $samplingStep/$samplingSteps" else "Step $currentStep/$steps"
-
-                when (verbosity) {
-                    "Simple" -> "$mode..."
-                    "Brief" -> "$mode: $progStr"
-                    else -> "$mode: $progStr ($stepStr)$etaString\n$status$queueText"
+                if (notificationMode == "Disabled") {
+                    "Working in background..."
+                } else {
+                    val mode = if (isGenerating) "Generating" else "External Task"
+                    val progStr = "${(progress * 100).toInt()}%"
+                    "$mode: $progStr$etaString$queueText"
                 }
             }
-            queuedCount > 0 -> if (verbosity == "Simple") "Queued: $queuedCount" else "Ready$queueText"
-            else -> if (verbosity == "Simple") "Ready" else "Ready - Connected to server."
+            queuedCount > 0 -> "Queued: $queuedCount$queueText"
+            else -> if (notificationMode == "Disabled") "Ready" else "Ready - Connected to server."
         }
 
         val openIntent = Intent(this, MainActivity::class.java).apply {
@@ -234,7 +225,7 @@ class GenerationService : Service() {
             .setContentText(notifText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notifText))
             .setOngoing(isOngoing)
-            .setOnlyAlertOnce(true) // BUG #6 FIX: Uniemożliwia wielokrotne "pikanie" podczas aktualizacji stanu
+            .setOnlyAlertOnce(true) // Uniemożliwia wielokrotne "pikanie" podczas aktualizacji stanu
             .setSilent(true)        // Wymusza całkowitą ciszę dla paska postępu
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(openPendingIntent)
@@ -271,7 +262,7 @@ class GenerationService : Service() {
             }
         }
 
-        if (isActivelyGenerating && !oomAlert) {
+        if (isActivelyGenerating && !oomAlert && notificationMode != "Disabled") {
             val max = 100
             val progInt = (progress * 100).toInt()
             builder.setProgress(max, progInt, progInt == 0)

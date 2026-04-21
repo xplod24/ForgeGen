@@ -6,17 +6,18 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
@@ -40,11 +41,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -69,7 +73,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
-import androidx.core.content.edit
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
@@ -78,9 +81,56 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/* ============================================================================
+ * STATIC REGEX PARSER & TOKENIZER (Performance Optimization & Couple Tags)
+ * ============================================================================ */
+
+object PromptParser {
+    val LORA = Regex("<lora:[^>]+>")
+    val WEIGHT_PAREN = Regex("\\([^)]+\\)")
+    val WEIGHT_BRACKET = Regex("\\[[^]]+]")
+    val TAG_STRENGTH = Regex("^\\((.*):([0-9.]+)\\)$")
+    val SEPARATOR = Regex("[,\\s]+")
+}
+
+fun parseTags(prompt: String): List<String> {
+    val result = mutableListOf<String>()
+    val currentTag = java.lang.StringBuilder()
+    var depth = 0
+
+    for (char in prompt) {
+        when (char) {
+            '(', '[', '{' -> {
+                depth++
+                currentTag.append(char)
+            }
+            ')', ']', '}' -> {
+                depth = maxOf(0, depth - 1)
+                currentTag.append(char)
+            }
+            ',' -> {
+                if (depth == 0) {
+                    if (currentTag.isNotBlank()) {
+                        result.add(currentTag.toString().trim())
+                    }
+                    currentTag.clear()
+                } else {
+                    currentTag.append(char)
+                }
+            }
+            else -> currentTag.append(char)
+        }
+    }
+    if (currentTag.isNotBlank()) {
+        result.add(currentTag.toString().trim())
+    }
+    return result
+}
 
 /* ============================================================================
  * HELPER CLASSES & FUNCTIONS
@@ -91,13 +141,13 @@ class PromptVisualTransformation : VisualTransformation {
         val spanStyles = mutableListOf<AnnotatedString.Range<SpanStyle>>()
         val str = text.text
 
-        Regex("<lora:[^>]+>").findAll(str).forEach { match ->
+        PromptParser.LORA.findAll(str).forEach { match ->
             spanStyles.add(AnnotatedString.Range(SpanStyle(color = Color(0xFFB388FF), fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1))
         }
-        Regex("\\([^)]+\\)").findAll(str).forEach { match ->
+        PromptParser.WEIGHT_PAREN.findAll(str).forEach { match ->
             spanStyles.add(AnnotatedString.Range(SpanStyle(color = Color(0xFFFFD54F)), match.range.first, match.range.last + 1))
         }
-        Regex("\\[[^]]+]").findAll(str).forEach { match ->
+        PromptParser.WEIGHT_BRACKET.findAll(str).forEach { match ->
             spanStyles.add(AnnotatedString.Range(SpanStyle(color = Color(0xFF81C784)), match.range.first, match.range.last + 1))
         }
 
@@ -107,19 +157,19 @@ class PromptVisualTransformation : VisualTransformation {
 
 fun countTokens(text: String): Int {
     if (text.isBlank()) return 0
-    val words = text.split(Regex("[,\\s]+")).filter { it.isNotBlank() }
+    val words = parseTags(text)
     return words.size
 }
 
 fun getTagStrength(tag: String): String {
     val trimmed = tag.trim()
-    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
+    val match = PromptParser.TAG_STRENGTH.find(trimmed)
     return match?.groupValues?.getOrNull(2) ?: "1.0"
 }
 
 fun adjustTagStrength(tag: String, delta: Float): String {
     val trimmed = tag.trim()
-    val match = Regex("^\\((.*):([0-9.]+)\\)$").find(trimmed)
+    val match = PromptParser.TAG_STRENGTH.find(trimmed)
 
     if (match != null && match.groupValues.size >= 3) {
         val base = match.groupValues[1]
@@ -224,139 +274,258 @@ fun UndoRedoTextField(
     }
 }
 
+/* ============================================================================
+ * PROMPT-IN-ONE HYBRID EDITOR (Custom Tokenizer & Ghost Drag 'n Drop)
+ * ============================================================================ */
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DragToReorderTagsRow(text: String, onPromptChanged: (String) -> Unit) {
-    val tags = text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+fun HybridPromptEditor(
+    prompt: String,
+    onPromptChange: (String) -> Unit,
+    disabledTags: Set<String>,
+    onDisabledTagsChange: (Set<String>) -> Unit,
+    label: String
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        UndoRedoTextField(
+            value = prompt,
+            onValueChange = onPromptChange,
+            label = { Text(label, fontSize = 12.sp) },
+            minLines = 3,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PromptVisualTransformation()
+        )
 
-    if (tags.isNotEmpty()) {
-        var draggingIndex by remember { mutableStateOf<Int?>(null) }
-        var tunedIndex by remember { mutableStateOf<Int?>(null) }
+        // Rozbijamy tagi szanując zagnieżdżenia za pomocą customowego Tokenizera
+        val activeTags = remember(prompt) { parseTags(prompt) }
 
-        var dragOffsetX by remember { mutableFloatStateOf(0f) }
-        var dragOffsetY by remember { mutableFloatStateOf(0f) }
+        if (activeTags.isNotEmpty() || disabledTags.isNotEmpty()) {
+            var draggingIndex by remember { mutableStateOf<Int?>(null) }
+            var dragOffsetX by remember { mutableFloatStateOf(0f) }
+            var dragOffsetY by remember { mutableFloatStateOf(0f) }
 
-        fun swap(i: Int, j: Int) {
-            val newTags = tags.toMutableList()
-            newTags[i] = newTags[j].also { newTags[j] = newTags[i] }
-            onPromptChanged(newTags.joinToString(", "))
-        }
+            // Tymczasowa lista mutowalna podczas przeciągania
+            var displayTags by remember(activeTags) { mutableStateOf(activeTags.toList()) }
 
-        FlowRow(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            tags.forEachIndexed { index, tag ->
-                val isDragging = index == draggingIndex
-                val isTuned = index == tunedIndex
+            val dashColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            // POPRAWKA BŁĘDU (Zdefiniowany jawny typ oraz prawidłowa metoda dashPathEffect)
+            val dashEffect: PathEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
 
-                val modifier = if (isDragging) {
-                    Modifier.offset { IntOffset(dragOffsetX.roundToInt(), dragOffsetY.roundToInt()) }.zIndex(1f)
-                } else {
-                    Modifier.zIndex(0f)
-                }
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                displayTags.forEachIndexed { index, tag ->
+                    val isGhost = index == draggingIndex
 
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = modifier) {
-                    AnimatedVisibility(visible = isTuned && !isDragging) {
-                        Row(
-                            modifier = Modifier
-                                .padding(bottom = 2.dp)
-                                .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 4.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Default.Remove, "Decrease",
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(14.dp).clickable {
-                                    val newTags = tags.toMutableList()
-                                    newTags[index] = adjustTagStrength(tag, -0.1f)
-                                    onPromptChanged(newTags.joinToString(", "))
-                                }
-                            )
-                            Text(
-                                getTagStrength(tag),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                fontSize = 10.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp)
-                            )
-                            Icon(
-                                Icons.Default.Add, "Increase",
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(14.dp).clickable {
-                                    val newTags = tags.toMutableList()
-                                    newTags[index] = adjustTagStrength(tag, 0.1f)
-                                    onPromptChanged(newTags.joinToString(", "))
-                                }
-                            )
-                        }
+                    // Modifikator offsetu działa tylko dla warstwy unoszącej się
+                    val flyingModifier = if (isGhost) {
+                        Modifier
+                            .offset { IntOffset(dragOffsetX.roundToInt(), dragOffsetY.roundToInt()) }
+                            .zIndex(2f)
+                            .shadow(8.dp, RoundedCornerShape(8.dp))
+                    } else {
+                        Modifier.zIndex(1f)
                     }
 
-                    AssistChip(
-                        onClick = { tunedIndex = if (tunedIndex == index) null else index },
-                        label = { Text(tag, fontSize = 12.sp) },
-                        trailingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Remove",
+                    val match = PromptParser.TAG_STRENGTH.find(tag)
+                    val (baseName, weightStr) = if (match != null && match.groupValues.size >= 3) {
+                        match.groupValues[1] to match.groupValues[2]
+                    } else {
+                        if (tag.startsWith("(") && tag.endsWith(")")) {
+                            tag.drop(1).dropLast(1) to "1.1"
+                        } else tag to "1.0"
+                    }
+
+                    Box {
+                        // GHOST - Puste pole w miejscu w którym wyląduje tag (renderowane tylko w pierwotnym slocie)
+                        if (isGhost) {
+                            Box(
                                 modifier = Modifier
-                                    .size(18.dp)
-                                    .clickable {
-                                        val newTags = tags.toMutableList()
-                                        newTags.removeAt(index)
-                                        onPromptChanged(newTags.joinToString(", "))
-                                        if (tunedIndex == index) tunedIndex = null
+                                    .matchParentSize()
+                                    .drawBehind {
+                                        drawRoundRect(
+                                            color = dashColor,
+                                            style = Stroke(width = 2.dp.toPx(), pathEffect = dashEffect),
+                                            cornerRadius = CornerRadius(8.dp.toPx())
+                                        )
                                     }
-                            )
-                        },
-                        shape = MaterialTheme.shapes.small,
-                        modifier = Modifier.pointerInput(Unit) {
-                            detectDragGesturesAfterLongPress(
-                                onDragStart = {
-                                    draggingIndex = index
-                                    tunedIndex = null
-                                },
-                                onDrag = { change, dragAmount ->
-                                    change.consume()
-                                    dragOffsetX += dragAmount.x
-                                    dragOffsetY += dragAmount.y
-
-                                    val swapXThreshold = 150f
-                                    val swapYThreshold = 80f
-
-                                    if (dragOffsetX > swapXThreshold && index < tags.size - 1) {
-                                        swap(index, index + 1)
-                                        draggingIndex = index + 1
-                                        dragOffsetX -= swapXThreshold
-                                    } else if (dragOffsetX < -swapXThreshold && index > 0) {
-                                        swap(index, index - 1)
-                                        draggingIndex = index - 1
-                                        dragOffsetX += swapXThreshold
-                                    }
-
-                                    if (dragOffsetY > swapYThreshold && index < tags.size - 3) {
-                                        val target = (index + 3).coerceAtMost(tags.size - 1)
-                                        swap(index, target)
-                                        draggingIndex = target
-                                        dragOffsetY -= swapYThreshold
-                                    } else if (dragOffsetY < -swapYThreshold && index > 2) {
-                                        val target = (index - 3).coerceAtLeast(0)
-                                        swap(index, target)
-                                        draggingIndex = target
-                                        dragOffsetY += swapYThreshold
-                                    }
-                                },
-                                onDragEnd = { draggingIndex = null; dragOffsetX = 0f; dragOffsetY = 0f },
-                                onDragCancel = { draggingIndex = null; dragOffsetX = 0f; dragOffsetY = 0f }
                             )
                         }
-                    )
+
+                        // CHIP - Normalny lub "latający" chip
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            modifier = flyingModifier.pointerInput(tag) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingIndex = index
+                                        dragOffsetX = 0f
+                                        dragOffsetY = 0f
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragOffsetX += dragAmount.x
+                                        dragOffsetY += dragAmount.y
+
+                                        var moved = false
+                                        val currentDragIdx = draggingIndex ?: index
+
+                                        // Swap logic approximating FlowRow grid thresholds
+                                        if (dragOffsetX > 80f && currentDragIdx < displayTags.size - 1) {
+                                            val mutList = displayTags.toMutableList()
+                                            Collections.swap(mutList, currentDragIdx, currentDragIdx + 1)
+                                            displayTags = mutList
+                                            draggingIndex = currentDragIdx + 1
+                                            dragOffsetX -= 80f
+                                            moved = true
+                                        } else if (dragOffsetX < -80f && currentDragIdx > 0) {
+                                            val mutList = displayTags.toMutableList()
+                                            Collections.swap(mutList, currentDragIdx, currentDragIdx - 1)
+                                            displayTags = mutList
+                                            draggingIndex = currentDragIdx - 1
+                                            dragOffsetX += 80f
+                                            moved = true
+                                        }
+
+                                        if (dragOffsetY > 45f && currentDragIdx < displayTags.size - 3) {
+                                            val mutList = displayTags.toMutableList()
+                                            Collections.swap(mutList, currentDragIdx, currentDragIdx + 3)
+                                            displayTags = mutList
+                                            draggingIndex = currentDragIdx + 3
+                                            dragOffsetY -= 45f
+                                            moved = true
+                                        } else if (dragOffsetY < -45f && currentDragIdx > 2) {
+                                            val mutList = displayTags.toMutableList()
+                                            Collections.swap(mutList, currentDragIdx, currentDragIdx - 3)
+                                            displayTags = mutList
+                                            draggingIndex = currentDragIdx - 3
+                                            dragOffsetY += 45f
+                                            moved = true
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        draggingIndex = null
+                                        dragOffsetX = 0f
+                                        dragOffsetY = 0f
+                                        onPromptChange(displayTags.joinToString(", "))
+                                    },
+                                    onDragCancel = {
+                                        draggingIndex = null
+                                        dragOffsetX = 0f
+                                        dragOffsetY = 0f
+                                        displayTags = activeTags.toList() // Revert
+                                    }
+                                )
+                            }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                                Icon(
+                                    Icons.Default.Visibility,
+                                    contentDescription = "Disable",
+                                    modifier = Modifier.size(16.dp).clickable {
+                                        val newTags = displayTags.toMutableList()
+                                        newTags.remove(tag)
+                                        onPromptChange(newTags.joinToString(", "))
+                                        onDisabledTagsChange(disabledTags + tag)
+                                    },
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(baseName, fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.Medium)
+                                Spacer(Modifier.width(8.dp))
+                                Icon(
+                                    Icons.Default.Remove, "Decrease",
+                                    modifier = Modifier.size(14.dp).clickable {
+                                        val newTags = displayTags.toMutableList()
+                                        val pos = newTags.indexOf(tag)
+                                        if(pos != -1) {
+                                            newTags[pos] = adjustTagStrength(tag, -0.1f)
+                                            onPromptChange(newTags.joinToString(", "))
+                                        }
+                                    },
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(weightStr, fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 4.dp))
+                                Icon(
+                                    Icons.Default.Add, "Increase",
+                                    modifier = Modifier.size(14.dp).clickable {
+                                        val newTags = displayTags.toMutableList()
+                                        val pos = newTags.indexOf(tag)
+                                        if(pos != -1) {
+                                            newTags[pos] = adjustTagStrength(tag, 0.1f)
+                                            onPromptChange(newTags.joinToString(", "))
+                                        }
+                                    },
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+
+                disabledTags.forEach { tag ->
+                    val match = PromptParser.TAG_STRENGTH.find(tag)
+                    val baseName = if (match != null && match.groupValues.size >= 3) match.groupValues[1] else tag
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)) {
+                            Icon(
+                                Icons.Default.VisibilityOff,
+                                contentDescription = "Enable",
+                                modifier = Modifier.size(16.dp).clickable {
+                                    val newTags = displayTags.toMutableList()
+                                    newTags.add(tag)
+                                    onPromptChange(newTags.joinToString(", "))
+                                    onDisabledTagsChange(disabledTags - tag)
+                                },
+                                tint = Color.Gray
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(baseName, fontSize = 11.sp, color = Color.Gray)
+                        }
+                    }
                 }
             }
         }
-    } else {
-        Text("No active tags", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(16.dp))
+    }
+}
+
+@Composable
+fun PromptHistoryCarousel(
+    history: List<PromptHistoryItem>,
+    onSelect: (PromptHistoryItem) -> Unit
+) {
+    if (history.isEmpty()) return
+
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
+            Icon(Icons.Default.History, null, modifier = Modifier.size(14.dp), tint = Color.Gray)
+            Spacer(Modifier.width(4.dp))
+            Text("Recent Prompts", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+        }
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(history) { item: PromptHistoryItem ->
+                Card(
+                    modifier = Modifier.width(220.dp).clickable { onSelect(item) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        val timeFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(item.timestamp)
+                        Text(timeFormat, fontSize = 9.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
+                        Spacer(Modifier.height(4.dp))
+                        Text(item.positivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -450,7 +619,8 @@ fun ServerStatsDialog(
                                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
                                 .clickable {
                                     timeRangeMinutes = mins
-                                    prefs.edit { putInt("stats_time_range", mins) }
+                                    // POPRAWKA BŁĘDU (Zastąpienie biblioteki KTX standardowym Androidowym SharedPreferences)
+                                    prefs.edit().putInt("stats_time_range", mins).apply()
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -648,15 +818,11 @@ fun PreviewSection(
     onPrev: () -> Unit,
     onNext: () -> Unit
 ) {
-    // Stan rozmycia dla obrazków NSFW (domyślnie włączony z możliwością tymczasowego wyłączenia)
     var isBlurred by remember { mutableStateOf(true) }
 
     Box(modifier = Modifier.fillMaxWidth().height(240.dp).clip(MaterialTheme.shapes.medium).background(Color.DarkGray)) {
-
-        // Modyfikator nakładający blur o sile 25.dp (ukrywa detale, zachowuje paletę barw)
         val blurModifier = if (isBlurred) Modifier.blur(25.dp) else Modifier
 
-        // Zamknięcie samej zawartości w sub-Boxie, aby blur nie wpływał na przyciski
         Box(modifier = Modifier.fillMaxSize().then(blurModifier)) {
             if (isGenerating && previewMode == "None") {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
@@ -688,7 +854,7 @@ fun PreviewSection(
                     modifier = Modifier.fillMaxSize().padding(bottom = 36.dp),
                     contentPadding = PaddingValues(4.dp)
                 ) {
-                    items(batchImages.size) { index ->
+                    items(batchImages.size) { index: Int ->
                         val imgPath = batchImages[index]
                         AsyncImage(
                             model = imgPath,
@@ -718,11 +884,8 @@ fun PreviewSection(
                     Text("No Preview", color = Color.Gray)
                 }
             }
-        } // Koniec sub-Boxa dla obrazków
+        }
 
-        // --- NAKŁADKI UI (Przyciski sterujące nie podlegające blurowi) ---
-
-        // Przycisk widoczności
         IconButton(
             onClick = { isBlurred = !isBlurred },
             modifier = Modifier
@@ -755,42 +918,50 @@ fun PromptsSection(
     viewModel: ForgeViewModel,
     state: AppState,
     config: AppConfig,
-    tagSuggestions: List<String>,
     promptHistory: List<PromptHistoryItem>,
     navController: NavHostController
 ) {
+    val promptStyles by viewModel.promptStyles.collectAsStateWithLifecycle()
+
     var showPresetsDialog by remember { mutableStateOf(false) }
+    var showStylesDialog by remember { mutableStateOf(false) }
     var showRecoverMenu by remember { mutableStateOf(false) }
-    var showHistoryDialog by remember { mutableStateOf(false) }
-    var showPosTagEditor by remember { mutableStateOf(false) }
-    var showNegTagEditor by remember { mutableStateOf(false) }
+
+    var disabledPosTags by remember { mutableStateOf(emptySet<String>()) }
+    var disabledNegTags by remember { mutableStateOf(emptySet<String>()) }
 
     val context = LocalContext.current
 
     SectionHeader("Prompts")
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { showPresetsDialog = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = { showPresetsDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(32.dp)) {
             Icon(Icons.Default.SettingsSuggest, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(4.dp))
-            Text("Manage Presets", fontSize = 12.sp)
+            Text("Presets", fontSize = 12.sp)
         }
+
+        TextButton(onClick = { showStylesDialog = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(32.dp)) {
+            Icon(Icons.Default.Brush, contentDescription = null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Styles", fontSize = 12.sp)
+        }
+
         Box {
-            TextButton(onClick = { showRecoverMenu = true }, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(32.dp)) {
+            TextButton(onClick = { showRecoverMenu = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(32.dp)) {
                 Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("Recover Prompt", fontSize = 12.sp)
+                Text("Recover", fontSize = 12.sp)
             }
             DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
                 DropdownMenuItem(
                     text = { Text("Last Generated Image", fontSize = 14.sp) },
                     leadingIcon = { Icon(Icons.Default.Image, null, modifier = Modifier.size(20.dp)) },
                     onClick = { showRecoverMenu = false; viewModel.recoverLastPrompt() }
-                )
-                DropdownMenuItem(
-                    text = { Text("From History", fontSize = 14.sp) },
-                    leadingIcon = { Icon(Icons.Default.History, null, modifier = Modifier.size(20.dp)) },
-                    onClick = { showRecoverMenu = false; showHistoryDialog = true }
                 )
                 DropdownMenuItem(
                     text = { Text("From Gallery Image", fontSize = 14.sp) },
@@ -806,25 +977,23 @@ fun PromptsSection(
         }
     }
 
-    UndoRedoTextField(
-        value = state.positivePrompt,
-        onValueChange = {
-            viewModel.updateState { s -> s.copy(positivePrompt = it) }
-            val currentWord = it.substringAfterLast(",").trim()
-            viewModel.searchTags(currentWord)
-        },
-        label = { Text("Positive Prompt", fontSize = 12.sp) },
-        minLines = 3,
-        maxLines = 8,
-        modifier = Modifier.fillMaxWidth(),
-        visualTransformation = PromptVisualTransformation(),
-        actions = {
-            if (config.showActiveTagsUI && state.positivePrompt.isNotBlank()) {
-                IconButton(onClick = { showPosTagEditor = true }) {
-                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                }
-            }
+    PromptHistoryCarousel(
+        history = promptHistory,
+        onSelect = { item ->
+            viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
+            disabledPosTags = emptySet()
+            disabledNegTags = emptySet()
         }
+    )
+
+    HybridPromptEditor(
+        prompt = state.positivePrompt,
+        onPromptChange = {
+            viewModel.updateState { s -> s.copy(positivePrompt = it) }
+        },
+        disabledTags = disabledPosTags,
+        onDisabledTagsChange = { disabledPosTags = it },
+        label = "Positive Prompt"
     )
 
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -833,67 +1002,39 @@ fun PromptsSection(
             TextButton(onClick = {
                 val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboardManager.setPrimaryClip(ClipData.newPlainText("Prompt", state.positivePrompt))
-                Toast.makeText(context, "Prompt Copied", Toast.LENGTH_SHORT).show()
+                viewModel.showSnackbar("Prompt Copied")
             }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
                 Text("Copy Prompt", fontSize = 10.sp)
             }
-            TextButton(onClick = { viewModel.updateState { s -> s.copy(positivePrompt = "") } }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
+            TextButton(onClick = {
+                viewModel.updateState { s -> s.copy(positivePrompt = "") }
+                disabledPosTags = emptySet()
+            }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
                 Text("Clear", fontSize = 10.sp)
-            }
-        }
-    }
-
-    AnimatedVisibility(visible = tagSuggestions.isNotEmpty()) {
-        Card(
-            modifier = Modifier.fillMaxWidth().heightIn(max = 150.dp).padding(top = 4.dp, bottom = 4.dp),
-            elevation = CardDefaults.cardElevation(4.dp),
-            shape = MaterialTheme.shapes.medium
-        ) {
-            LazyColumn {
-                items(tagSuggestions) { tag ->
-                    Text(
-                        text = tag,
-                        fontSize = 12.sp,
-                        modifier = Modifier.fillMaxWidth().clickable {
-                            val before = state.positivePrompt.substringBeforeLast(",", "")
-                            val newText = if (before.isEmpty()) "$tag, " else "$before, $tag, "
-                            viewModel.updateState { s -> s.copy(positivePrompt = newText) }
-                            viewModel.searchTags("")
-                        }.padding(12.dp)
-                    )
-                    HorizontalDivider()
-                }
             }
         }
     }
 
     Spacer(modifier = Modifier.height(4.dp))
 
-    UndoRedoTextField(
-        value = state.negativePrompt,
-        onValueChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
-        label = { Text("Negative Prompt", fontSize = 12.sp) },
-        minLines = 2,
-        maxLines = 6,
-        modifier = Modifier.fillMaxWidth(),
-        visualTransformation = PromptVisualTransformation(),
-        actions = {
-            if (config.showActiveTagsUI && state.negativePrompt.isNotBlank()) {
-                IconButton(onClick = { showNegTagEditor = true }) {
-                    Icon(Icons.Default.Edit, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                }
-            }
-        }
+    HybridPromptEditor(
+        prompt = state.negativePrompt,
+        onPromptChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
+        disabledTags = disabledNegTags,
+        onDisabledTagsChange = { disabledNegTags = it },
+        label = "Negative Prompt"
     )
 
     Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text("${countTokens(state.negativePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        TextButton(onClick = { viewModel.resetToDefaults() }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
+        TextButton(onClick = {
+            viewModel.resetToDefaults()
+            disabledPosTags = emptySet()
+            disabledNegTags = emptySet()
+        }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
             Text("Reset to Defaults", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
         }
     }
-
-    // --- PROMPT SECTION DIALOGS ---
 
     if (showPresetsDialog) {
         var newPresetName by remember { mutableStateOf("") }
@@ -903,7 +1044,7 @@ fun PromptsSection(
             text = {
                 Column {
                     LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
-                        items(config.presets) { preset ->
+                        items(config.presets) { preset: GenerationPreset ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable {
                                     viewModel.loadPreset(preset.name)
@@ -952,72 +1093,86 @@ fun PromptsSection(
         )
     }
 
-    if (showPosTagEditor) {
+    if (showStylesDialog) {
+        var newStyleName by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showPosTagEditor = false },
-            title = { Text("Active Positive Tags", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
+            onDismissRequest = { showStylesDialog = false },
+            title = { Text("Prompt Styles") },
             text = {
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        DragToReorderTagsRow(state.positivePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(positivePrompt = newPrompt) } }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showPosTagEditor = false }) { Text("Done") } }
-        )
-    }
+                Column {
+                    LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
+                        items(promptStyles) { style: PromptStyleEntity ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    val currentPos = state.positivePrompt.trim()
+                                    val currentNeg = state.negativePrompt.trim()
 
-    if (showNegTagEditor) {
-        AlertDialog(
-            onDismissRequest = { showNegTagEditor = false },
-            title = { Text("Active Negative Tags", fontWeight = FontWeight.Bold, fontSize = 18.sp) },
-            text = {
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        DragToReorderTagsRow(state.negativePrompt) { newPrompt -> viewModel.updateState { s -> s.copy(negativePrompt = newPrompt) } }
-                    }
-                }
-            },
-            confirmButton = { TextButton(onClick = { showNegTagEditor = false }) { Text("Done") } }
-        )
-    }
+                                    val newPos = if (currentPos.isEmpty()) style.positivePrompt else "$currentPos, ${style.positivePrompt}"
+                                    val newNeg = if (currentNeg.isEmpty()) style.negativePrompt else "$currentNeg, ${style.negativePrompt}"
 
-    if (showHistoryDialog) {
-        AlertDialog(
-            onDismissRequest = { showHistoryDialog = false },
-            title = {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Prompt History")
-                    IconButton(onClick = { viewModel.clearPromptHistory(); showHistoryDialog = false }) {
-                        Icon(Icons.Default.Delete, null)
-                    }
-                }
-            },
-            text = {
-                if (promptHistory.isEmpty()) {
-                    Text("No history available yet.", color = Color.Gray)
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                        items(promptHistory) { item ->
-                            val timeFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()).format(item.timestamp)
-                            Card(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable {
-                                    viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
-                                    showHistoryDialog = false
-                                },
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                    viewModel.updateState { it.copy(positivePrompt = newPos, negativePrompt = newNeg) }
+                                    showStylesDialog = false
+                                    viewModel.showSnackbar("Style Applied")
+                                }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Column(modifier = Modifier.padding(8.dp)) {
-                                    Text(timeFormat, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
-                                    if (item.positivePrompt.isNotBlank()) Text(item.positivePrompt, maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    if (item.negativePrompt.isNotBlank()) Text("Negative: " + item.negativePrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Color.Gray)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(style.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                    Text(style.positivePrompt, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 10.sp, color = Color.Gray)
+                                }
+                                IconButton(onClick = { viewModel.deletePromptStyle(style) }) {
+                                    Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error)
                                 }
                             }
+                            HorizontalDivider()
                         }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Text("Save Current as New Style", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    OutlinedTextField(
+                        value = newStyleName,
+                        onValueChange = { newStyleName = it },
+                        label = { Text("Style Name") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            if (newStyleName.isNotBlank()) {
+                                viewModel.savePromptStyle(newStyleName, state.positivePrompt, state.negativePrompt)
+                                newStyleName = ""
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.End).padding(top = 8.dp)
+                    ) {
+                        Text("Save Style")
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showHistoryDialog = false }) { Text("Close") } }
+            confirmButton = { TextButton(onClick = { showStylesDialog = false }) { Text("Close") } }
+        )
+    }
+}
+
+@Composable
+fun AppForgeSlider(
+    title: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    decimals: Int,
+    onValueChange: (Float) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, modifier = Modifier.weight(1f), fontSize = 12.sp)
+        Text(String.format(java.util.Locale.US, "%.${decimals}f", value), fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            modifier = Modifier.weight(2f)
         )
     }
 }
@@ -1039,7 +1194,7 @@ fun GenerationSettingsSection(
         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             OutlinedButton(onClick = { modelExpanded = true }, modifier = Modifier.fillMaxWidth().height(54.dp), contentPadding = PaddingValues(8.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    val currentModelResource = models.find { it.title == selectedModel }
+                    val currentModelResource = models.find { it.name == selectedModel || it.title == selectedModel }
                     if (currentModelResource != null) {
                         AsyncImage(
                             model = ImageRequest.Builder(LocalContext.current)
@@ -1051,12 +1206,12 @@ fun GenerationSettingsSection(
                             contentScale = ContentScale.Crop
                         )
                     }
-                    Text("Model: ${selectedModel.ifEmpty { "Loading..." }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
+                    Text("Model: ${currentModelResource?.title ?: selectedModel.ifEmpty { "Loading..." }}", maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp)
                 }
             }
             DropdownMenu(expanded = modelExpanded, onDismissRequest = { modelExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
                 models.forEach { mod ->
-                    val isSelected = mod.title == selectedModel
+                    val isSelected = mod.name == selectedModel || mod.title == selectedModel
                     DropdownMenuItem(
                         modifier = if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)) else Modifier,
                         text = {
@@ -1078,7 +1233,7 @@ fun GenerationSettingsSection(
                                 )
                             }
                         },
-                        onClick = { viewModel.changeCheckpoint(mod.title); modelExpanded = false }
+                        onClick = { viewModel.changeCheckpoint(mod.name); modelExpanded = false }
                     )
                 }
             }
@@ -1117,36 +1272,11 @@ fun GenerationSettingsSection(
             }
         }
 
-        ForgeSlider(
-            "Batch Count",
-            state.batchCount.toFloat(),
-            1f..100f,
-            0
-        ) { viewModel.updateState { s -> s.copy(batchCount = it.toInt()) } }
-        ForgeSlider(
-            "Batch Size",
-            state.batchSize.toFloat(),
-            1f..16f,
-            0
-        ) { viewModel.updateState { s -> s.copy(batchSize = it.toInt()) } }
-        ForgeSlider(
-            "Steps",
-            state.steps.toFloat(),
-            1f..100f,
-            0
-        ) { viewModel.updateState { s -> s.copy(steps = it.toInt()) } }
-        ForgeSlider(
-            "CFG Scale",
-            state.cfgScale,
-            1f..20f,
-            1
-        ) { viewModel.updateState { s -> s.copy(cfgScale = it) } }
-        ForgeSlider(
-            "Clip Skip",
-            state.clipSkip.toFloat(),
-            1f..3f,
-            0
-        ) { viewModel.updateState { s -> s.copy(clipSkip = it.toInt()) } }
+        AppForgeSlider("Batch Count", state.batchCount.toFloat(), 1f..100f, 0) { value: Float -> viewModel.updateState { s -> s.copy(batchCount = value.toInt()) } }
+        AppForgeSlider("Batch Size", state.batchSize.toFloat(), 1f..16f, 0) { value: Float -> viewModel.updateState { s -> s.copy(batchSize = value.toInt()) } }
+        AppForgeSlider("Steps", state.steps.toFloat(), 1f..100f, 0) { value: Float -> viewModel.updateState { s -> s.copy(steps = value.toInt()) } }
+        AppForgeSlider("CFG Scale", state.cfgScale, 1f..20f, 1) { value: Float -> viewModel.updateState { s -> s.copy(cfgScale = value) } }
+        AppForgeSlider("Clip Skip", state.clipSkip.toFloat(), 1f..3f, 0) { value: Float -> viewModel.updateState { s -> s.copy(clipSkip = value.toInt()) } }
 
         Text("Aspect Ratio", fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1180,32 +1310,8 @@ fun GenerationSettingsSection(
             }
         }
 
-        ForgeSlider(
-            "Width",
-            state.width.toFloat(),
-            256f..2048f,
-            0
-        ) {
-            viewModel.updateState { s ->
-                s.copy(
-                    width = (it.toInt() / 64) * 64,
-                    aspectRatio = "Custom"
-                )
-            }
-        }
-        ForgeSlider(
-            "Height",
-            state.height.toFloat(),
-            256f..2048f,
-            0
-        ) {
-            viewModel.updateState { s ->
-                s.copy(
-                    height = (it.toInt() / 64) * 64,
-                    aspectRatio = "Custom"
-                )
-            }
-        }
+        AppForgeSlider("Width", state.width.toFloat(), 256f..2048f, 0) { value: Float -> viewModel.updateState { s -> s.copy(width = (value.toInt() / 64) * 64, aspectRatio = "Custom") } }
+        AppForgeSlider("Height", state.height.toFloat(), 256f..2048f, 0) { value: Float -> viewModel.updateState { s -> s.copy(height = (value.toInt() / 64) * 64, aspectRatio = "Custom") } }
 
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             var samplerExpanded by remember { mutableStateOf(false) }
@@ -1218,14 +1324,7 @@ fun GenerationSettingsSection(
                         val isSelected = samp == state.sampler
                         DropdownMenuItem(
                             modifier = if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)) else Modifier,
-                            text = {
-                                Text(
-                                    text = samp,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            },
+                            text = { Text(samp, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
                             onClick = { viewModel.updateState { s -> s.copy(sampler = samp) }; samplerExpanded = false }
                         )
                     }
@@ -1242,14 +1341,7 @@ fun GenerationSettingsSection(
                         val isSelected = sched == state.scheduler
                         DropdownMenuItem(
                             modifier = if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)) else Modifier,
-                            text = {
-                                Text(
-                                    text = sched,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            },
+                            text = { Text(sched, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
                             onClick = { viewModel.updateState { s -> s.copy(scheduler = sched) }; schedulerExpanded = false }
                         )
                     }
@@ -1281,31 +1373,14 @@ fun GenerationSettingsSection(
                             val isSelected = upsc == state.upscaler
                             DropdownMenuItem(
                                 modifier = if (isSelected) Modifier.background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)) else Modifier,
-                                text = {
-                                    Text(
-                                        text = upsc,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                    )
-                                },
+                                text = { Text(upsc, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
                                 onClick = { viewModel.updateState { s -> s.copy(upscaler = upsc) }; upscalerExpanded = false }
                             )
                         }
                     }
                 }
-                ForgeSlider(
-                    "Hires Scale",
-                    state.hiresScale,
-                    1f..4f,
-                    2
-                ) { viewModel.updateState { s -> s.copy(hiresScale = it) } }
-                ForgeSlider(
-                    "Denoising",
-                    state.denoising,
-                    0f..1f,
-                    2
-                ) { viewModel.updateState { s -> s.copy(denoising = it) } }
+                AppForgeSlider("Hires Scale", state.hiresScale, 1f..4f, 2) { value: Float -> viewModel.updateState { s -> s.copy(hiresScale = value) } }
+                AppForgeSlider("Denoising", state.denoising, 0f..1f, 2) { value: Float -> viewModel.updateState { s -> s.copy(denoising = value) } }
             }
         }
     }
@@ -1320,8 +1395,6 @@ fun LorasSection(
     onOpenTagsPopup: (String, String) -> Unit
 ) {
     SectionHeader("LoRAs")
-
-    val context = LocalContext.current
 
     Column(modifier = Modifier.padding(horizontal = 12.dp)) {
         var loraExpanded by remember { mutableStateOf(false) }
@@ -1381,7 +1454,14 @@ fun LorasSection(
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(lora.name, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text(
+                                text = loraResource?.title ?: lora.name,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
 
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 IconButton(
@@ -1390,7 +1470,7 @@ fun LorasSection(
                                         if (hash != null) {
                                             onOpenTagsPopup(hash, lora.name)
                                         } else {
-                                            Toast.makeText(context, "Brak metadanych modelu. Odśwież API.", Toast.LENGTH_SHORT).show()
+                                            viewModel.showSnackbar("Brak metadanych modelu. Odśwież API.")
                                         }
                                     },
                                     modifier = Modifier.size(24.dp)
@@ -1420,6 +1500,7 @@ fun LorasSection(
     }
 }
 
+// Kompaktowy panel dedykowany dla Bottom Sheet
 @Composable
 fun BottomControlsSection(
     viewModel: ForgeViewModel,
@@ -1428,22 +1509,18 @@ fun BottomControlsSection(
     isActivelyGenerating: Boolean,
     progress: Float,
     currentEta: Double,
-    currentJobNo: Int,
-    currentJobCount: Int,
-    currentSamplingStep: Int,
-    currentSamplingSteps: Int,
-    isConnected: Boolean,
-    isRestoringPrompt: Boolean,
     onQueueClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 16.dp, start = 16.dp, end = 16.dp)
+            .navigationBarsPadding() // Zabezpieczenie przed nachodzeniem na systemowe przyciski (np. wstecz, home)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
+        // Górny rząd: Checkboxy do zarządzania miejscem zapisu
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
@@ -1452,7 +1529,7 @@ fun BottomControlsSection(
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)
                     .clip(MaterialTheme.shapes.small)
                     .clickable { viewModel.updateState { it.copy(saveImages = !state.saveImages) } }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1460,21 +1537,16 @@ fun BottomControlsSection(
                     Icon(
                         imageVector = if (state.saveImages) Icons.Default.CloudDone else Icons.Default.CloudOff,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = if (state.saveImages) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Server",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save Server", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
-                Switch(
+                Checkbox(
                     checked = state.saveImages,
                     onCheckedChange = { isChecked -> viewModel.updateState { it.copy(saveImages = isChecked) } },
-                    modifier = Modifier.height(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
 
@@ -1484,7 +1556,7 @@ fun BottomControlsSection(
                     .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)
                     .clip(MaterialTheme.shapes.small)
                     .clickable { viewModel.updateState { it.copy(saveToDevice = !state.saveToDevice) } }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1492,33 +1564,30 @@ fun BottomControlsSection(
                     Icon(
                         imageVector = Icons.Default.Save,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                         tint = if (state.saveToDevice) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Device",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Save Device", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 }
-                Switch(
+                Checkbox(
                     checked = state.saveToDevice,
                     onCheckedChange = { isChecked -> viewModel.updateState { it.copy(saveToDevice = isChecked) } },
-                    modifier = Modifier.height(24.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
 
+        // Dolny rząd: Akcje główne (Queue, Interrupt, Add)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Button(
                 onClick = onQueueClick,
-                modifier = Modifier.height(54.dp).weight(0.35f).shadow(8.dp, CircleShape),
+                modifier = Modifier.height(54.dp).weight(0.35f),
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(0.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.List, null)
@@ -1527,69 +1596,55 @@ fun BottomControlsSection(
             }
 
             if (isActivelyGenerating) {
-                val queueGen = remember { { viewModel.queueGeneration() } }
-                val interruptGen = remember { { viewModel.interruptGeneration() } }
+                Button(
+                    onClick = { viewModel.interruptGeneration() },
+                    modifier = Modifier.height(54.dp).weight(0.25f),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = "Interrupt", tint = MaterialTheme.colorScheme.onError)
+                }
+            }
 
-                Row(modifier = Modifier.weight(1.2f).height(54.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = interruptGen,
-                        modifier = Modifier.weight(0.25f).fillMaxHeight().shadow(8.dp, CircleShape),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = "Interrupt", tint = MaterialTheme.colorScheme.onError)
-                    }
-
+            Box(
+                modifier = Modifier
+                    .weight(if (isActivelyGenerating) 0.75f else 1.2f)
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isActivelyGenerating) Color.DarkGray else MaterialTheme.colorScheme.primary)
+                    .clickable(onClick = { viewModel.queueGeneration() })
+            ) {
+                if (isActivelyGenerating) {
                     Box(
                         modifier = Modifier
-                            .weight(0.75f)
                             .fillMaxHeight()
-                            .shadow(8.dp, CircleShape)
-                            .clip(CircleShape)
-                            .background(Color.DarkGray)
-                            .clickable(enabled = isConnected && !isRestoringPrompt, onClick = queueGen)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(progress.coerceIn(0f, 1f))
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            val percentage = (progress * 100).toInt()
-
-                            Text(
-                                text = "ADD TO QUEUE • $percentage%",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f))
-                            )
-
-                            val stepStr = if (currentSamplingSteps > 0) "Img ${currentJobNo + 1}/$currentJobCount | Step $currentSamplingStep/$currentSamplingSteps" else "Img ${currentJobNo + 1}/$currentJobCount | Step ${(progress * state.steps).toInt()}/${state.steps}"
-
-                            Text(
-                                text = "$stepStr | ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
-                                fontSize = 9.sp,
-                                color = Color.LightGray,
-                                style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f))
-                            )
-                        }
-                    }
+                            .fillMaxWidth(progress.coerceIn(0f, 1f))
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
                 }
-            } else {
-                val genBtn = remember { { viewModel.queueGeneration() } }
-                Button(
-                    onClick = genBtn,
-                    enabled = isConnected && !isRestoringPrompt,
-                    modifier = Modifier.height(54.dp).weight(1.2f).shadow(8.dp, CircleShape),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("GENERATE", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (isActivelyGenerating) {
+                        Text(
+                            text = "ADD TO QUEUE • ${(progress * 100).toInt()}%",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f))
+                        )
+                        Text(
+                            text = "ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
+                            fontSize = 9.sp,
+                            color = Color.LightGray,
+                            style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f))
+                        )
+                    } else {
+                        Text("ADD TO QUEUE", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    }
                 }
             }
         }
@@ -1647,7 +1702,7 @@ fun LoraTriggerDialog(
                     if (triggerWords!!.isNotEmpty()) {
                         Text("Click tags to add/remove them from your prompt:", fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
                         LazyColumn(modifier = Modifier.heightIn(max = 250.dp).fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)) {
-                            items(triggerWords!!) { word ->
+                            items(triggerWords!!) { word: String ->
                                 val isSelected = selectedWords.contains(word)
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -1661,7 +1716,7 @@ fun LoraTriggerDialog(
                             }
                         }
                     } else {
-                        Text("This LoRA has no trigger words associated with it. Do you still want to add it?", fontSize = 14.sp)
+                        Text("This LoRA has no trigger words on Civitai. Do you still want to add it?", fontSize = 14.sp)
                     }
                 }
             }
@@ -1763,34 +1818,30 @@ fun FullscreenImageViewer(
                         }
                     }
 
-                    MetadataAlertDialog(
+                    AppMetadataAlertDialog(
                         metadata = currentMetadata,
                         fileInfo = fileInfo,
                         onDismiss = { viewModel.toggleGalleryMetadata() },
                         onApplyAll = null,
-                        onApplyPrompt = { pos, neg ->
+                        onApplyPrompt = { pos: String, neg: String ->
                             viewModel.updateState {
                                 it.copy(
                                     positivePrompt = pos,
                                     negativePrompt = neg
                                 )
                             }
-                            Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("Prompts Applied")
                         },
-                        onApplyModel = { modelName ->
+                        onApplyModel = { modelName: String ->
                             viewModel.changeCheckpoint(modelName)
-                            Toast.makeText(
-                                context,
-                                "Model Applied: $modelName",
-                                Toast.LENGTH_SHORT
-                            ).show()
+                            viewModel.showSnackbar("Model Applied: $modelName")
                         },
-                        onApplyLoras = { loraList ->
-                            loraList.forEach { loraTag ->
+                        onApplyLoras = { loraList: List<String> ->
+                            loraList.forEach { loraTag: String ->
                                 val loraName = loraTag.substringAfter("<lora:").substringBefore(":")
                                 if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
                             }
-                            Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("LoRAs Applied")
                         }
                     )
                 }
@@ -1801,7 +1852,7 @@ fun FullscreenImageViewer(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MetadataAlertDialog(
+fun AppMetadataAlertDialog(
     metadata: String?,
     fileInfo: String? = null,
     onDismiss: () -> Unit,
@@ -1839,7 +1890,7 @@ fun MetadataAlertDialog(
         posPrompt = posPrompt.trim()
         negPrompt = negPrompt.trim()
 
-        Regex("<lora:([^:]+):([0-9.]+)>").findAll(posPrompt).forEach { match ->
+        PromptParser.LORA.findAll(posPrompt).forEach { match ->
             loras.add(match.value)
         }
     }

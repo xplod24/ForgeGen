@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
@@ -56,7 +55,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -65,7 +63,6 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -187,6 +184,7 @@ fun SetupScreen(
     var showProfilesDialog by remember { mutableStateOf(false) }
     var showPreviewModeDialog by remember { mutableStateOf(false) }
     var showNotificationPriorityDialog by remember { mutableStateOf(false) }
+    var showNotificationModeDialog by remember { mutableStateOf(false) }
     var showUpdateChannelDialog by remember { mutableStateOf(false) }
     var showBetaTokenDialog by remember { mutableStateOf(false) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
@@ -310,6 +308,31 @@ fun SetupScreen(
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
             /* ==========================================================
+             * CATEGORY: METADATA & CIVITAI
+             * ========================================================== */
+            item { PreferenceCategory("Metadata & Civitai") }
+            item {
+                SwitchPreference(
+                    title = "Civitai Synchronization",
+                    subtitle = "Download missing thumbnails and trigger words for models",
+                    checked = config.enableCivitaiSync,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(enableCivitaiSync = it)) }
+                )
+            }
+            item {
+                TextPreference(
+                    title = "Sync Models Now",
+                    subtitle = "Force fetching hashes and querying Civitai API",
+                    value = ""
+                ) {
+                    viewModel.showSnackbar("Synchronization started...")
+                    viewModel.fetchApiData()
+                }
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+            /* ==========================================================
              * CATEGORY: SECURITY
              * ========================================================== */
             item { PreferenceCategory("Security") }
@@ -360,7 +383,7 @@ fun SetupScreen(
                     subtitle = "Tap to auto-detect base and gallery folders from server",
                     value = ""
                 ) {
-                    Toast.makeText(context, "Requesting paths from server...", Toast.LENGTH_SHORT).show()
+                    viewModel.showSnackbar("Requesting paths from server...")
                     viewModel.fetchAutoConfig()
                 }
             }
@@ -398,6 +421,14 @@ fun SetupScreen(
                     title = "Enable Dark Mode",
                     checked = config.isDarkMode,
                     onCheckedChange = { viewModel.saveConfig(config.copy(isDarkMode = it)) }
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Expand Bottom Drawer by Default",
+                    subtitle = "Keep generation controls visible when the app starts",
+                    checked = config.bottomSheetExpandedByDefault,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(bottomSheetExpandedByDefault = it)) }
                 )
             }
             item {
@@ -464,6 +495,20 @@ fun SetupScreen(
                         viewModel.saveConfig(config.copy(notifQueueStatus = isChecked))
                     }
                 )
+            }
+            item {
+                val modeDesc = when (config.notificationMode) {
+                    "Disabled" -> "No background progress notifications"
+                    "Simple" -> "Shows overall batch progress & ETA"
+                    else -> "Shows overall batch progress & ETA"
+                }
+                TextPreference(
+                    title = "Progress Notification Mode",
+                    value = "",
+                    subtitle = "Current: ${config.notificationMode} - $modeDesc"
+                ) {
+                    showNotificationModeDialog = true
+                }
             }
             item {
                 val priorityDesc = when (config.notificationPriority) {
@@ -663,6 +708,38 @@ fun SetupScreen(
                     }
                 },
                 confirmButton = { }
+            )
+        }
+
+        if (showNotificationModeDialog) {
+            AlertDialog(
+                onDismissRequest = { showNotificationModeDialog = false },
+                title = { Text("Progress Notification Mode") },
+                text = {
+                    Column {
+                        val modes = listOf(
+                            Triple("Simple", "Simple", "Shows overall batch progress & ETA"),
+                            Triple("Disabled", "Disabled", "No background progress notifications")
+                        )
+                        modes.forEach { (internalValue, displayName, desc) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    viewModel.saveConfig(config.copy(notificationMode = internalValue))
+                                    showNotificationModeDialog = false
+                                }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(selected = config.notificationMode == internalValue, onClick = null)
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text(displayName, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    Text(desc, fontSize = 12.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showNotificationModeDialog = false }) { Text("Close") } }
             )
         }
 
@@ -1013,7 +1090,7 @@ fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
                                 // CHECKPOINT INFO
                                 val checkpoint = item.payload.override_settings.sdModelCheckpoint ?: "Default Model"
-                                val modelResource = models.find { it.title == checkpoint }
+                                val modelResource = models.find { it.name == checkpoint || it.title == checkpoint }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (modelResource != null) {
                                         AsyncImage(
@@ -1027,7 +1104,7 @@ fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         Icon(Icons.Default.Extension, null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
                                         Spacer(Modifier.width(8.dp))
                                     }
-                                    Text(checkpoint, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(modelResource?.title ?: checkpoint, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
 
                                 // LORAS
@@ -1062,7 +1139,7 @@ fun QueueScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                                         Box(modifier = Modifier.size(24.dp).background(Color.Gray).clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)))
                                                     }
                                                     Spacer(Modifier.width(4.dp))
-                                                    Text(lora.name, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 80.dp))
+                                                    Text(loraResource?.title ?: lora.name, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 80.dp))
                                                     Text(" : ${lora.strength}", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                                                 }
                                             }
@@ -1517,20 +1594,126 @@ private fun FullscreenGalleryViewer(
                         onApplyAll = null,
                         onApplyPrompt = { pos, neg ->
                             viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
-                            Toast.makeText(context, "Prompts Applied", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("Prompts Applied")
                         },
                         onApplyModel = { modelName ->
                             viewModel.changeCheckpoint(modelName)
-                            Toast.makeText(context, "Model Applied: $modelName", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("Model Applied: $modelName")
                         },
                         onApplyLoras = { loraList ->
                             loraList.forEach { loraTag ->
                                 val loraName = loraTag.substringAfter("<lora:").substringBefore(":")
                                 if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
                             }
-                            Toast.makeText(context, "LoRAs Applied", Toast.LENGTH_SHORT).show()
+                            viewModel.showSnackbar("LoRAs Applied")
                         }
                     )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun MetadataAlertDialog(
+    metadata: String?,
+    fileInfo: String? = null,
+    onDismiss: () -> Unit,
+    onApplyPrompt: (String, String) -> Unit,
+    onApplyModel: (String) -> Unit,
+    onApplyLoras: (List<String>) -> Unit,
+    onApplyAll: (() -> Unit)? = null
+) {
+    var posPrompt = ""
+    var negPrompt = ""
+    var modelName = ""
+    val loras = mutableListOf<String>()
+
+    if (metadata != null && !metadata.startsWith("Loading") && !metadata.startsWith("Failed") && !metadata.startsWith("Invalid") && !metadata.startsWith("Server")) {
+        val lines = metadata.split("\n")
+        var currentMode = 0
+        for (line in lines) {
+            if (line.startsWith("Negative prompt:")) {
+                currentMode = 1
+                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
+            } else if (line.startsWith("Steps:")) {
+                currentMode = 2
+                val params = line.split(",")
+                params.forEach { p ->
+                    val kv = p.split(":")
+                    if (kv.size >= 2 && kv[0].trim() == "Model") {
+                        modelName = kv[1].trim()
+                    }
+                }
+            } else {
+                if (currentMode == 0) posPrompt += line + "\n"
+                else if (currentMode == 1) negPrompt += line + "\n"
+            }
+        }
+        posPrompt = posPrompt.trim()
+        negPrompt = negPrompt.trim()
+
+        PromptParser.LORA.findAll(posPrompt).forEach { match ->
+            loras.add(match.value)
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Generation Data", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.padding(bottom = if (fileInfo != null) 4.dp else 8.dp))
+
+                if (fileInfo != null) {
+                    Text(fileInfo, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
+                }
+
+                Box(modifier = Modifier.weight(1f, fill = false).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small).padding(8.dp)) {
+                    Text(
+                        text = metadata ?: "Loading...",
+                        fontSize = 11.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    )
+                }
+
+                if (metadata != null && posPrompt.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (onApplyAll != null) {
+                            Button(onClick = onApplyAll, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Apply All", fontSize = 12.sp)
+                            }
+                        }
+
+                        OutlinedButton(onClick = { onApplyPrompt(posPrompt, negPrompt) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                            Text("Prompt", fontSize = 12.sp)
+                        }
+
+                        if (modelName.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyModel(modelName) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("Model", fontSize = 12.sp)
+                            }
+                        }
+
+                        if (loras.isNotEmpty()) {
+                            OutlinedButton(onClick = { onApplyLoras(loras) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
+                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Close")
                 }
             }
         }
