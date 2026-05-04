@@ -22,6 +22,7 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -56,13 +57,12 @@ import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import org.json.JSONArray
-import org.json.JSONObject
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -83,7 +83,8 @@ val Context.dataStore by preferencesDataStore(name = "forge_settings")
 
 /* ============================================================================
  * IDIOMATIC COROUTINES EXTENSIONS
- * Converts callback-based OkHttp calls to clean, suspendable coroutine functions.
+ * Rozszerzenie pozostawione wyłącznie dla pobierania surowych bajtów obrazów
+ * z pominięciem Retrofita.
  * ============================================================================ */
 
 suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
@@ -119,6 +120,37 @@ object ForgeRepository {
     private lateinit var application: Application
     private lateinit var db: ForgeDatabase
     private val gson = Gson()
+
+    // RETROFIT APIS
+    private var forgeApi: ForgeApi? = null
+
+    // Klient z Interceptorem specjalnie pod Civitai (zabezpiecza Logcat przed śmieciami z A1111)
+    private val civitaiApi: CivitaiApi by lazy {
+        val loggingInterceptor = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+        val civitaiClient = OkHttpClient.Builder()
+            .addInterceptor(loggingInterceptor)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        Retrofit.Builder()
+            .baseUrl("https://civitai.com/")
+            .client(civitaiClient)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+            .create(CivitaiApi::class.java)
+    }
+
+    private val updateApi: UpdateApi by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://xplod24.ddns.net/") // Wymagane przez Retrofit, nadpisywane przez @Url
+            .client(client)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+            .create(UpdateApi::class.java)
+    }
 
     private val CONFIG_KEY = stringPreferencesKey("config")
     private val STATE_KEY = stringPreferencesKey("last_state")
@@ -241,8 +273,9 @@ object ForgeRepository {
     private val _tagSuggestions = MutableStateFlow<List<String>>(emptyList())
     val tagSuggestions: StateFlow<List<String>> = _tagSuggestions.asStateFlow()
 
-    private val _isRestoringPrompt = MutableStateFlow(false)
-    val isRestoringPrompt: StateFlow<Boolean> = _isRestoringPrompt.asStateFlow()
+    // Używamy nowego, graficznego enuma dla animacji z MainComponents.kt
+    private val _isRestoringPrompt = MutableStateFlow(IndicatorState.IDLE)
+    val isRestoringPrompt: StateFlow<IndicatorState> = _isRestoringPrompt.asStateFlow()
 
     private val _selectedModel = MutableStateFlow("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
@@ -298,7 +331,39 @@ object ForgeRepository {
     private val _updateDownloadProgress = MutableStateFlow(0f)
     val updateDownloadProgress: StateFlow<Float> = _updateDownloadProgress.asStateFlow()
 
+    // --- CIVITAI SYNC STATES ---
+    private val _isCivitaiSyncing = MutableStateFlow(IndicatorState.IDLE)
+    val isCivitaiSyncing: StateFlow<IndicatorState> = _isCivitaiSyncing.asStateFlow()
+
+    private val _civitaiSyncCurrentModel = MutableStateFlow("")
+    val civitaiSyncCurrentModel: StateFlow<String> = _civitaiSyncCurrentModel.asStateFlow()
+
+    private val _civitaiSyncProgress = MutableStateFlow(0 to 0) // (aktualny, wszystkie)
+    val civitaiSyncProgress: StateFlow<Pair<Int, Int>> = _civitaiSyncProgress.asStateFlow()
+
+    private val _civitaiSyncLastResult = MutableStateFlow<String?>(null)
+    val civitaiSyncLastResult: StateFlow<String?> = _civitaiSyncLastResult.asStateFlow()
+
     private var isInitialized = false
+
+    private fun rebuildForgeApi(url: String) {
+        var cleanUrl = url.trimEnd('/')
+        if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+            cleanUrl = "http://$cleanUrl"
+        }
+        if (cleanUrl.isEmpty()) return
+
+        try {
+            val retrofitForge = Retrofit.Builder()
+                .baseUrl("$cleanUrl/")
+                .client(client)
+                .addConverterFactory(GsonConverterFactory.create(gson))
+                .build()
+            forgeApi = retrofitForge.create(ForgeApi::class.java)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize ForgeApi with URL: $cleanUrl", e)
+        }
+    }
 
     fun init(app: Application) {
         if (isInitialized) return
@@ -316,6 +381,7 @@ object ForgeRepository {
             _showGalleryMetadata.value = prefs[SHOW_META_KEY] ?: false
 
             client = createClient(_config.value.connectionTimeout)
+            rebuildForgeApi(_config.value.apiUrl)
 
             loadFavoritePaths()
             loadPromptStyles()
@@ -342,56 +408,41 @@ object ForgeRepository {
                 val updatePath = if (channel.equals("Beta", ignoreCase = true)) "/beta/update.json" else "/release/update.json"
                 val fullUrl = "$updateBaseUrl$updatePath"
 
-                Log.d(TAG, "--- SPRAWDZANIE AKTUALIZACJI ---")
-                Log.d(TAG, "URL: $fullUrl")
-                Log.d(TAG, "Wybrany kanał w aplikacji: $channel")
-
-                val requestBuilder = Request.Builder().url(fullUrl)
-
-                if (channel.equals("Beta", ignoreCase = true)) {
-                    val token = _config.value.betaToken
-                    if (token.isNotEmpty()) {
-                        requestBuilder.addHeader("Beta-Tester", token)
-                        Log.d(TAG, "Wstrzyknięto nagłówek Beta-Tester")
-                    } else {
+                val token = if (channel.equals("Beta", ignoreCase = true)) {
+                    val currentToken = _config.value.betaToken
+                    if (currentToken.isEmpty()) {
                         Log.w(TAG, "BRAK TOKENU BETA! Zapytanie zostanie odrzucone przez Nginx (403).")
                         if (manual) showSnackbar("Brak tokenu Beta w ustawieniach!")
                     }
-                }
+                    currentToken
+                } else null
 
-                val request = requestBuilder.build()
+                val response = updateApi.getUpdateManifest(fullUrl, token)
 
-                client.newCall(request).awaitResponse().use { response ->
-                    Log.d(TAG, "Odpowiedź serwera Nginx: ${response.code} ${response.message}")
+                if (response.isSuccessful) {
+                    val manifestDto = response.body() ?: return@launch
+                    val manifest = manifestDto.toDomain()
 
-                    if (response.isSuccessful) {
-                        val body = response.body?.string() ?: return@use
-                        Log.d(TAG, "Pobrano manifest: $body")
-                        val manifest = gson.fromJson(body, UpdateManifest::class.java)
+                    val pInfo = application.packageManager.getPackageInfo(application.packageName, 0)
+                    val currentVersionCode = if (Build.VERSION.SDK_INT >= 28) pInfo.longVersionCode.toInt() else pInfo.versionCode
 
-                        val pInfo = application.packageManager.getPackageInfo(application.packageName, 0)
-                        val currentVersionCode = if (Build.VERSION.SDK_INT >= 28) pInfo.longVersionCode.toInt() else pInfo.versionCode
+                    if (!manifest.channel.equals(channel, ignoreCase = true)) {
+                        Log.e(TAG, "BŁĄD SPÓJNOŚCI KANAŁU: Użytkownik jest na kanale '$channel', a JSON pobrany z serwera należy do kanału '${manifest.channel}'!")
+                        if (manual) showSnackbar("Błąd serwera: Znaleziono wersję ${manifest.channel} w folderze kanału $channel. Zgłoś to administratorowi.")
+                        return@launch
+                    }
 
-                        if (!manifest.channel.equals(channel, ignoreCase = true)) {
-                            Log.e(TAG, "BŁĄD SPÓJNOŚCI KANAŁU: Użytkownik jest na kanale '$channel', a JSON pobrany z serwera należy do kanału '${manifest.channel}'!")
-                            if (manual) showSnackbar("Błąd serwera: Znaleziono wersję ${manifest.channel} w folderze kanału $channel. Zgłoś to administratorowi.")
-                            return@use
-                        }
-
-                        if (manifest.versionCode > currentVersionCode) {
-                            Log.d(TAG, "Znaleziono nowszą wersję. Wyświetlam powiadomienie.")
-                            _updateManifest.value = manifest
-                            if (manual) showSnackbar("Dostępna aktualizacja: ${manifest.versionName}")
-                        } else {
-                            Log.d(TAG, "Lokalna aplikacja jest aktualna (lub nowsza od tej na serwerze).")
-                            if (manual) showSnackbar("Aplikacja jest aktualna (Lokalna: $currentVersionCode, Serwer: ${manifest.versionCode})")
-                        }
+                    if (manifest.versionCode > currentVersionCode) {
+                        _updateManifest.value = manifest
+                        if (manual) showSnackbar("Dostępna aktualizacja: ${manifest.versionName}")
                     } else {
-                        Log.e(TAG, "BŁĄD SIECI: Serwer odrzucił połączenie. Kod HTTP: ${response.code}")
-                        if (manual) {
-                            val msg = if (response.code == 403) "Odmowa dostępu (HTTP 403). Sprawdź token Beta!" else "Błąd serwera (HTTP ${response.code})"
-                            showSnackbar(msg)
-                        }
+                        if (manual) showSnackbar("Aplikacja jest aktualna (Lokalna: $currentVersionCode, Serwer: ${manifest.versionCode})")
+                    }
+                } else {
+                    Log.e(TAG, "BŁĄD SIECI: Serwer odrzucił połączenie. Kod HTTP: ${response.code()}")
+                    if (manual) {
+                        val msg = if (response.code() == 403) "Odmowa dostępu (HTTP 403). Sprawdź token Beta!" else "Błąd serwera (HTTP ${response.code()})"
+                        showSnackbar(msg)
                     }
                 }
             } catch (e: Exception) {
@@ -405,13 +456,10 @@ object ForgeRepository {
         val manifest = _updateManifest.value ?: return
         if (_isUpdateDownloading.value) return
 
-        Log.d(TAG, "--- ROZPOCZĘCIE POBIERANIA APK ---")
-
         try {
             val oldFile = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
             if (oldFile.exists()) {
-                val deleted = oldFile.delete()
-                Log.d(TAG, "Usunięto stary plik aktualizacji z pamięci (Sukces: $deleted).")
+                oldFile.delete()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Błąd podczas usuwania starego pliku APK przed nowym pobraniem", e)
@@ -458,11 +506,12 @@ object ForgeRepository {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            application.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), Context.RECEIVER_EXPORTED)
-        } else {
-            application.registerReceiver(receiver, IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE))
-        }
+        ContextCompat.registerReceiver(
+            application,
+            receiver,
+            IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+            ContextCompat.RECEIVER_EXPORTED
+        )
     }
 
     private fun verifyAndInstallApk(expectedSha256: String) {
@@ -511,8 +560,6 @@ object ForgeRepository {
             entity?.trainedWords?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
         }
     }
-
-    fun searchTags(query: String) {}
 
     private fun loadPromptStyles() {
         repositoryScope.launch(Dispatchers.IO) {
@@ -788,7 +835,7 @@ object ForgeRepository {
         } else null
 
         val oldLivePreviewState = try {
-            val jsonObj = JSONObject(json ?: "{}")
+            val jsonObj = org.json.JSONObject(json ?: "{}")
             jsonObj.optBoolean("livePreviews", false)
         } catch(_: Exception) { false }
 
@@ -798,7 +845,6 @@ object ForgeRepository {
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             serverBasePath = parsed?.serverBasePath ?: "",
             galleryPath = parsed?.galleryPath ?: "",
-            language = parsed?.language ?: "en",
             isDarkMode = parsed?.isDarkMode ?: false,
             connectionTimeout = parsed?.connectionTimeout ?: 10,
             checkpointTimeout = parsed?.checkpointTimeout ?: 45,
@@ -810,9 +856,7 @@ object ForgeRepository {
             keepScreenOn = parsed?.keepScreenOn ?: false,
             enablePersistentService = parsed?.enablePersistentService ?: false,
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
-            galleryGridColumns = parsed?.galleryGridColumns ?: 3,
             bottomSheetExpandedByDefault = parsed?.bottomSheetExpandedByDefault ?: false,
-            enableCivitaiSync = parsed?.enableCivitaiSync ?: false,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
             previewMode = finalPreviewMode,
             useNativeSecurity = parsed?.useNativeSecurity ?: false,
@@ -852,6 +896,7 @@ object ForgeRepository {
         }
 
         if (cleanUrl != oldUrl) {
+            rebuildForgeApi(cleanUrl)
             fetchApiData()
         }
     }
@@ -898,35 +943,28 @@ object ForgeRepository {
     fun fetchAutoConfig() {
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                val url = _config.value.apiUrl.trimEnd('/')
-                if (url.isEmpty()) return@launch
+                val response = forgeApi?.getGlobalSettings()
+                if (response?.isSuccessful == true) {
+                    val body = response.body()
+                    val sdCwd = body?.sdCwd ?: ""
+                    val outdirTxt2Img = body?.globalSetting?.outdirTxt2ImgSamples ?: ""
 
-                val reqGlobal = Request.Builder().url("$url/infinite_image_browsing/global_setting").build()
-                client.newCall(reqGlobal).awaitResponse().use { res ->
-                    if (res.isSuccessful) {
-                        val body = res.body?.string() ?: return@use
-                        val json = JSONObject(body)
-                        val sdCwd = json.optString("sd_cwd", "")
-                        val globalSetting = json.optJSONObject("global_setting")
-                        val outdirTxt2Img = globalSetting?.optString("outdir_txt2img_samples", "") ?: ""
+                    if (sdCwd.isNotEmpty()) {
+                        val separator = if (sdCwd.contains("\\")) "\\" else "/"
+                        val cleanOutdir = outdirTxt2Img.trimStart('/', '\\')
+                        val galleryPath = if (cleanOutdir.isNotEmpty()) "$sdCwd$separator$cleanOutdir" else sdCwd
 
-                        if (sdCwd.isNotEmpty()) {
-                            val separator = if (sdCwd.contains("\\")) "\\" else "/"
-                            val cleanOutdir = outdirTxt2Img.trimStart('/', '\\')
-                            val galleryPath = if (cleanOutdir.isNotEmpty()) "$sdCwd$separator$cleanOutdir" else sdCwd
-
-                            val newConfig = _config.value.copy(
-                                serverBasePath = sdCwd,
-                                galleryPath = galleryPath
-                            )
-                            saveConfig(newConfig)
-                            showSnackbar("Auto-config applied successfully")
-                        } else {
-                            showSnackbar("Failed to read path from server")
-                        }
+                        val newConfig = _config.value.copy(
+                            serverBasePath = sdCwd,
+                            galleryPath = galleryPath
+                        )
+                        saveConfig(newConfig)
+                        showSnackbar("Auto-config applied successfully")
                     } else {
-                        showSnackbar("Server returned HTTP ${res.code}")
+                        showSnackbar("Failed to read path from server")
                     }
+                } else {
+                    showSnackbar("Server returned HTTP ${response?.code()}")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to auto configure", e)
@@ -1033,9 +1071,7 @@ object ForgeRepository {
     fun interruptGeneration() {
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                val url = _config.value.apiUrl.trimEnd('/')
-                val request = Request.Builder().url("$url/sdapi/v1/interrupt").post("{}".toRequestBody("application/json".toMediaType())).build()
-                client.newCall(request).awaitResponse().close()
+                forgeApi?.interruptGeneration()
                 _statusText.value = "Interrupting..."
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to interrupt", e)
@@ -1107,7 +1143,7 @@ object ForgeRepository {
         val state = _appState.value
         val currentModel = _selectedModel.value.ifEmpty { null }
 
-        val payload = Txt2ImgPayload(
+        val payload = Txt2ImgPayloadDto(
             prompt = state.positivePrompt,
             negative_prompt = state.negativePrompt,
             steps = state.steps,
@@ -1119,7 +1155,7 @@ object ForgeRepository {
             seed = state.seed,
             sampler_name = state.sampler,
             scheduler = state.scheduler,
-            override_settings = OverrideSettings(
+            override_settings = OverrideSettingsDto(
                 clipSkip = state.clipSkip,
                 sdModelCheckpoint = currentModel
             ),
@@ -1231,7 +1267,8 @@ object ForgeRepository {
         _isShowingGridPreview.value = false
 
         val previewText = job.positivePrompt.take(30).replace("\n", " ")
-        _statusText.value = "Generating: \"$previewText...\""
+        val initialBatchInfo = if (job.payload.n_iter > 1) "(Batch 1 of ${job.payload.n_iter}) " else ""
+        _statusText.value = "Preparing $initialBatchInfo\"$previewText...\""
 
         val serviceIntent = Intent(application, GenerationService::class.java).apply {
             action = "ACTION_START_GENERATION"
@@ -1243,120 +1280,114 @@ object ForgeRepository {
         }
 
         try {
-            val url = _config.value.apiUrl.trimEnd('/')
-            val jsonPayload = gson.toJson(job.payload)
-            val body = jsonPayload.toRequestBody("application/json".toMediaType())
-            val request = Request.Builder().url("$url/sdapi/v1/txt2img").post(body).build()
+            val response = forgeApi?.generateImage(job.payload)
+            if (response?.isSuccessful == true) {
+                val txt2ImgData = response.body() ?: Txt2ImgResponseDto()
 
-            client.newCall(request).awaitResponse().use { response ->
-                val responseBody = response.body?.string() ?: "{}"
-                if (response.isSuccessful) {
-                    val txt2ImgData = gson.fromJson(responseBody, Txt2ImgResponse::class.java)
+                if (txt2ImgData.images.isNotEmpty()) {
+                    val currentList = _sessionImages.value.toMutableList()
+                    val startIndex = currentList.size
 
-                    if (txt2ImgData.images.isNotEmpty()) {
-                        val currentList = _sessionImages.value.toMutableList()
-                        val startIndex = currentList.size
+                    val cachePath = application.cacheDir.absolutePath
 
-                        val cachePath = application.cacheDir.absolutePath
+                    for ((i, b64) in txt2ImgData.images.withIndex()) {
+                        val bytes = Base64.decode(b64, Base64.DEFAULT)
+                        val file = File("$cachePath/gen_${System.currentTimeMillis()}_$i.png")
+                        file.writeBytes(bytes)
+                        currentList.add(file.absolutePath)
 
-                        for ((i, b64) in txt2ImgData.images.withIndex()) {
-                            val bytes = Base64.decode(b64, Base64.DEFAULT)
-                            val file = File("$cachePath/gen_${System.currentTimeMillis()}_$i.png")
-                            file.writeBytes(bytes)
-                            currentList.add(file.absolutePath)
+                        if (shouldSaveToDevice) {
+                            try {
+                                val fileName = "Gen_${System.currentTimeMillis()}_$i.png"
+                                val contentValues = ContentValues().apply {
+                                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen")
+                                }
 
-                            if (shouldSaveToDevice) {
+                                val resolver = application.contentResolver
+                                val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                                val uri = resolver.insert(insertUri, contentValues)
+
+                                if (uri != null) {
+                                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to save generated image directly to device", e)
+                            }
+                        }
+                    }
+
+                    val endIndex = currentList.size - 1
+
+                    _sessionImages.value = currentList
+                    _currentBatchStartIndex.value = startIndex
+                    _currentBatchEndIndex.value = endIndex
+                    _currentSessionIndex.value = endIndex
+                    _statusText.value = "Generation Complete"
+                    _livePreviewImage.value = null
+
+                    if (_config.value.showGridAfterGeneration && txt2ImgData.images.size > 1) {
+                        _isShowingGridPreview.value = true
+                    }
+
+                    if (_config.value.receiveGenerationNotification) {
+                        try {
+                            val notifManager = application.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            val openIntent = Intent(application, MainActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            }
+                            val pendingIntent = PendingIntent.getActivity(application, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
+                            val channelId = when (_config.value.notificationPriority) {
+                                "High" -> "forge_high"
+                                "Low" -> "forge_low"
+                                else -> "forge_default"
+                            }
+
+                            val builder = NotificationCompat.Builder(application, channelId)
+                                .setSmallIcon(R.mipmap.ic_launcher_foreground)
+                                .setContentTitle("Batch Completed")
+                                .setContentText("Finished: ${job.positivePrompt.take(35)}...")
+                                .setContentIntent(pendingIntent)
+                                .setAutoCancel(true)
+
+                            val lastImage = currentList.lastOrNull()
+                            if (lastImage != null && _config.value.notifImagePreview) {
                                 try {
-                                    val fileName = "Gen_${System.currentTimeMillis()}_$i.png"
-                                    val contentValues = ContentValues().apply {
-                                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen")
-                                    }
-
-                                    val resolver = application.contentResolver
-                                    val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                    val uri = resolver.insert(insertUri, contentValues)
-
-                                    if (uri != null) {
-                                        resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                                    val bitmap = BitmapFactory.decodeFile(lastImage)
+                                    if (bitmap != null) {
+                                        builder.setLargeIcon(bitmap)
+                                        builder.setStyle(
+                                            NotificationCompat.BigPictureStyle()
+                                                .bigPicture(bitmap)
+                                                .bigLargeIcon(null as Bitmap?)
+                                                .setBigContentTitle("Batch Completed")
+                                                .setSummaryText(job.positivePrompt.take(100))
+                                        )
                                     }
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to save generated image directly to device", e)
+                                    Log.e(TAG, "Failed to load BigPicture for notification", e)
                                 }
                             }
-                        }
 
-                        val endIndex = currentList.size - 1
-
-                        _sessionImages.value = currentList
-                        _currentBatchStartIndex.value = startIndex
-                        _currentBatchEndIndex.value = endIndex
-                        _currentSessionIndex.value = endIndex
-                        _statusText.value = "Generation Complete"
-                        _livePreviewImage.value = null
-
-                        if (_config.value.showGridAfterGeneration && txt2ImgData.images.size > 1) {
-                            _isShowingGridPreview.value = true
-                        }
-
-                        if (_config.value.receiveGenerationNotification) {
-                            try {
-                                val notifManager = application.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                                val openIntent = Intent(application, MainActivity::class.java).apply {
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                                }
-                                val pendingIntent = PendingIntent.getActivity(application, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-                                val channelId = when (_config.value.notificationPriority) {
-                                    "High" -> "forge_high"
-                                    "Low" -> "forge_low"
-                                    else -> "forge_default"
-                                }
-
-                                val builder = NotificationCompat.Builder(application, channelId)
-                                    .setSmallIcon(R.mipmap.ic_launcher_foreground)
-                                    .setContentTitle("Batch Completed")
-                                    .setContentText("Finished: ${job.positivePrompt.take(35)}...")
-                                    .setContentIntent(pendingIntent)
-                                    .setAutoCancel(true)
-
-                                val lastImage = currentList.lastOrNull()
-                                if (lastImage != null && _config.value.notifImagePreview) {
-                                    try {
-                                        val bitmap = BitmapFactory.decodeFile(lastImage)
-                                        if (bitmap != null) {
-                                            builder.setLargeIcon(bitmap)
-                                            builder.setStyle(
-                                                NotificationCompat.BigPictureStyle()
-                                                    .bigPicture(bitmap)
-                                                    .bigLargeIcon(null as Bitmap?)
-                                                    .setBigContentTitle("Batch Completed")
-                                                    .setSummaryText(job.positivePrompt.take(100))
-                                            )
-                                        }
-                                    } catch (e: Exception) {
-                                        Log.e(TAG, "Failed to load BigPicture for notification", e)
-                                    }
-                                }
-
-                                val uniqueNotifId = System.currentTimeMillis().toInt()
-                                notifManager.notify(uniqueNotifId, builder.build())
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Notification Launch Failed", e)
-                            }
+                            val uniqueNotifId = System.currentTimeMillis().toInt()
+                            notifManager.notify(uniqueNotifId, builder.build())
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Notification Launch Failed", e)
                         }
                     }
+                }
 
+            } else {
+                val errorBody = response?.errorBody()?.string() ?: ""
+                if (response?.code() == 500 || errorBody.contains("OutOfMemoryError", true) || errorBody.contains("CUDA out of memory", true)) {
+                    _statusText.value = "SERVER OUT OF MEMORY (OOM)"
+                    _isQueuePaused.value = true
+                    _oomAlert.value = true
                 } else {
-                    if (response.code == 500 || responseBody.contains("OutOfMemoryError", true) || responseBody.contains("CUDA out of memory", true)) {
-                        _statusText.value = "SERVER OUT OF MEMORY (OOM)"
-                        _isQueuePaused.value = true
-                        _oomAlert.value = true
-                    } else {
-                        _statusText.value = "Error: ${response.code}"
-                        if (!_config.value.overnightMode) _isQueuePaused.value = true
-                    }
+                    _statusText.value = "Error: ${response?.code()}"
+                    if (!_config.value.overnightMode) _isQueuePaused.value = true
                 }
             }
         } catch (e: Exception) {
@@ -1395,59 +1426,58 @@ object ForgeRepository {
             var failCount = 0
             while (isActive) {
                 try {
-                    val url = _config.value.apiUrl.trimEnd('/')
-                    if (url.isNotEmpty()) {
+                    if (forgeApi != null) {
                         val start = System.currentTimeMillis()
                         val skipImage = _config.value.previewMode != "Normal"
 
-                        val request = Request.Builder().url("$url/sdapi/v1/progress?skip_current_image=$skipImage").build()
-                        client.newCall(request).awaitResponse().use { response ->
-                            if (response.isSuccessful) {
-                                _pingMs.value = System.currentTimeMillis() - start
-                                _isConnected.value = true
-                                failCount = 0
+                        val response = forgeApi?.getProgress(skipImage)
 
-                                val body = response.body?.string()
-                                if (body != null) {
-                                    val progressData = gson.fromJson(body, ProgressResponse::class.java)
-                                    val progressVal = progressData.progress.toFloat()
-                                    val etaVal = progressData.etaRelative
-                                    val jobCount = progressData.state?.jobCount ?: 0
+                        if (response?.isSuccessful == true) {
+                            _pingMs.value = System.currentTimeMillis() - start
+                            _isConnected.value = true
+                            failCount = 0
 
-                                    val currentImageStr = progressData.currentImage ?: ""
-                                    if (currentImageStr.isNotEmpty() && !skipImage) {
-                                        _livePreviewImage.value = currentImageStr
-                                    } else {
-                                        if (!_isGenerating.value) _livePreviewImage.value = null
-                                    }
+                            val progressData = response.body() ?: ProgressResponseDto()
+                            val progressVal = progressData.progress.toFloat()
+                            val etaVal = progressData.etaRelative
+                            val jobCount = progressData.state?.jobCount ?: 0
 
-                                    val busy = progressVal > 0.001f || jobCount > 0
-                                    _isServerBusy.value = busy
-                                    _progress.value = progressVal
-                                    _currentEta.value = etaVal
-
-                                    progressData.state?.let { stateObj ->
-                                        _currentJobNo.value = stateObj.jobNo
-                                        _currentJobCount.value = stateObj.jobCount
-                                        _currentSamplingStep.value = stateObj.samplingStep
-                                        _currentSamplingSteps.value = stateObj.samplingSteps
-                                    }
-
-                                    if (busy && !_isGenerating.value) {
-                                        _statusText.value = "External Task: ${(progressVal * 100).toInt()}%"
-                                    } else if (!busy && !_isGenerating.value) {
-                                        _statusText.value = "Ready"
-                                    }
-                                }
-                            } else if (response.code == 401 || response.code == 403) {
-                                _isConnected.value = false
-                                _isServerBusy.value = false
-                                _currentEta.value = 0.0
-                                failCount = 0
-                                _statusText.value = "Authentication Required."
+                            val currentImageStr = progressData.currentImage ?: ""
+                            if (currentImageStr.isNotEmpty() && !skipImage) {
+                                _livePreviewImage.value = currentImageStr
                             } else {
-                                failCount++
+                                if (!_isGenerating.value) _livePreviewImage.value = null
                             }
+
+                            val busy = progressVal > 0.001f || jobCount > 0
+                            _isServerBusy.value = busy
+                            _progress.value = progressVal
+                            _currentEta.value = etaVal
+
+                            progressData.state?.let { stateObj ->
+                                _currentJobNo.value = stateObj.jobNo
+                                _currentJobCount.value = stateObj.jobCount
+                                _currentSamplingStep.value = stateObj.samplingStep
+                                _currentSamplingSteps.value = stateObj.samplingSteps
+                            }
+
+                            if (busy) {
+                                val jCount = progressData.state?.jobCount ?: 0
+                                val jNo = (progressData.state?.jobNo ?: 0) + 1
+                                val batchInfo = if (jCount > 1) "(Batch $jNo of $jCount) " else ""
+                                val prefix = if (_isGenerating.value) "Generating" else "External Task"
+                                _statusText.value = "$prefix $batchInfo... ${(progressVal * 100).toInt()}%"
+                            } else if (!busy && !_isGenerating.value) {
+                                _statusText.value = "Ready"
+                            }
+                        } else if (response?.code() == 401 || response?.code() == 403) {
+                            _isConnected.value = false
+                            _isServerBusy.value = false
+                            _currentEta.value = 0.0
+                            failCount = 0
+                            _statusText.value = "Authentication Required."
+                        } else {
+                            failCount++
                         }
 
                         if (failCount == 0) {
@@ -1458,33 +1488,24 @@ object ForgeRepository {
                                 var vramT = 0.0
                                 var memStr = ""
 
-                                val memReq = Request.Builder().url("$url/sdapi/v1/memory").build()
-                                client.newCall(memReq).awaitResponse().use { res ->
-                                    if (res.isSuccessful) {
-                                        val json = JSONObject(res.body?.string() ?: "{}")
+                                val memRes = forgeApi?.getMemoryStats()
+                                if (memRes?.isSuccessful == true) {
+                                    val body = memRes.body()
 
-                                        val ram = json.optJSONObject("ram")
-                                        if (ram != null) {
-                                            ramU = ram.optDouble("used", 0.0) / (1024.0 * 1024.0 * 1024.0)
-                                            ramT = ram.optDouble("total", 0.0) / (1024.0 * 1024.0 * 1024.0)
-                                            if (ramT > 0) {
-                                                memStr += "RAM: ${String.format(Locale.US, "%.1f", ramU)}/${String.format(Locale.US, "%.1f", ramT)}GB"
-                                            }
-                                        }
-
-                                        val cuda = json.optJSONObject("cuda")
-                                        val system = cuda?.optJSONObject("system")
-                                        if (system != null) {
-                                            vramU = system.optDouble("used", 0.0) / (1024.0 * 1024.0 * 1024.0)
-                                            vramT = system.optDouble("total", 0.0) / (1024.0 * 1024.0 * 1024.0)
-                                            if (vramT > 0) {
-                                                val vramStr = "VRAM: ${String.format(Locale.US, "%.1f", vramU)}/${String.format(Locale.US, "%.1f", vramT)}GB"
-                                                memStr += if (memStr.isNotEmpty()) " | $vramStr" else vramStr
-                                            }
-                                        }
-
-                                        _vramUsage.value = memStr.ifEmpty { null }
+                                    ramU = (body?.ram?.used ?: 0.0) / (1024.0 * 1024.0 * 1024.0)
+                                    ramT = (body?.ram?.total ?: 0.0) / (1024.0 * 1024.0 * 1024.0)
+                                    if (ramT > 0) {
+                                        memStr += "RAM: ${String.format(Locale.US, "%.1f", ramU)}/${String.format(Locale.US, "%.1f", ramT)}GB"
                                     }
+
+                                    vramU = (body?.cuda?.system?.used ?: 0.0) / (1024.0 * 1024.0 * 1024.0)
+                                    vramT = (body?.cuda?.system?.total ?: 0.0) / (1024.0 * 1024.0 * 1024.0)
+                                    if (vramT > 0) {
+                                        val vramStr = "VRAM: ${String.format(Locale.US, "%.1f", vramU)}/${String.format(Locale.US, "%.1f", vramT)}GB"
+                                        memStr += if (memStr.isNotEmpty()) " | $vramStr" else vramStr
+                                    }
+
+                                    _vramUsage.value = memStr.ifEmpty { null }
                                 }
 
                                 val record = ServerStatRecord(
@@ -1555,6 +1576,8 @@ object ForgeRepository {
                     _currentImageMetadata.value = "Invalid URL."
                     return@launch
                 }
+
+                // Zachowane pobieranie czystych bajtów OkHttp dla bezproblemowej ekstrakcji chunków PNG
                 val imgReq = Request.Builder().url(imageUrl).build()
                 var imgBytes: ByteArray? = null
                 client.newCall(imgReq).awaitResponse().use { res ->
@@ -1576,35 +1599,11 @@ object ForgeRepository {
         }
     }
 
-    fun loadMetadataForLocalFile(filePath: String) {
-        _currentImageMetadata.value = "Loading metadata..."
-        repositoryScope.launch(Dispatchers.IO) {
-            try {
-                val file = File(filePath)
-                if (!file.exists()) {
-                    _currentImageMetadata.value = "File not found locally."
-                    return@launch
-                }
-
-                val bytes = file.readBytes()
-                val infoStr = extractPngParameters(bytes)
-
-                _currentImageMetadata.value = if (infoStr.isNotBlank()) infoStr else "No generation data found."
-            } catch (e: Exception) {
-                _currentImageMetadata.value = "Failed: ${e.message}"
-            }
-        }
-    }
-
     fun changeCheckpoint(modelTitle: String) {
         _selectedModel.value = modelTitle
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                val url = _config.value.apiUrl.trimEnd('/')
-                val payload = JSONObject().apply { put("sd_model_checkpoint", modelTitle) }
-                val body = payload.toString().toRequestBody("application/json".toMediaType())
-                val req = Request.Builder().url("$url/sdapi/v1/options").post(body).build()
-                client.newCall(req).awaitResponse().close()
+                forgeApi?.setOptions(OptionsPayloadDto(modelTitle))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to switch model", e)
             }
@@ -1642,13 +1641,17 @@ object ForgeRepository {
         val list = mutableListOf<GalleryItem>()
         if (json.isEmpty()) return list
         try {
-            val fileList = gson.fromJson(json, GalleryFileList::class.java)
-            if (fileList?.files != null) list.addAll(fileList.files)
+            val fileList = gson.fromJson(json, GalleryFileListDto::class.java)
+            if (fileList?.files != null) {
+                list.addAll(fileList.files.map { it.toDomain() })
+            }
         } catch (_: Exception) {
             try {
-                val type = object : TypeToken<List<GalleryItem>>() {}.type
-                val arrayItems = gson.fromJson<List<GalleryItem>>(json, type)
-                if (arrayItems != null) list.addAll(arrayItems)
+                val type = object : TypeToken<List<GalleryItemDto>>() {}.type
+                val arrayItems = gson.fromJson<List<GalleryItemDto>>(json, type)
+                if (arrayItems != null) {
+                    list.addAll(arrayItems.map { it.toDomain() })
+                }
             } catch (e2: Exception) {
                 Log.e(TAG, "Failed to parse gallery items. JSON: $json", e2)
             }
@@ -1657,24 +1660,19 @@ object ForgeRepository {
     }
 
     private suspend fun fetchLastGeneratedImageInfo(): String? {
-        val urlStr = _config.value.apiUrl.trimEnd('/')
         val rootPath = _config.value.galleryPath
 
         suspend fun fetchFiles(folder: String): List<GalleryItem> {
-            val builder = urlStr.toHttpUrlOrNull()?.newBuilder()
-                ?.addPathSegments("infinite_image_browsing/files")
-            if (folder.isNotEmpty() && folder != "Root") {
-                builder?.addQueryParameter("folder_path", folder)
-            }
-            val url = builder?.build() ?: return emptyList()
-
-            client.newCall(Request.Builder().url(url).build()).awaitResponse().use { response ->
-                val responseBody = response.body?.string() ?: ""
-                if (response.isSuccessful) {
+            try {
+                val response = forgeApi?.getGalleryFiles(folderPath = if (folder.isNotEmpty() && folder != "Root") folder else null)
+                if (response?.isSuccessful == true) {
+                    val responseBody = response.body()?.string() ?: ""
                     return parseGalleryItems(responseBody)
-                } else if (response.code == 400 && folder.isNotEmpty() && folder != "Root") {
+                } else if (response?.code() == 400 && folder.isNotEmpty() && folder != "Root") {
                     return fetchFiles("Root")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Fetch Last Generated files error", e)
             }
             return emptyList()
         }
@@ -1731,8 +1729,8 @@ object ForgeRepository {
     }
 
     fun recoverLastPrompt() {
-        if (_isRestoringPrompt.value) return
-        _isRestoringPrompt.value = true
+        if (_isRestoringPrompt.value != IndicatorState.IDLE) return
+        _isRestoringPrompt.value = IndicatorState.LOADING
 
         repositoryScope.launch(Dispatchers.IO) {
             try {
@@ -1740,18 +1738,20 @@ object ForgeRepository {
                 if (infoStr != null) {
                     withContext(Dispatchers.Main) {
                         parseAndApplyPngInfo(infoStr)
-                        _isRestoringPrompt.value = false
                     }
+                    _isRestoringPrompt.value = IndicatorState.SUCCESS
                 } else {
                     updateState { _lastPromptState.value.copy() }
                     showSnackbar("Used local cache (No images found in gallery)")
-                    _isRestoringPrompt.value = false
+                    _isRestoringPrompt.value = IndicatorState.SUCCESS
                 }
             } catch (_: Exception) {
                 updateState { _lastPromptState.value.copy() }
                 showSnackbar("Used local cache (Network error)")
-                _isRestoringPrompt.value = false
+                _isRestoringPrompt.value = IndicatorState.ERROR
             }
+            delay(1500)
+            _isRestoringPrompt.value = IndicatorState.IDLE
         }
     }
 
@@ -1789,18 +1789,21 @@ object ForgeRepository {
     }
 
     fun recoverPromptFromImage(item: GalleryItem) {
-        if (_isRestoringPrompt.value) return
-        _isRestoringPrompt.value = true
+        if (_isRestoringPrompt.value != IndicatorState.IDLE) return
+        _isRestoringPrompt.value = IndicatorState.LOADING
 
         repositoryScope.launch(Dispatchers.IO) {
             try {
                 val imageUrl = getGalleryImageUrl(item)
                 if (imageUrl.isEmpty()) {
                     showSnackbar("Invalid Image URL")
-                    _isRestoringPrompt.value = false
+                    _isRestoringPrompt.value = IndicatorState.ERROR
+                    delay(1500)
+                    _isRestoringPrompt.value = IndicatorState.IDLE
                     return@launch
                 }
 
+                // Zachowane pobieranie surowych bajtów OkHttp dla wydajności przy plikach binarnych
                 val imgReq = Request.Builder().url(imageUrl).build()
                 var imgBytes: ByteArray? = null
 
@@ -1816,18 +1819,19 @@ object ForgeRepository {
                     saveRecoveredImageToCache(bytes)
                     withContext(Dispatchers.Main) {
                         parseAndApplyPngInfo(infoStr)
-                        _isRestoringPrompt.value = false
                     }
-                    return@launch
+                    _isRestoringPrompt.value = IndicatorState.SUCCESS
+                } else {
+                    showSnackbar("Failed to extract data")
+                    _isRestoringPrompt.value = IndicatorState.ERROR
                 }
-
-                showSnackbar("Failed to extract data")
-                _isRestoringPrompt.value = false
             } catch (e: Exception) {
                 Log.e(TAG, "Network error", e)
                 showSnackbar("Network error")
-                _isRestoringPrompt.value = false
+                _isRestoringPrompt.value = IndicatorState.ERROR
             }
+            delay(1500)
+            _isRestoringPrompt.value = IndicatorState.IDLE
         }
     }
 
@@ -1887,203 +1891,132 @@ object ForgeRepository {
     }
 
     /* ============================================================================
-     * DATA SYNCHRONIZATION (CIVITAI / CUSTOM API / A1111)
+     * DATA SYNCHRONIZATION (CUSTOM API / A1111)
+     * Pobiera tylko hasze/nazwy lokalnie, nie wykonuje długich operacji sieciowych na zewnątrz.
      * ============================================================================ */
 
     fun fetchApiData() {
         repositoryScope.launch(Dispatchers.IO) {
-            val url = _config.value.apiUrl.trimEnd('/')
-            if (url.isEmpty()) return@launch
+            if (forgeApi == null) return@launch
 
             // Pobranie sd_cwd w tle
             launch {
                 try {
-                    val reqGlobal = Request.Builder().url("$url/infinite_image_browsing/global_setting").build()
-                    client.newCall(reqGlobal).awaitResponse().use { res ->
-                        if (res.isSuccessful) {
-                            val bodyStr = res.body?.string() ?: "{}"
-                            val sdCwd = JSONObject(bodyStr).optString("sd_cwd", "")
-                            if (sdCwd.isNotEmpty() && _config.value.serverBasePath != sdCwd) {
-                                _config.update { it.copy(serverBasePath = sdCwd) }
-                                saveConfig(_config.value)
-                            }
+                    val response = forgeApi?.getGlobalSettings()
+                    if (response?.isSuccessful == true) {
+                        val sdCwd = response.body()?.sdCwd ?: ""
+                        if (sdCwd.isNotEmpty() && _config.value.serverBasePath != sdCwd) {
+                            _config.update { it.copy(serverBasePath = sdCwd) }
+                            saveConfig(_config.value)
                         }
                     }
                 } catch(e: Exception) { /* ignore silently */ }
             }
 
             try {
-                val listType = object : TypeToken<List<NameResponse>>() {}.type
-
                 coroutineScope {
-                    // Opcje standardowe Automatic1111 (szybkie)
-                    val defs = listOf("samplers", "schedulers", "upscalers").map { endpoint ->
-                        async {
-                            try {
-                                val request = Request.Builder().url("$url/sdapi/v1/$endpoint").build()
-                                client.newCall(request).awaitResponse().use { res ->
-                                    if (res.isSuccessful) {
-                                        val list = gson.fromJson<List<NameResponse>>(res.body?.string() ?: "[]", listType).map { it.name }
-                                        when(endpoint) {
-                                            "samplers" -> _samplers.value = list
-                                            "schedulers" -> _schedulers.value = list
-                                            "upscalers" -> _upscalers.value = list
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) { Log.e(TAG, "Failed $endpoint", e) }
-                        }
+                    val defSamplers = async {
+                        try {
+                            val res = forgeApi?.getSamplers()
+                            if (res?.isSuccessful == true) {
+                                _samplers.value = res.body()?.map { it.name } ?: emptyList()
+                            }
+                        } catch (e: Exception) { Log.e(TAG, "Failed samplers", e) }
                     }
 
-                    // Modele: Potężny cykl Custom API -> Room DB -> Civitai Fallback
+                    val defSchedulers = async {
+                        try {
+                            val res = forgeApi?.getSchedulers()
+                            if (res?.isSuccessful == true) {
+                                _schedulers.value = res.body()?.map { it.name } ?: emptyList()
+                            }
+                        } catch (e: Exception) { Log.e(TAG, "Failed schedulers", e) }
+                    }
+
+                    val defUpscalers = async {
+                        try {
+                            val res = forgeApi?.getUpscalers()
+                            if (res?.isSuccessful == true) {
+                                _upscalers.value = res.body()?.map { it.name } ?: emptyList()
+                            }
+                        } catch (e: Exception) { Log.e(TAG, "Failed upscalers", e) }
+                    }
+
                     val defModelsAndLoras = async {
                         var customApiSuccess = false
                         try {
-                            val customApiReq = Request.Builder().url("$url/custom-api/v1/all-models-hashes").build()
-                            client.newCall(customApiReq).awaitResponse().use { res ->
-                                if (res.isSuccessful) {
-                                    val bodyStr = res.body?.string() ?: "{}"
-                                    val json = JSONObject(bodyStr)
-                                    val modelsArray = json.optJSONArray("models") ?: JSONArray()
+                            val customRes = forgeApi?.getCustomModelsHashes()
+                            if (customRes?.isSuccessful == true) {
+                                val modelsList = customRes.body()?.models ?: emptyList()
 
-                                    val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-                                    val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
+                                val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                                val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
+                                val parsedApiModels = mutableListOf<CustomApiModelDto>()
 
-                                    data class TempModel(val type: String, val name: String, val filename: String, val sha256: String)
-                                    val parsedApiModels = mutableListOf<TempModel>()
+                                for (item in modelsList) {
+                                    val type = item.type ?: ""
+                                    val name = item.name ?: ""
+                                    val filename = item.filename ?: ""
+                                    val sha256 = item.sha256 ?: ""
 
-                                    for (i in 0 until modelsArray.length()) {
-                                        val item = modelsArray.getJSONObject(i)
-                                        val type = item.optString("type")
-                                        val name = item.optString("name")
-                                        val filename = item.optString("filename")
-                                        val sha256 = item.optString("sha256")
+                                    if (sha256.isEmpty()) continue
+                                    parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
 
-                                        if (sha256.isEmpty()) continue
-                                        parsedApiModels.add(TempModel(type, name, filename, sha256))
-
-                                        // Weryfikacja brakujących modeli względem bazy Room i opcjonalne pobieranie z Civitai
-                                        if (!localDbModels.containsKey(sha256)) {
-                                            var civName = name
-                                            val civType = type // Wymuszamy typ lokalny by uniknąć problemów z dziwnymi nazwami kategorii na Civitai
-                                            var trainedWords = ""
-                                            var previewImage: String? = null
-
-                                            if (_config.value.enableCivitaiSync) {
-                                                delay(500) // Zabezpieczenie przed błędem 429 Civitai API (Throttle)
-                                                try {
-                                                    Log.d(TAG, "Civitai Request: $sha256")
-                                                    val civReq = Request.Builder().url("https://civitai.com/api/v1/model-versions/by-hash/$sha256").build()
-                                                    client.newCall(civReq).awaitResponse().use { civRes ->
-                                                        if (civRes.isSuccessful) {
-                                                            val civBody = civRes.body?.string() ?: "{}"
-                                                            Log.d(TAG, "Civitai Response: ${civBody.take(250)}...")
-
-                                                            val civJson = JSONObject(civBody)
-
-                                                            val modelObj = civJson.optJSONObject("model")
-                                                            if (modelObj != null) {
-                                                                civName = modelObj.optString("name", name)
-                                                            }
-
-                                                            val wordsArr = civJson.optJSONArray("trainedWords")
-                                                            if (wordsArr != null) {
-                                                                val wList = mutableListOf<String>()
-                                                                for (w in 0 until wordsArr.length()) wList.add(wordsArr.getString(w))
-                                                                trainedWords = wList.joinToString(", ")
-                                                            }
-
-                                                            val imgArr = civJson.optJSONArray("images")
-                                                            if (imgArr != null && imgArr.length() > 0) {
-                                                                // Optymalizacja rozmiaru obrazka do cache'owania przez Coil
-                                                                previewImage = imgArr.getJSONObject(0).optString("url", "").replace("original=true", "original=false")
-                                                            }
-                                                        } else {
-                                                            Log.w(TAG, "Civitai API zwróciło błąd ${civRes.code} dla haszu $sha256")
-                                                        }
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Log.e(TAG, "Civitai API fetch error for $sha256", e)
-                                                }
-                                            }
-
-                                            newModelsToInsert.add(CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage))
-                                        }
+                                    // Dodajemy tylko szczątkowe informacje by model był widoczny.
+                                    // Prawdziwe dane z Civitai zostaną dociągnięte ręcznie w syncCivitaiModelsManual()
+                                    if (!localDbModels.containsKey(sha256)) {
+                                        newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
                                     }
-
-                                    if (newModelsToInsert.isNotEmpty()) {
-                                        db.civitaiModelDao().insertModels(newModelsToInsert)
-                                    }
-
-                                    // Ponowny odczyt bazy (teraz zsynchronizowanej) i budowanie ostatecznych StateFlow
-                                    val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                                    val checkpoints = parsedApiModels.filter { it.type == "checkpoint" }.map { cam ->
-                                        val dbEntity = updatedDbModels[cam.sha256]
-                                        ApiResource(
-                                            title = dbEntity?.name ?: cam.name, // Wyświetla dłuższą nazwę z Civitai w UI
-                                            name = cam.name, // KRYTYCZNE: Wysyła oryginalną nazwę pliku do A1111/Forge
-                                            path = dbEntity?.previewImage ?: cam.filename, // Link do obrazka (Civitai lub Fallback)
-                                            hash = cam.sha256
-                                        )
-                                    }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                    val loras = parsedApiModels.filter { it.type == "lora" }.map { cam ->
-                                        val dbEntity = updatedDbModels[cam.sha256]
-                                        ApiResource(
-                                            title = dbEntity?.name ?: cam.name,
-                                            name = cam.name,
-                                            path = dbEntity?.previewImage ?: cam.filename,
-                                            hash = cam.sha256
-                                        )
-                                    }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                    _models.value = checkpoints
-                                    _availableLoras.value = loras
-                                    customApiSuccess = true
-                                } else {
-                                    Log.w(TAG, "Custom API not found (HTTP ${res.code}). Fallback initiated.")
-                                    showSnackbar("Custom API missing. Falling back to standard models.")
                                 }
+
+                                if (newModelsToInsert.isNotEmpty()) {
+                                    db.civitaiModelDao().insertModels(newModelsToInsert)
+                                }
+
+                                val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+
+                                val checkpoints = parsedApiModels.filter { it.type == "checkpoint" }.map { cam ->
+                                    val dbEntity = updatedDbModels[cam.sha256]
+                                    ApiResource(
+                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                        name = cam.name ?: "Unknown",
+                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
+                                        hash = cam.sha256
+                                    )
+                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                val loras = parsedApiModels.filter { it.type == "lora" }.map { cam ->
+                                    val dbEntity = updatedDbModels[cam.sha256]
+                                    ApiResource(
+                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                        name = cam.name ?: "Unknown",
+                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
+                                        hash = cam.sha256
+                                    )
+                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                _models.value = checkpoints
+                                _availableLoras.value = loras
+                                customApiSuccess = true
+                            } else {
+                                Log.w(TAG, "Custom API not found (HTTP ${customRes?.code()}). Fallback initiated.")
+                                showSnackbar("Custom API missing. Falling back to standard models.")
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Custom API fetch failed", e)
                             showSnackbar("Failed to reach Custom API. Falling back.")
                         }
 
-                        // --- BEZPIECZNY FALLBACK DO STANDARDOWYCH ENDPOINTÓW ---
                         if (!customApiSuccess) {
                             try {
-                                val modelReq = Request.Builder().url("$url/sdapi/v1/sd-models").build()
-                                client.newCall(modelReq).awaitResponse().use { res ->
-                                    if (res.isSuccessful) {
-                                        val type = object : TypeToken<List<SdModelItem>>() {}.type
-                                        val sdModels = gson.fromJson<List<SdModelItem>>(res.body?.string() ?: "[]", type)
-                                        _models.value = sdModels.map {
-                                            ApiResource(title = it.title, path = it.filename ?: "", name = it.modelName, hash = null)
-                                        }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-                                    }
+                                val modelRes = forgeApi?.getSdModels()
+                                if (modelRes?.isSuccessful == true) {
+                                    _models.value = modelRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) } ?: emptyList()
                                 }
 
-                                val loraReq = Request.Builder().url("$url/sdapi/v1/loras").build()
-                                client.newCall(loraReq).awaitResponse().use { res ->
-                                    if (res.isSuccessful) {
-                                        val bodyStr = res.body?.string() ?: "[]"
-                                        val jsonArray = JSONArray(bodyStr)
-                                        val parsedLoras = mutableListOf<ApiResource>()
-
-                                        for (i in 0 until jsonArray.length()) {
-                                            val itemObj = jsonArray.getJSONObject(i)
-                                            val name = itemObj.optString("name", "Unknown")
-                                            val path = itemObj.optString("path", "")
-                                            val meta = itemObj.optJSONObject("metadata")
-
-                                            val hash = meta?.optString("sshs_model_hash")?.takeIf { it.isNotEmpty() } ?: name
-
-                                            parsedLoras.add(ApiResource(title = name, path = path, name = name, hash = hash))
-                                        }
-                                        _availableLoras.value = parsedLoras.sortedBy { it.title.lowercase(Locale.getDefault()) }
-                                    }
+                                val loraRes = forgeApi?.getLoras()
+                                if (loraRes?.isSuccessful == true) {
+                                    _availableLoras.value = loraRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) } ?: emptyList()
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Fallback API fetch failed", e)
@@ -2094,20 +2027,142 @@ object ForgeRepository {
 
                     val defOpts = async {
                         try {
-                            val reqOpts = Request.Builder().url("$url/sdapi/v1/options").build()
-                            client.newCall(reqOpts).awaitResponse().use { res ->
-                                if (res.isSuccessful) {
-                                    val optionsData = gson.fromJson(res.body?.string() ?: "{}", OptionsResponse::class.java)
-                                    _selectedModel.value = optionsData.sdModelCheckpoint ?: ""
-                                }
+                            val res = forgeApi?.getOptions()
+                            if (res?.isSuccessful == true) {
+                                _selectedModel.value = res.body()?.sdModelCheckpoint ?: ""
                             }
                         } catch (e: Exception) { Log.e(TAG, "Failed options", e) }
                     }
 
-                    awaitAll(*defs.toTypedArray(), defModelsAndLoras, defOpts)
+                    awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to synchronize API definitions: ${e.message}")
+            }
+        }
+    }
+
+    /* ============================================================================
+     * MANUAL CIVITAI SYNCHRONIZATION
+     * Ręczne, dedykowane pobieranie metadanych z Civitai z wbudowanym pop-upem
+     * oraz weryfikacją postępu. Zabezpieczone 5-sekundowym interwałem.
+     * ============================================================================ */
+
+    fun syncCivitaiModelsManual() {
+        if (_isCivitaiSyncing.value != IndicatorState.IDLE) return
+
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                println("[CivitaiSync] --- ROZPOCZĘCIE SYNCHRONIZACJI Z CIVITAI ---")
+                _isCivitaiSyncing.value = IndicatorState.LOADING
+                _civitaiSyncLastResult.value = null
+
+                val customRes = forgeApi?.getCustomModelsHashes()
+                if (customRes?.isSuccessful != true) {
+                    _civitaiSyncLastResult.value = "Błąd: Brak Custom API na serwerze Forge."
+                    println("[CivitaiSync] Błąd: Serwer nie posiada odpowiedniego Custom API (HTTP ${customRes?.code()})")
+                    _isCivitaiSyncing.value = IndicatorState.ERROR
+                    delay(3000)
+                    _isCivitaiSyncing.value = IndicatorState.IDLE
+                    return@launch
+                }
+
+                val modelsList = customRes.body()?.models ?: emptyList()
+                val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+
+                println("[CivitaiSync] Odczytano ${modelsList.size} modeli z serwera Forge.")
+
+                // Szukamy modeli, które zostały dodane lokalnie, ale nie mają obrazka i słów kluczowych (czyli wymagają ściągnięcia z Civitai)
+                val missingOrIncomplete = modelsList.filter { item ->
+                    val sha = item.sha256 ?: return@filter false
+                    val entity = localDbModels[sha]
+                    entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
+                }
+
+                if (missingOrIncomplete.isEmpty()) {
+                    _civitaiSyncLastResult.value = "Wszystkie modele są już zsynchronizowane!"
+                    println("[CivitaiSync] Zakończono: Wszystkie modele posiadają już zapisane metadane.")
+                    _isCivitaiSyncing.value = IndicatorState.SUCCESS
+                    delay(2000)
+                    _isCivitaiSyncing.value = IndicatorState.IDLE
+                    return@launch
+                }
+
+                println("[CivitaiSync] Znaleziono ${missingOrIncomplete.size} modeli oczekujących na pobranie metadanych.")
+                _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
+
+                var hasError = false
+
+                for ((index, cam) in missingOrIncomplete.withIndex()) {
+                    var civName = cam.name ?: "Unknown"
+                    val civType = cam.type ?: "checkpoint"
+                    val sha256 = cam.sha256 ?: continue
+                    var trainedWords = ""
+                    var previewImage: String? = null
+
+                    _civitaiSyncCurrentModel.value = civName
+                    _civitaiSyncProgress.value = index to missingOrIncomplete.size
+
+                    // Ochrona przed banem IP od Civitai. Zawsze 5 sekund odstępu między żądaniami.
+                    if (index > 0) delay(5000) else delay(500)
+
+                    println("[CivitaiSync] [$index/${missingOrIncomplete.size}] Pobieranie dla haszu: $sha256 ($civName)")
+
+                    try {
+                        val civRes = civitaiApi.getModelByHash(sha256)
+                        if (civRes.isSuccessful) {
+                            val civBody = civRes.body()
+                            if (civBody?.model != null) {
+                                civName = civBody.model.name ?: civName
+                            }
+                            trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
+                            if (!civBody?.images.isNullOrEmpty()) {
+                                previewImage = civBody?.images?.firstOrNull()?.url?.replace("original=true", "original=false")
+                            }
+                            _civitaiSyncLastResult.value = "Pobrano pomyślnie"
+
+                            println("[CivitaiSync] SUKCES dla $sha256:")
+                            println("[CivitaiSync]  - Parsowana Nazwa: $civName")
+                            println("[CivitaiSync]  - Parsowane Tagi: $trainedWords")
+                            println("[CivitaiSync]  - Parsowane URL Zdjęcia: $previewImage")
+
+                            Log.d(TAG, "Civitai Success for $sha256")
+                        } else {
+                            _civitaiSyncLastResult.value = "Błąd: HTTP ${civRes.code()}"
+                            println("[CivitaiSync] BŁĄD HTTP: ${civRes.code()} dla haszu $sha256")
+                            Log.w(TAG, "Civitai API zwróciło błąd ${civRes.code()} dla haszu $sha256")
+                            hasError = true
+                        }
+                    } catch (e: Exception) {
+                        _civitaiSyncLastResult.value = "Błąd sieci"
+                        println("[CivitaiSync] WYJĄTEK podczas pobierania dla $sha256: ${e.message}")
+                        Log.e(TAG, "Civitai API fetch error for $sha256", e)
+                        hasError = true
+                    }
+
+                    // Nadpisanie encji w bazie nowymi danymi z Civitai (albo pozostawienie samej nazwy, jeśli pobieranie się nie powiodło)
+                    val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
+                    db.civitaiModelDao().insertModels(listOf(updatedEntity))
+
+                    _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
+                }
+
+                _civitaiSyncLastResult.value = "Synchronizacja pomyślnie zakończona"
+                println("[CivitaiSync] --- ZAKOŃCZONO SYNCHRONIZACJĘ ---")
+
+                fetchApiData()
+
+                _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
+                delay(2000)
+                _isCivitaiSyncing.value = IndicatorState.IDLE
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Sync error", e)
+                println("[CivitaiSync] KRYTYCZNY BŁĄD PĘTLI SYNCHRONIZACJI: ${e.message}")
+                _civitaiSyncLastResult.value = "Wystąpił krytyczny błąd"
+                _isCivitaiSyncing.value = IndicatorState.ERROR
+                delay(3000)
+                _isCivitaiSyncing.value = IndicatorState.IDLE
             }
         }
     }
@@ -2135,45 +2190,29 @@ object ForgeRepository {
                     return@launch
                 }
 
-                val baseUrlStr = _config.value.apiUrl.trimEnd('/')
-                val builder = baseUrlStr.toHttpUrlOrNull()?.newBuilder()
-                    ?.addPathSegments("infinite_image_browsing/files")
+                val targetFolder = if (path.isNotEmpty() && path != "Root") path else null
+                val response = forgeApi?.getGalleryFiles(folderPath = targetFolder)
 
-                if (path.isNotEmpty() && path != "Root") {
-                    builder?.addQueryParameter("folder_path", path)
-                }
+                if (response?.isSuccessful == true) {
+                    val responseBody = response.body()?.string() ?: ""
+                    val allItems = parseGalleryItems(responseBody).sortedWith(compareBy({ !it.isDir }, { it.name })).toMutableList()
 
-                val url = builder?.build() ?: throw Exception("Invalid API URL format")
-                val request = Request.Builder().url(url).build()
-
-                client.newCall(request).awaitResponse().use { response ->
-                    val responseBody = response.body?.string() ?: ""
-                    when {
-                        response.isSuccessful -> {
-                            val allItems = parseGalleryItems(responseBody).sortedWith(compareBy({ !it.isDir }, { it.name })).toMutableList()
-
-                            if (path == "Root" || path == _config.value.galleryPath) {
-                                allItems.add(0, GalleryItem(
-                                    name = "⭐ Favorites",
-                                    fullpath = "virtual://favorites",
-                                    type = "dir"
-                                ))
-                            }
-
-                            _galleryFiles.value = allItems
-                            _currentGalleryPath.value = path
-                        }
-                        response.code == 400 && path.isNotEmpty() && path != "Root" -> {
-                            fetchGalleryFolder("Root")
-                            return@launch
-                        }
-                        response.code == 401 || response.code == 403 -> {
-                            _galleryError.value = "Authentication Required."
-                        }
-                        else -> {
-                            _galleryError.value = "Server returned Error ${response.code}"
-                        }
+                    if (path == "Root" || path == _config.value.galleryPath) {
+                        allItems.add(0, GalleryItem(
+                            name = "⭐ Favorites",
+                            fullpath = "virtual://favorites",
+                            type = "dir"
+                        ))
                     }
+
+                    _galleryFiles.value = allItems
+                    _currentGalleryPath.value = path
+                } else if (response?.code() == 400 && path.isNotEmpty() && path != "Root") {
+                    fetchGalleryFolder("Root")
+                } else if (response?.code() == 401 || response?.code() == 403) {
+                    _galleryError.value = "Authentication Required."
+                } else {
+                    _galleryError.value = "Server returned Error ${response?.code()}"
                 }
             } catch (e: Exception) {
                 _galleryError.value = e.message ?: "Failed to reach server."

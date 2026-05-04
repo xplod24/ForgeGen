@@ -54,7 +54,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.datastore.preferences.core.edit
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -69,7 +68,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import java.io.File
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING & FRAMES)
@@ -312,21 +310,12 @@ fun SetupScreen(
              * ========================================================== */
             item { PreferenceCategory("Metadata & Civitai") }
             item {
-                SwitchPreference(
-                    title = "Civitai Synchronization",
-                    subtitle = "Download missing thumbnails and trigger words for models",
-                    checked = config.enableCivitaiSync,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(enableCivitaiSync = it)) }
-                )
-            }
-            item {
                 TextPreference(
                     title = "Sync Models Now",
-                    subtitle = "Force fetching hashes and querying Civitai API",
+                    subtitle = "Fetch missing thumbnails and trigger words from Civitai API",
                     value = ""
                 ) {
-                    viewModel.showSnackbar("Synchronization started...")
-                    viewModel.fetchApiData()
+                    viewModel.syncCivitaiModelsManual()
                 }
             }
 
@@ -1342,7 +1331,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (isLoading) {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(config.galleryGridColumns),
+                    columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(4.dp)
                 ) {
@@ -1368,7 +1357,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 Text("No files found", modifier = Modifier.align(Alignment.Center), color = Color.Gray)
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(config.galleryGridColumns),
+                    columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(4.dp)
                 ) {
@@ -1579,11 +1568,21 @@ private fun FullscreenGalleryViewer(
                     val fileInfo = remember(currentItem) {
                         if (currentItem != null) {
                             val sizeStr = currentItem.displaySize
-                            if (sizeStr.isNotEmpty()) {
-                                "${currentItem.name} • $sizeStr"
-                            } else {
-                                currentItem.name
+                            val timeStr = currentItem.createdTime?.let { timeVal ->
+                                try {
+                                    val timeLong = timeVal.toDouble().toLong() * 1000
+                                    java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeLong))
+                                } catch (e: Exception) {
+                                    timeVal
+                                }
                             }
+
+                            val parts = listOfNotNull(
+                                currentItem.name,
+                                timeStr,
+                                sizeStr.takeIf { it.isNotEmpty() }
+                            )
+                            parts.joinToString(" • ")
                         } else null
                     }
 

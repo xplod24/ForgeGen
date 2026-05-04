@@ -66,7 +66,7 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val currentBatchEndIndex: StateFlow<Int> = ForgeRepository.currentBatchEndIndex
 
     val tagSuggestions: StateFlow<List<String>> = ForgeRepository.tagSuggestions
-    val isRestoringPrompt: StateFlow<Boolean> = ForgeRepository.isRestoringPrompt
+    val isRestoringPrompt: StateFlow<IndicatorState> = ForgeRepository.isRestoringPrompt
 
     val selectedModel: StateFlow<String> = ForgeRepository.selectedModel
     val samplers: StateFlow<List<String>> = ForgeRepository.samplers
@@ -91,6 +91,12 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val updateManifest: StateFlow<UpdateManifest?> = ForgeRepository.updateManifest
     val isUpdateDownloading: StateFlow<Boolean> = ForgeRepository.isUpdateDownloading
     val updateDownloadProgress: StateFlow<Float> = ForgeRepository.updateDownloadProgress
+
+    // DELEGACJA STANU CIVITAI SYNC
+    val isCivitaiSyncing: StateFlow<IndicatorState> = ForgeRepository.isCivitaiSyncing
+    val civitaiSyncCurrentModel: StateFlow<String> = ForgeRepository.civitaiSyncCurrentModel
+    val civitaiSyncProgress: StateFlow<Pair<Int, Int>> = ForgeRepository.civitaiSyncProgress
+    val civitaiSyncLastResult: StateFlow<String?> = ForgeRepository.civitaiSyncLastResult
 
     // STAN DLA IMPORTOWANEGO OBRAZU (Share Intent)
     private val _importedImageMetadata = MutableStateFlow<String?>(null)
@@ -146,19 +152,18 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleGalleryMetadata() = ForgeRepository.toggleGalleryMetadata()
     fun loadMetadataForImage(item: GalleryItem?) = ForgeRepository.loadMetadataForImage(item)
-    fun loadMetadataForLocalFile(filePath: String) = ForgeRepository.loadMetadataForLocalFile(filePath)
 
     fun changeCheckpoint(modelTitle: String) = ForgeRepository.changeCheckpoint(modelTitle)
     fun appendLora(name: String) = ForgeRepository.appendLora(name)
     fun updateLoraStrength(name: String, strength: Float) = ForgeRepository.updateLoraStrength(name, strength)
     fun removeLora(name: String) = ForgeRepository.removeLora(name)
-    fun searchTags(query: String) = ForgeRepository.searchTags(query)
 
     fun recoverLastPrompt() = ForgeRepository.recoverLastPrompt()
     fun recoverLastSeed() = ForgeRepository.recoverLastSeed()
     fun recoverPromptFromImage(item: GalleryItem) = ForgeRepository.recoverPromptFromImage(item)
 
     fun fetchApiData() = ForgeRepository.fetchApiData()
+    fun syncCivitaiModelsManual() = ForgeRepository.syncCivitaiModelsManual()
     fun fetchGalleryFolder(path: String = config.value.galleryPath) = ForgeRepository.fetchGalleryFolder(path)
     fun getGalleryImageUrl(item: GalleryItem) = ForgeRepository.getGalleryImageUrl(item)
 

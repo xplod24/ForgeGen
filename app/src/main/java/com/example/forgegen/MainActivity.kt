@@ -405,6 +405,12 @@ class MainActivity : ComponentActivity() {
             val currentRoute = navBackStackEntry?.destination?.route
             val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue"
 
+            // CIVITAI SYNC STATES
+            val isCivitaiSyncing by viewModel.isCivitaiSyncing.collectAsStateWithLifecycle()
+            val civitaiSyncCurrentModel by viewModel.civitaiSyncCurrentModel.collectAsStateWithLifecycle()
+            val civitaiSyncProgress by viewModel.civitaiSyncProgress.collectAsStateWithLifecycle()
+            val civitaiSyncLastResult by viewModel.civitaiSyncLastResult.collectAsStateWithLifecycle()
+
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
             val onSetupClick = rememberDebounced { navController.navigate("setup") }
 
@@ -451,7 +457,7 @@ class MainActivity : ComponentActivity() {
                         Surface(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .then(if (shouldBlur) Modifier.blur(15.dp) else Modifier),
+                                .then(if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) Modifier.blur(15.dp) else Modifier),
                             color = MaterialTheme.colorScheme.background
                         ) {
                             AppNavigation(viewModel = viewModel, navController = navController)
@@ -497,7 +503,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
-                        if (isRestoringPrompt) {
+                        if (isRestoringPrompt != IndicatorState.IDLE) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -507,9 +513,76 @@ class MainActivity : ComponentActivity() {
                                 contentAlignment = Alignment.Center
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                                    AnimatedStatusIndicator(state = isRestoringPrompt)
                                     Spacer(modifier = Modifier.height(16.dp))
-                                    Text("Recovering prompt...", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                                    val statusText = when(isRestoringPrompt) {
+                                        IndicatorState.SUCCESS -> "Recovered successfully!"
+                                        IndicatorState.ERROR -> "Failed to recover."
+                                        else -> "Recovering prompt..."
+                                    }
+
+                                    Text(statusText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                                }
+                            }
+                        }
+
+                        // GLOBALNE OKNO SYNCHRONIZACJI Z CIVITAI
+                        if (isCivitaiSyncing != IndicatorState.IDLE) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.7f))
+                                    .zIndex(150f)
+                                    .clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Card(
+                                    modifier = Modifier.padding(32.dp).fillMaxWidth(0.85f),
+                                    shape = MaterialTheme.shapes.large,
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        AnimatedStatusIndicator(state = isCivitaiSyncing)
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        Text("Civitai Synchronization", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Text("Fetching metadata for:", fontSize = 12.sp, color = Color.Gray)
+                                        Text(
+                                            text = civitaiSyncCurrentModel.ifEmpty { "..." },
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = TextAlign.Center,
+                                            maxLines = 2
+                                        )
+                                        Spacer(modifier = Modifier.height(16.dp))
+
+                                        val (current, total) = civitaiSyncProgress
+                                        LinearProgressIndicator(
+                                            progress = { if (total > 0) current.toFloat() / total.toFloat() else 0f },
+                                            modifier = Modifier.fillMaxWidth().height(6.dp),
+                                            color = MaterialTheme.colorScheme.primary,
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Model $current of $total", fontSize = 12.sp)
+
+                                        if (civitaiSyncLastResult != null) {
+                                            Spacer(modifier = Modifier.height(12.dp))
+                                            val isError = civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true)
+                                            Text(
+                                                text = "Last result: $civitaiSyncLastResult",
+                                                fontSize = 11.sp,
+                                                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Rate limits applied to prevent IP ban.", fontSize = 10.sp, color = Color.Gray)
+                                    }
                                 }
                             }
                         }

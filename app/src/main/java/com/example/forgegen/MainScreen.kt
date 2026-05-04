@@ -123,7 +123,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val onSettingsClick = rememberDebounced { navController.navigate("setup") }
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
-    val blurModifier = if (isRestoringPrompt) Modifier.blur(10.dp) else Modifier
+    val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
 
     // Twarde, matematyczne wyliczenie wysokości paska nawigacyjnego urządzenia
     val density = LocalDensity.current

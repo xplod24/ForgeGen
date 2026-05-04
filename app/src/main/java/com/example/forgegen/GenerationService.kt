@@ -13,13 +13,10 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.graphics.toColorInt
 import kotlinx.coroutines.*
-import java.util.Locale
 
 /* ============================================================================
  * FOREGROUND GENERATION SERVICE
@@ -43,223 +40,201 @@ class GenerationService : Service() {
 
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
-            partialWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ForgeGen:OvernightBatchLock")
+            partialWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ForgeGen::GenerationWakeLock")
         } catch (e: Exception) {
-            Log.e("GenerationService", "Failed to initialize WakeLock", e)
+            Log.e("GenerationService", "Failed to init WakeLock", e)
         }
 
-        // Pętla odczytuje teraz dane WYŁĄCZNIE z pamięci RAM (StateFlow z repozytorium)
-        // Usunięto odczyty SharedPreferences z I/O, co zapobiega drenażowi baterii
         serviceScope.launch {
+            var lastProgress = -1
+            var lastText = ""
+            var lastJobNo = -1
+
             while (isActive) {
-                updateNotificationAndServiceState(intentAction = null)
-                val isBusy = ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value || ForgeRepository.generationQueue.value.isNotEmpty()
-                delay(if (isBusy) 1000L else 5000L)
+                val config = ForgeRepository.config.value
+                val isActivelyGenerating = ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value
+                val oomAlert = ForgeRepository.oomAlert.value
+                val progress = ForgeRepository.progress.value
+                val progInt = (progress * 100).toInt()
+                val text = ForgeRepository.statusText.value
+                val mode = config.notificationMode
+                val jobNo = ForgeRepository.currentJobNo.value
+                val jobCount = ForgeRepository.currentJobCount.value
+
+                if (isActivelyGenerating && !wasGenerating) {
+                    generationStartTime = System.currentTimeMillis()
+                    wasGenerating = true
+                    acquireWakeLock()
+                } else if (!isActivelyGenerating && wasGenerating) {
+                    wasGenerating = false
+                    releaseWakeLock()
+                }
+
+                val shouldUpdate = (progInt != lastProgress) || (text != lastText) || (jobNo != lastJobNo)
+
+                if (shouldUpdate) {
+                    lastProgress = progInt
+                    lastText = text
+                    lastJobNo = jobNo
+
+                    val notification = createNotification(
+                        isActivelyGenerating,
+                        progress,
+                        text,
+                        oomAlert,
+                        mode,
+                        jobNo,
+                        jobCount
+                    )
+
+                    val manager = getSystemService(NotificationManager::class.java)
+                    manager.notify(notificationId, notification)
+                }
+
+                delay(1000)
             }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-
-        if (action == "ACTION_EXIT") {
-            try {
-                if (partialWakeLock?.isHeld == true) partialWakeLock?.release()
-            } catch (e: Exception) {
-                Log.e("GenerationService", "Failed to release WakeLock on exit", e)
+        when (intent?.action) {
+            "ACTION_START_GENERATION" -> {
+                startForegroundSafe()
             }
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            manager.cancel(notificationId)
-            Process.killProcess(Process.myPid())
-            return START_NOT_STICKY
+            "ACTION_UPDATE_PERSISTENCE" -> {
+                serviceScope.launch {
+                    val config = ForgeRepository.config.value
+                    val isActivelyGenerating = ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value
+                    if (config.enablePersistentService || isActivelyGenerating) {
+                        startForegroundSafe()
+                    } else {
+                        stopSelf()
+                    }
+                }
+            }
+            "ACTION_QUEUE_FINISHED" -> {
+                serviceScope.launch {
+                    val config = ForgeRepository.config.value
+                    if (!config.enablePersistentService) {
+                        stopSelf()
+                    } else {
+                        val manager = getSystemService(NotificationManager::class.java)
+                        manager.notify(
+                            notificationId,
+                            createNotification(false, 0f, "Ready", false, config.notificationMode, 0, 0)
+                        )
+                    }
+                }
+            }
         }
-
-        // Natychmiastowa aktualizacja stanu na podstawie przesłanej akcji
-        updateNotificationAndServiceState(action)
-
         return START_STICKY
     }
 
-    private fun updateNotificationAndServiceState(intentAction: String?) {
-        val isGenerating = ForgeRepository.isGenerating.value
-        val progress = ForgeRepository.progress.value
-        val status = ForgeRepository.statusText.value
-        val isServerBusy = ForgeRepository.isServerBusy.value
-        val queuedCount = ForgeRepository.generationQueue.value.size
-        val currentEta = ForgeRepository.currentEta.value
-        val oomAlert = ForgeRepository.oomAlert.value
-
-        // Odczyt konfiguracji prosto z pamięci Cache w Repository (0 operacji I/O)
-        val config = ForgeRepository.config.value
-        val state = ForgeRepository.appState.value
-
-        val notificationMode = config.notificationMode
-        val enablePersistentService = config.enablePersistentService
-        val showQueueStatus = config.notifQueueStatus
-
-        val steps = state.steps
-        val batchCount = state.batchCount
-        val batchSize = state.batchSize
-
-        val isActivelyGenerating = isGenerating || isServerBusy || queuedCount > 0
-
-        // Overnight Batch Mode & OOM Protection
-        val isHeavyTask = (batchCount >= 50 || batchSize >= 8)
-        if (isActivelyGenerating && isHeavyTask) {
-            try {
-                if (partialWakeLock?.isHeld == false) {
-                    partialWakeLock?.acquire(12 * 60 * 60 * 1000L)
-                }
-            } catch (e: SecurityException) {
-                Log.e("GenerationService", "Missing WAKE_LOCK permission in Manifest", e)
-            } catch (e: Exception) {
-                Log.e("GenerationService", "Failed to acquire WakeLock", e)
+    private fun acquireWakeLock() {
+        try {
+            if (partialWakeLock?.isHeld == false) {
+                partialWakeLock?.acquire(10 * 60 * 1000L /*10 minutes*/)
             }
-        } else {
-            try {
-                if (partialWakeLock?.isHeld == true) {
-                    partialWakeLock?.release()
-                }
-            } catch (e: Exception) {
-                Log.e("GenerationService", "Failed to release WakeLock", e)
-            }
-        }
-
-        if (isActivelyGenerating && !wasGenerating) {
-            generationStartTime = System.currentTimeMillis()
-        }
-        wasGenerating = isActivelyGenerating
-
-        val shouldBeForeground = isActivelyGenerating || enablePersistentService
-
-        val notification = buildNotification(
-            isGenerating, progress, status, isServerBusy, queuedCount,
-            currentEta, oomAlert, notificationMode, showQueueStatus,
-            isOngoing = shouldBeForeground
-        )
-
-        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-
-        // Logika przełączania usługi
-        if (shouldBeForeground) {
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-            } else {
-                startForeground(notificationId, notification)
-            }
-        } else {
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_DETACH)
-            manager.notify(notificationId, notification)
-
-            if (intentAction == "ACTION_UPDATE_PERSISTENCE" || intentAction == "ACTION_QUEUE_FINISHED") {
-                stopSelf()
-            }
+        } catch (e: Exception) {
+            Log.e("GenerationService", "Failed to acquire WakeLock", e)
         }
     }
 
-    @SuppressLint("FullScreenIntentPolicy")
-    private fun buildNotification(
-        isGenerating: Boolean,
+    private fun releaseWakeLock() {
+        try {
+            if (partialWakeLock?.isHeld == true) {
+                partialWakeLock?.release()
+            }
+        } catch (e: Exception) {
+            Log.e("GenerationService", "Failed to release WakeLock", e)
+        }
+    }
+
+    private fun startForegroundSafe() {
+        try {
+            val config = ForgeRepository.config.value
+            val notification = createNotification(
+                ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value,
+                ForgeRepository.progress.value,
+                ForgeRepository.statusText.value,
+                ForgeRepository.oomAlert.value,
+                config.notificationMode,
+                ForgeRepository.currentJobNo.value,
+                ForgeRepository.currentJobCount.value
+            )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceCompat.startForeground(
+                    this,
+                    notificationId,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(notificationId, notification)
+            }
+        } catch (e: Exception) {
+            Log.e("GenerationService", "startForeground failed", e)
+        }
+    }
+
+    @SuppressLint("RestrictedApi")
+    private fun createNotification(
+        isActivelyGenerating: Boolean,
         progress: Float,
-        status: String,
-        isServerBusy: Boolean,
-        queuedCount: Int,
-        currentEta: Double,
+        statusText: String,
         oomAlert: Boolean,
         notificationMode: String,
-        showQueueStatus: Boolean,
-        isOngoing: Boolean
+        jobNo: Int,
+        jobCount: Int
     ): Notification {
-        val isActivelyGenerating = isGenerating || isServerBusy
-
-        // Powiadomienie statusowe ZAWSZE używa cichego kanału (oprócz alertu krytycznego OOM).
-        // Głośne notyfikacje o ukończeniu (Priority High/Normal) pochodzą z oddzielnego ID w ForgeRepository.
-        val activeChannelId = if (oomAlert) "forge_high" else "forge_low"
-
-        val notifTitle = when {
-            oomAlert -> "CRITICAL: Server OOM Error!"
-            isActivelyGenerating -> "Forge Generator - Working"
-            else -> "Forge Generator"
+        val config = ForgeRepository.config.value
+        val channelId = when {
+            oomAlert -> "forge_high"
+            config.notificationPriority == "High" -> "forge_high"
+            config.notificationPriority == "Low" -> "forge_low"
+            else -> "forge_default"
         }
 
-        val etaString = if (currentEta > 0) " (ETA: ${String.format(Locale.US, "%.1f", currentEta)}s)" else ""
-        val queueText = if (showQueueStatus && queuedCount > 0) "\nRemaining in queue: $queuedCount" else ""
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-        val notifText = when {
-            oomAlert -> "Out of Memory on Server. Queue has been paused. Tap to manage."
-            status.contains("Connection Lost", true) -> "Server Offline or Unreachable."
-            status.contains("Restoring", true) -> "Restoring prompt..."
-            isActivelyGenerating -> {
-                if (notificationMode == "Disabled") {
-                    "Working in background..."
-                } else {
-                    val mode = if (isGenerating) "Generating" else "External Task"
-                    val progStr = "${(progress * 100).toInt()}%"
-                    "$mode: $progStr$etaString$queueText"
-                }
-            }
-            queuedCount > 0 -> "Queued: $queuedCount$queueText"
-            else -> if (notificationMode == "Disabled") "Ready" else "Ready - Connected to server."
-        }
+        val exitIntent = PendingIntent.getBroadcast(
+            this, 1,
+            Intent("ACTION_EXIT_APP"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-        val openIntent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val openPendingIntent = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-        val exitIntent = Intent(this, GenerationService::class.java).apply {
-            action = "ACTION_EXIT"
-        }
-        val exitPendingIntent = PendingIntent.getService(this, 1, exitIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-        val settingsIntent = Intent(this, MainActivity::class.java).apply {
-            action = "ACTION_OPEN_SETTINGS"
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-        }
-        val settingsPendingIntent = PendingIntent.getActivity(this, 2, settingsIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-
-        val builder = NotificationCompat.Builder(this, activeChannelId)
-            .setContentTitle(notifTitle)
-            .setContentText(notifText)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(notifText))
-            .setOngoing(isOngoing)
-            .setOnlyAlertOnce(true) // Uniemożliwia wielokrotne "pikanie" podczas aktualizacji stanu
-            .setSilent(true)        // Wymusza całkowitą ciszę dla paska postępu
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setContentIntent(openPendingIntent)
-            .setDeleteIntent(exitPendingIntent)
-            .addAction(android.R.drawable.ic_menu_view, "Open App", openPendingIntent)
-
-        val isSamsungDevice = Build.MANUFACTURER.equals("samsung", ignoreCase = true)
+        val builder = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(R.mipmap.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .setOngoing(isActivelyGenerating || config.enablePersistentService)
+            .setOnlyAlertOnce(true)
 
         if (oomAlert) {
-            try {
-                val pm = getSystemService(POWER_SERVICE) as PowerManager
-                val wakeLock = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "ForgeGen:OOMAlert")
-                wakeLock.acquire(3000)
-            } catch (e: SecurityException) {
-                Log.e("GenerationService", "Missing WAKE_LOCK permission for OOM alert", e)
-            }
+            builder.setContentTitle("Server Error")
+            builder.setContentText("Out of Memory (OOM)! Queue paused.")
+            builder.color = 0xFFFF0000.toInt()
+        } else if (isActivelyGenerating) {
+            // Dodane wyświetlanie postępu paczki zadań
+            val batchStr = if (jobCount > 1) " (Batch ${jobNo + 1}/$jobCount)" else ""
+            builder.setContentTitle("Generating$batchStr")
 
-            builder.setFullScreenIntent(openPendingIntent, true)
-            builder.setPriority(NotificationCompat.PRIORITY_MAX)
-            builder.setCategory(NotificationCompat.CATEGORY_ERROR)
-            builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
-        } else {
-            builder.addAction(android.R.drawable.ic_menu_preferences, "Settings", settingsPendingIntent)
-            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Exit App", exitPendingIntent)
-
-            if (isSamsungDevice && Build.VERSION.SDK_INT >= 34 && isActivelyGenerating) {
-                builder.setCategory(NotificationCompat.CATEGORY_PROGRESS)
-                builder.setUsesChronometer(true)
-                builder.setWhen(generationStartTime)
-                builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
-                builder.setColor("#005BFF".toColorInt())
+            if (notificationMode == "Disabled") {
+                builder.setContentText("Task in progress...")
             } else {
-                builder.setSmallIcon(R.mipmap.ic_launcher_foreground)
+                builder.setContentText(statusText)
             }
+            builder.color = 0xFF005BFF.toInt()
+        } else {
+            builder.setContentTitle("ForgeGen is Active")
+            builder.setContentText("Ready for generation")
+            builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
         }
 
         if (isActivelyGenerating && !oomAlert && notificationMode != "Disabled") {
