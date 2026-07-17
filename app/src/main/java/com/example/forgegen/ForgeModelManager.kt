@@ -1,13 +1,11 @@
 package com.example.forgegen
 
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 object ForgeModelManager {
@@ -44,23 +42,30 @@ object ForgeModelManager {
     private val _civitaiSyncLastResult = MutableStateFlow<String?>(null)
     val civitaiSyncLastResult: StateFlow<String?> = _civitaiSyncLastResult.asStateFlow()
 
-    suspend fun getTagsForLora(hash: String): List<String> = withContext(Dispatchers.IO) {
-        val model = ForgeRepository.db.civitaiModelDao().getModelByHash(hash)
-        model?.trainedWords?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
-    }
+    suspend fun getTagsForLora(hash: String): List<String> =
+        withContext(Dispatchers.IO) {
+            val model = ForgeRepository.db.civitaiModelDao().getModelByHash(hash)
+            model
+                ?.trainedWords
+                ?.split(",")
+                ?.map { it.trim() }
+                ?.filter { it.isNotEmpty() } ?: emptyList()
+        }
 
-    suspend fun getCivitaiModelCount(): Int = withContext(Dispatchers.IO) {
-        ForgeRepository.db.civitaiModelDao().count()
-    }
+    suspend fun getCivitaiModelCount(): Int =
+        withContext(Dispatchers.IO) {
+            ForgeRepository.db.civitaiModelDao().count()
+        }
 
-    suspend fun clearCivitaiCache() = withContext(Dispatchers.IO) {
-        ForgeRepository.db.civitaiModelDao().clearAll()
-    }
-    
+    suspend fun clearCivitaiCache() =
+        withContext(Dispatchers.IO) {
+            ForgeRepository.db.civitaiModelDao().clearAll()
+        }
+
     // Callbacks to communicate back to ForgeRepository/ViewModel
     var onShowSnackbar: ((String) -> Unit)? = null
     var onConfigUpdateRequired: ((AppConfig) -> Unit)? = null
-    
+
     // Used internally to manipulate state from ForgeRepository during refactoring
     // (A proper refactor would move all of fetchApiData and syncCivitaiModelsManual here,
     // but they rely heavily on forgeApi and civitaiApi which are in ForgeRepository for now)
@@ -70,7 +75,7 @@ object ForgeModelManager {
         schedulers: List<String>? = null,
         models: List<ApiResource>? = null,
         upscalers: List<String>? = null,
-        availableLoras: List<ApiResource>? = null
+        availableLoras: List<ApiResource>? = null,
     ) {
         selectedModel?.let { _selectedModel.value = it }
         samplers?.let { _samplers.value = it }
@@ -79,12 +84,12 @@ object ForgeModelManager {
         upscalers?.let { _upscalers.value = it }
         availableLoras?.let { _availableLoras.value = it }
     }
-    
+
     fun updateCivitaiSyncState(
         state: IndicatorState? = null,
         currentModel: String? = null,
         progress: Pair<Int, Int>? = null,
-        lastResult: String? = null
+        lastResult: String? = null,
     ) {
         state?.let { _isCivitaiSyncing.value = it }
         currentModel?.let { _civitaiSyncCurrentModel.value = it }

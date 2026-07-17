@@ -32,15 +32,20 @@ class GenerationService : Service() {
 
     private var generationStartTime: Long = 0
     private var wasGenerating = false
+
     @Volatile private var isNotificationDismissed = false
 
-    private val dismissReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == "ACTION_NOTIFICATION_DISMISSED") {
-                isNotificationDismissed = true
+    private val dismissReceiver =
+        object : android.content.BroadcastReceiver() {
+            override fun onReceive(
+                context: Context?,
+                intent: Intent?,
+            ) {
+                if (intent?.action == "ACTION_NOTIFICATION_DISMISSED") {
+                    isNotificationDismissed = true
+                }
             }
         }
-    }
 
     private var partialWakeLock: PowerManager.WakeLock? = null
 
@@ -57,7 +62,10 @@ class GenerationService : Service() {
 
         val filter = android.content.IntentFilter("ACTION_NOTIFICATION_DISMISSED")
         androidx.core.content.ContextCompat.registerReceiver(
-            this, dismissReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+            this,
+            dismissReceiver,
+            filter,
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
         )
 
         serviceScope.launch {
@@ -95,16 +103,17 @@ class GenerationService : Service() {
                     lastJobNo = jobNo
                     isNotificationDismissed = false
 
-                    val notification = createNotification(
-                        isActivelyGenerating,
-                        progress,
-                        text,
-                        oomAlert,
-                        mode,
-                        jobNo,
-                        jobCount,
-                        batchSize
-                    )
+                    val notification =
+                        createNotification(
+                            isActivelyGenerating,
+                            progress,
+                            text,
+                            oomAlert,
+                            mode,
+                            jobNo,
+                            jobCount,
+                            batchSize,
+                        )
 
                     val manager = getSystemService(NotificationManager::class.java)
                     manager.notify(notificationId, notification)
@@ -115,7 +124,11 @@ class GenerationService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
         when (intent?.action) {
             "ACTION_START_GENERATION" -> {
                 startForegroundSafe()
@@ -140,7 +153,7 @@ class GenerationService : Service() {
                         val manager = getSystemService(NotificationManager::class.java)
                         manager.notify(
                             notificationId,
-                            createNotification(false, 0f, "Ready", false, config.notificationMode, 0, 0, 1)
+                            createNotification(false, 0f, "Ready", false, config.notificationMode, 0, 0, 1),
                         )
                     }
                 }
@@ -172,23 +185,27 @@ class GenerationService : Service() {
     private fun startForegroundSafe() {
         try {
             val config = ForgeRepository.config.value
-            val notification = createNotification(
-                ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value,
-                ForgeQueueManager.progress.value,
-                ForgeQueueManager.statusText.value,
-                ForgeQueueManager.oomAlert.value,
-                config.notificationMode,
-                ForgeRepository.currentJobNo.value,
-                ForgeRepository.currentJobCount.value,
-                ForgeQueueManager.generationQueue.value.firstOrNull()?.payload?.batch_size ?: 1
-            )
+            val notification =
+                createNotification(
+                    ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value,
+                    ForgeQueueManager.progress.value,
+                    ForgeQueueManager.statusText.value,
+                    ForgeQueueManager.oomAlert.value,
+                    config.notificationMode,
+                    ForgeRepository.currentJobNo.value,
+                    ForgeRepository.currentJobCount.value,
+                    ForgeQueueManager.generationQueue.value
+                        .firstOrNull()
+                        ?.payload
+                        ?.batch_size ?: 1,
+                )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 ServiceCompat.startForeground(
                     this,
                     notificationId,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
                 )
             } else {
                 startForeground(notificationId, notification)
@@ -207,39 +224,48 @@ class GenerationService : Service() {
         notificationMode: String,
         jobNo: Int,
         jobCount: Int,
-        batchSize: Int
+        batchSize: Int,
     ): Notification {
-        val channelId = when {
-            oomAlert -> "forge_high"
-            else -> "forge_default"
-        }
+        val channelId =
+            when {
+                oomAlert -> "forge_high"
+                else -> "forge_default"
+            }
 
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val pendingIntent =
+            PendingIntent.getActivity(
+                this,
+                0,
+                Intent(this, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                },
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
 
-        val exitIntent = PendingIntent.getBroadcast(
-            this, 1,
-            Intent("ACTION_EXIT_APP"),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val exitIntent =
+            PendingIntent.getBroadcast(
+                this,
+                1,
+                Intent("ACTION_EXIT_APP"),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
 
-        val deleteIntent = PendingIntent.getBroadcast(
-            this, 2,
-            Intent("ACTION_NOTIFICATION_DISMISSED"),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val deleteIntent =
+            PendingIntent.getBroadcast(
+                this,
+                2,
+                Intent("ACTION_NOTIFICATION_DISMISSED"),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
 
-        val builder = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(R.mipmap.ic_launcher_foreground)
-            .setContentIntent(pendingIntent)
-            .setOngoing(false) // Allow dismissal
-            .setDeleteIntent(deleteIntent)
-            .setOnlyAlertOnce(true)
+        val builder =
+            NotificationCompat
+                .Builder(this, channelId)
+                .setSmallIcon(R.mipmap.ic_launcher_foreground)
+                .setContentIntent(pendingIntent)
+                .setOngoing(false) // Allow dismissal
+                .setDeleteIntent(deleteIntent)
+                .setOnlyAlertOnce(true)
 
         if (oomAlert) {
             builder.setContentTitle("Server Error")
@@ -255,23 +281,23 @@ class GenerationService : Service() {
             when (notificationMode) {
                 "Verbose" -> {
                     builder.setContentTitle("Batch Count: $jobCount | Batch Size: $batchSize")
-                    builder.setContentText("Current image: ${jobNo + 1}/$jobCount | ${progInt}%")
+                    builder.setContentText("Current image: ${jobNo + 1}/$jobCount | $progInt%")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Open App", pendingIntent)
                     builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
                 "Normal" -> {
                     builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
-                    builder.setContentText("Size: $batchSize | Progress: ${progInt}%")
+                    builder.setContentText("Size: $batchSize | Progress: $progInt%")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
                 "Minimal" -> {
                     builder.setContentTitle("Generating...")
-                    builder.setContentText("Progress: ${progInt}%")
+                    builder.setContentText("Progress: $progInt%")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
                 else -> { // Fallback to Normal
                     builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
-                    builder.setContentText("Size: $batchSize | Progress: ${progInt}%")
+                    builder.setContentText("Size: $batchSize | Progress: $progInt%")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
             }
@@ -313,7 +339,10 @@ class GenerationService : Service() {
         } catch (e: Exception) {
             Log.e("GenerationService", "Failed to release WakeLock in onDestroy", e)
         }
-        try { unregisterReceiver(dismissReceiver) } catch (e: Exception) {}
+        try {
+            unregisterReceiver(dismissReceiver)
+        } catch (e: Exception) {
+        }
         serviceScope.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }

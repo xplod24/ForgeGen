@@ -5,7 +5,6 @@ import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -32,7 +31,7 @@ class ForgeNetworkManager(
     private val getConfig: () -> AppConfig,
     private val updateConfig: (AppConfig) -> Unit,
     private val showToast: (String) -> Unit,
-    val managerScope: CoroutineScope
+    val managerScope: CoroutineScope,
 ) {
     private val TAG = "ForgeNetworkManager"
     private val gson = Gson()
@@ -63,30 +62,34 @@ class ForgeNetworkManager(
     }
 
     val civitaiApi: CivitaiApi by lazy {
-        val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-        val conditionalCivitaiLogger = okhttp3.Interceptor { chain ->
-            if (!getConfig().enableLogging) {
-                chain.proceed(chain.request())
-            } else {
-                loggingInterceptor.intercept(chain)
+        val loggingInterceptor =
+            HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BODY
             }
-        }
-        val civitaiClient = OkHttpClient.Builder()
-            .addInterceptor(conditionalCivitaiLogger)
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .build()
+        val conditionalCivitaiLogger =
+            okhttp3.Interceptor { chain ->
+                if (!getConfig().enableLogging) {
+                    chain.proceed(chain.request())
+                } else {
+                    loggingInterceptor.intercept(chain)
+                }
+            }
+        val civitaiClient =
+            OkHttpClient
+                .Builder()
+                .addInterceptor(conditionalCivitaiLogger)
+                .connectTimeout(15, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .build()
 
-        Retrofit.Builder()
+        Retrofit
+            .Builder()
             .baseUrl("https://civitai.com/")
             .client(civitaiClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(CivitaiApi::class.java)
     }
-
 
     // --- STATIC CACHE STATES (Model list, Samplers, Schedulers) ---
     private val _selectedModel = MutableStateFlow("")
@@ -110,7 +113,7 @@ class ForgeNetworkManager(
     // --- CIVITAI SYNCHRONIZATION STATES ---
     private val _isCivitaiSyncing = MutableStateFlow(IndicatorState.IDLE)
     val isCivitaiSyncing: StateFlow<IndicatorState> = _isCivitaiSyncing.asStateFlow()
-    
+
     fun cancelCivitaiSync() {
         if (_isCivitaiSyncing.value == IndicatorState.LOADING) {
             _isCivitaiSyncing.value = IndicatorState.IDLE
@@ -129,43 +132,44 @@ class ForgeNetworkManager(
     private val _galleryApiPrefix = MutableStateFlow("infinite_image_browsing")
     val galleryApiPrefix: StateFlow<String> = _galleryApiPrefix.asStateFlow()
 
-
     fun initClient(timeoutSeconds: Int) {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-        val conditionalLogger = okhttp3.Interceptor { chain ->
-            val request = chain.request()
-            val path = request.url.encodedPath
-            val skipLogging = path.contains("progress") || path.contains("memory") || !getConfig().enableLogging
-            if (skipLogging) {
-                chain.proceed(request)
-            } else {
-                logging.intercept(chain)
+        val logging =
+            HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BODY
             }
-        }
-
-        client = OkHttpClient.Builder()
-            .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
-            .addInterceptor(conditionalLogger)
-            .addInterceptor { chain ->
-                val originalRequest = chain.request()
-                val requestBuilder = originalRequest.newBuilder()
-
-
-
-                val path = originalRequest.url.encodedPath
-                val isGalleryCall = path.contains("infinite_image_browsing") ||
-                        path.contains("inifinite-image-gallery") ||
-                        path.contains("infinite-image-gallery")
-
-                if (isGalleryCall) {
-                    requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+        val conditionalLogger =
+            okhttp3.Interceptor { chain ->
+                val request = chain.request()
+                val path = request.url.encodedPath
+                val skipLogging = path.contains("progress") || path.contains("memory") || !getConfig().enableLogging
+                if (skipLogging) {
+                    chain.proceed(request)
+                } else {
+                    logging.intercept(chain)
                 }
-                chain.proceed(requestBuilder.build())
             }
-            .build()
+
+        client =
+            OkHttpClient
+                .Builder()
+                .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
+                .readTimeout(180, TimeUnit.SECONDS)
+                .addInterceptor(conditionalLogger)
+                .addInterceptor { chain ->
+                    val originalRequest = chain.request()
+                    val requestBuilder = originalRequest.newBuilder()
+
+                    val path = originalRequest.url.encodedPath
+                    val isGalleryCall =
+                        path.contains("infinite_image_browsing") ||
+                            path.contains("inifinite-image-gallery") ||
+                            path.contains("infinite-image-gallery")
+
+                    if (isGalleryCall) {
+                        requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                    }
+                    chain.proceed(requestBuilder.build())
+                }.build()
     }
 
     fun rebuildForgeApi(url: String) {
@@ -176,11 +180,13 @@ class ForgeNetworkManager(
         if (cleanUrl.isEmpty()) return
 
         try {
-            val retrofitForge = Retrofit.Builder()
-                .baseUrl("$cleanUrl/")
-                .client(client)
-                .addConverterFactory(GsonConverterFactory.create(gson))
-                .build()
+            val retrofitForge =
+                Retrofit
+                    .Builder()
+                    .baseUrl("$cleanUrl/")
+                    .client(client)
+                    .addConverterFactory(GsonConverterFactory.create(gson))
+                    .build()
             forgeApi = retrofitForge.create(ForgeApi::class.java)
             ForgeRepository.forgeApi = forgeApi
         } catch (e: Exception) {
@@ -208,165 +214,201 @@ class ForgeNetworkManager(
      */
     fun fetchApiData() {
         fetchJob?.cancel()
-        fetchJob = managerScope.launch(Dispatchers.IO) {
-            if (forgeApi == null) return@launch
+        fetchJob =
+            managerScope.launch(Dispatchers.IO) {
+                if (forgeApi == null) return@launch
 
-            // Auto-detect the working directory and base prefix used by the gallery extension.
-            launch {
-                val prefixes = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
-                for (prefix in prefixes) {
-                    try {
-                        val response = forgeApi?.getGalleryFilesDynamic("${prefix}/files")
-                        if (response?.isSuccessful == true) {
-                            _galleryApiPrefix.value = prefix
-                            Log.d(TAG, "Detected gallery API prefix: $prefix")
-                            
-                            // Extract the server's working directory (sdCwd) if the global settings endpoint is available under this prefix.
-                            try {
-                                val settingsRes = forgeApi?.getGlobalSettingsDynamic("${prefix}/global_setting")
-                                if (settingsRes?.isSuccessful == true) {
-                                    val sdCwd = settingsRes.body()?.sdCwd ?: ""
-                                    val config = getConfig()
-                                    if (sdCwd.isNotEmpty() && config.serverBasePath != sdCwd) {
-                                        updateConfig(config.copy(serverBasePath = sdCwd))
+                // Auto-detect the working directory and base prefix used by the gallery extension.
+                launch {
+                    val prefixes = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
+                    for (prefix in prefixes) {
+                        try {
+                            val response = forgeApi?.getGalleryFilesDynamic("$prefix/files")
+                            if (response?.isSuccessful == true) {
+                                _galleryApiPrefix.value = prefix
+                                Log.d(TAG, "Detected gallery API prefix: $prefix")
+
+                                // Extract the server's working directory (sdCwd) if the global settings endpoint is available under this prefix.
+                                try {
+                                    val settingsRes = forgeApi?.getGlobalSettingsDynamic("$prefix/global_setting")
+                                    if (settingsRes?.isSuccessful == true) {
+                                        val sdCwd = settingsRes.body()?.sdCwd ?: ""
+                                        val config = getConfig()
+                                        if (sdCwd.isNotEmpty() && config.serverBasePath != sdCwd) {
+                                            updateConfig(config.copy(serverBasePath = sdCwd))
+                                        }
                                     }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.w(TAG, "Failed to fetch global settings for prefix $prefix. Exception: $e")
                                 }
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                                Log.w(TAG, "Failed to fetch global settings for prefix $prefix. Exception: $e")
-                            }
-                            break
-                        }
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        Log.w(TAG, "Probe failed for gallery prefix: $prefix. Exception: $e")
-                    }
-                }
-            }
-
-            try {
-                coroutineScope {
-                    val defSamplers = async {
-                        try {
-                            val res = forgeApi?.getSamplers()
-                            if (res?.isSuccessful == true) {
-                                _samplers.value = res.body()?.map { it.name } ?: emptyList()
-                            }
-                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; Log.e(TAG, "Failed samplers: $e") }
-                    }
-
-                    val defSchedulers = async {
-                        try {
-                            val res = forgeApi?.getSchedulers()
-                            if (res?.isSuccessful == true) {
-                                _schedulers.value = res.body()?.map { it.name } ?: emptyList()
-                            }
-                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; Log.e(TAG, "Failed schedulers: $e") }
-                    }
-
-                    val defUpscalers = async {
-                        try {
-                            val res = forgeApi?.getUpscalers()
-                            if (res?.isSuccessful == true) {
-                                _upscalers.value = res.body()?.map { it.name } ?: emptyList()
-                            }
-                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; Log.e(TAG, "Failed upscalers: $e") }
-                    }
-
-                    val defModelsAndLoras = async {
-                        var customApiSuccess = false
-                        try {
-                            val customRes = forgeApi?.getCustomModelsHashes()
-                            if (customRes?.isSuccessful == true) {
-                                val modelsList = customRes.body()?.models ?: emptyList()
-
-                                val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-                                val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
-                                val parsedApiModels = mutableListOf<CustomApiModelDto>()
-
-                                for (item in modelsList) {
-                                    val type = item.type ?: ""
-                                    val name = item.name ?: ""
-                                    val filename = item.filename ?: ""
-                                    val sha256 = item.sha256 ?: ""
-
-                                    if (sha256.isEmpty()) continue
-                                    parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
-
-                                    if (!localDbModels.containsKey(sha256)) {
-                                        newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
-                                    }
-                                }
-
-                                if (newModelsToInsert.isNotEmpty()) {
-                                    db.civitaiModelDao().insertModels(newModelsToInsert)
-                                }
-
-                                val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                                val checkpoints = parsedApiModels.filter { it.type == "checkpoint" }.map { cam ->
-                                    val dbEntity = updatedDbModels[cam.sha256]
-                                    ApiResource(
-                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                        name = cam.name ?: "Unknown",
-                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                        hash = cam.sha256
-                                    )
-                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                val loras = parsedApiModels.filter { it.type == "lora" }.map { cam ->
-                                    val dbEntity = updatedDbModels[cam.sha256]
-                                    ApiResource(
-                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                        name = cam.name ?: "Unknown",
-                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                        hash = cam.sha256
-                                    )
-                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                _models.value = checkpoints
-                                _availableLoras.value = loras
-                                customApiSuccess = true
+                                break
                             }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
-                            Log.e(TAG, "Custom API fetch failed: $e")
-                        }
-
-                        if (!customApiSuccess) {
-                            try {
-                                val modelRes = forgeApi?.getSdModels()
-                                if (modelRes?.isSuccessful == true) {
-                                    _models.value = modelRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) } ?: emptyList()
-                                }
-
-                                val loraRes = forgeApi?.getLoras()
-                                if (loraRes?.isSuccessful == true) {
-                                    _availableLoras.value = loraRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) } ?: emptyList()
-                                }
-                            } catch (e: Exception) {
-                                if (e is kotlinx.coroutines.CancellationException) throw e
-                                Log.e(TAG, "Fallback API fetch failed: $e")
-                            }
+                            Log.w(TAG, "Probe failed for gallery prefix: $prefix. Exception: $e")
                         }
                     }
-
-                    val defOpts = async {
-                        try {
-                            val res = forgeApi?.getOptions()
-                            if (res?.isSuccessful == true) {
-                                _selectedModel.value = res.body()?.sdModelCheckpoint ?: ""
-                            }
-                        } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; Log.e(TAG, "Failed options: $e") }
-                    }
-
-                    awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
                 }
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Failed to synchronize API definitions: $e")
+
+                try {
+                    coroutineScope {
+                        val defSamplers =
+                            async {
+                                try {
+                                    val res = forgeApi?.getSamplers()
+                                    if (res?.isSuccessful == true) {
+                                        _samplers.value = res.body()?.map { it.name } ?: emptyList()
+                                    }
+                                } catch (
+                                    e: Exception,
+                                ) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Failed samplers: $e")
+                                }
+                            }
+
+                        val defSchedulers =
+                            async {
+                                try {
+                                    val res = forgeApi?.getSchedulers()
+                                    if (res?.isSuccessful == true) {
+                                        _schedulers.value = res.body()?.map { it.name } ?: emptyList()
+                                    }
+                                } catch (
+                                    e: Exception,
+                                ) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Failed schedulers: $e")
+                                }
+                            }
+
+                        val defUpscalers =
+                            async {
+                                try {
+                                    val res = forgeApi?.getUpscalers()
+                                    if (res?.isSuccessful == true) {
+                                        _upscalers.value = res.body()?.map { it.name } ?: emptyList()
+                                    }
+                                } catch (
+                                    e: Exception,
+                                ) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Failed upscalers: $e")
+                                }
+                            }
+
+                        val defModelsAndLoras =
+                            async {
+                                var customApiSuccess = false
+                                try {
+                                    val customRes = forgeApi?.getCustomModelsHashes()
+                                    if (customRes?.isSuccessful == true) {
+                                        val modelsList = customRes.body()?.models ?: emptyList()
+
+                                        val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                                        val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
+                                        val parsedApiModels = mutableListOf<CustomApiModelDto>()
+
+                                        for (item in modelsList) {
+                                            val type = item.type ?: ""
+                                            val name = item.name ?: ""
+                                            val filename = item.filename ?: ""
+                                            val sha256 = item.sha256 ?: ""
+
+                                            if (sha256.isEmpty()) continue
+                                            parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
+
+                                            if (!localDbModels.containsKey(sha256)) {
+                                                newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
+                                            }
+                                        }
+
+                                        if (newModelsToInsert.isNotEmpty()) {
+                                            db.civitaiModelDao().insertModels(newModelsToInsert)
+                                        }
+
+                                        val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+
+                                        val checkpoints =
+                                            parsedApiModels
+                                                .filter { it.type == "checkpoint" }
+                                                .map { cam ->
+                                                    val dbEntity = updatedDbModels[cam.sha256]
+                                                    ApiResource(
+                                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                                        name = cam.name ?: "Unknown",
+                                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
+                                                        hash = cam.sha256,
+                                                    )
+                                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                        val loras =
+                                            parsedApiModels
+                                                .filter { it.type == "lora" }
+                                                .map { cam ->
+                                                    val dbEntity = updatedDbModels[cam.sha256]
+                                                    ApiResource(
+                                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                                        name = cam.name ?: "Unknown",
+                                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
+                                                        hash = cam.sha256,
+                                                    )
+                                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+
+                                        _models.value = checkpoints
+                                        _availableLoras.value = loras
+                                        customApiSuccess = true
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Custom API fetch failed: $e")
+                                }
+
+                                if (!customApiSuccess) {
+                                    try {
+                                        val modelRes = forgeApi?.getSdModels()
+                                        if (modelRes?.isSuccessful == true) {
+                                            _models.value =
+                                                modelRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                                    ?: emptyList()
+                                        }
+
+                                        val loraRes = forgeApi?.getLoras()
+                                        if (loraRes?.isSuccessful == true) {
+                                            _availableLoras.value =
+                                                loraRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                                    ?: emptyList()
+                                        }
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
+                                        Log.e(TAG, "Fallback API fetch failed: $e")
+                                    }
+                                }
+                            }
+
+                        val defOpts =
+                            async {
+                                try {
+                                    val res = forgeApi?.getOptions()
+                                    if (res?.isSuccessful == true) {
+                                        _selectedModel.value = res.body()?.sdModelCheckpoint ?: ""
+                                    }
+                                } catch (
+                                    e: Exception,
+                                ) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Failed options: $e")
+                                }
+                            }
+
+                        awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.e(TAG, "Failed to synchronize API definitions: $e")
+                }
             }
-        }
     }
 
     /**
@@ -392,11 +434,12 @@ class ForgeNetworkManager(
                 val modelsList = customRes.body()?.models ?: emptyList()
                 val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
-                val missingOrIncomplete = modelsList.filter { item ->
-                    val sha = item.sha256 ?: return@filter false
-                    val entity = localDbModels[sha]
-                    entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
-                }
+                val missingOrIncomplete =
+                    modelsList.filter { item ->
+                        val sha = item.sha256 ?: return@filter false
+                        val entity = localDbModels[sha]
+                        entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
+                    }
 
                 if (missingOrIncomplete.isEmpty()) {
                     _civitaiSyncLastResult.value = "All models are already synchronized!"
@@ -429,7 +472,11 @@ class ForgeNetworkManager(
                             if (civBody?.model != null) civName = civBody.model.name ?: civName
                             trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
                             if (!civBody?.images.isNullOrEmpty()) {
-                                previewImage = civBody.images.firstOrNull()?.url?.replace("original=true", "original=false")
+                                previewImage =
+                                    civBody.images
+                                        .firstOrNull()
+                                        ?.url
+                                        ?.replace("original=true", "original=false")
                             }
                             _civitaiSyncLastResult.value = "Downloaded successfully"
                         } else {
@@ -453,7 +500,6 @@ class ForgeNetworkManager(
                 _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
                 delay(2000)
                 _isCivitaiSyncing.value = IndicatorState.IDLE
-
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Critical error during Civitai synchronization: $e")

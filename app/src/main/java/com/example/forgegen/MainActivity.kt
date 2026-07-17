@@ -28,18 +28,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -55,7 +52,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -81,11 +77,12 @@ import kotlin.system.exitProcess
 
 // --- GLOBAL UTILITIES & SHARED COMPONENTS ---
 
-tailrec fun Context.findActivity(): Activity? = when (this) {
-    is Activity -> this
-    is ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
+tailrec fun Context.findActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
 @Composable
 fun rememberDebounced(onClick: () -> Unit): () -> Unit {
@@ -106,7 +103,9 @@ fun checkConnectivity(connectivityManager: ConnectivityManager): Boolean {
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
         capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    } catch (_: SecurityException) { true }
+    } catch (_: SecurityException) {
+        true
+    }
 }
 
 @Composable
@@ -118,49 +117,64 @@ fun currentConnectivityStatus(context: Context): State<Boolean> {
     val backOnlineMessage = "Back online!"
 
     DisposableEffect(connectivityManager) {
-        val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) {
-                val caps = connectivityManager.getNetworkCapabilities(network)
-                val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-                if (hasInternet) {
-                    if (wasOffline.value) {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, backOnlineMessage, Toast.LENGTH_SHORT).show()
+        val callback =
+            object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    val caps = connectivityManager.getNetworkCapabilities(network)
+                    val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                    if (hasInternet) {
+                        if (wasOffline.value) {
+                            Handler(Looper.getMainLooper()).post {
+                                Toast.makeText(context, backOnlineMessage, Toast.LENGTH_SHORT).show()
+                            }
                         }
+                        isConnected.value = true
+                        wasOffline.value = false
                     }
-                    isConnected.value = true
-                    wasOffline.value = false
+                }
+
+                override fun onCapabilitiesChanged(
+                    network: Network,
+                    networkCapabilities: NetworkCapabilities,
+                ) {
+                    val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    if (hasInternet) {
+                        if (wasOffline.value) {
+                            Handler(Looper.getMainLooper()).post {
+                                Toast.makeText(context, backOnlineMessage, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        isConnected.value = true
+                        wasOffline.value = false
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    isConnected.value = false
+                    wasOffline.value = true
                 }
             }
 
-            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-                val hasInternet = networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                if (hasInternet) {
-                    if (wasOffline.value) {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, backOnlineMessage, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    isConnected.value = true
-                    wasOffline.value = false
-                }
-            }
-
-            override fun onLost(network: Network) {
-                isConnected.value = false
-                wasOffline.value = true
-            }
+        try {
+            connectivityManager.registerDefaultNetworkCallback(callback)
+        } catch (_: SecurityException) {
         }
 
-        try { connectivityManager.registerDefaultNetworkCallback(callback) } catch (_: SecurityException) {}
-
-        onDispose { try { connectivityManager.unregisterNetworkCallback(callback) } catch (_: Exception) {} }
+        onDispose {
+            try {
+                connectivityManager.unregisterNetworkCallback(callback)
+            } catch (_: Exception) {
+            }
+        }
     }
     return isConnected
 }
 
 @Composable
-fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
+fun AppNavigation(
+    viewModel: ForgeViewModel,
+    navController: NavHostController,
+) {
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
@@ -179,7 +193,7 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
         enterTransition = { fadeIn(animationSpec = tween(0)) },
         exitTransition = { fadeOut(animationSpec = tween(0)) },
         popEnterTransition = { fadeIn(animationSpec = tween(0)) },
-        popExitTransition = { fadeOut(animationSpec = tween(0)) }
+        popExitTransition = { fadeOut(animationSpec = tween(0)) },
     ) {
         composable("welcome") { WelcomeScreen(navController) }
         composable("setup") { SetupScreen(viewModel, navController) }
@@ -188,7 +202,6 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
         composable("queue") { QueueScreen(viewModel, navController) }
         composable("wildcards") { WildcardsScreen(viewModel, navController) }
         composable("presets") { PresetsScreen(viewModel, navController) }
-
     }
 }
 
@@ -249,24 +262,28 @@ class MainActivity : ComponentActivity() {
             }
 
             DisposableEffect(context) {
-                val receiver = object : BroadcastReceiver() {
-                    override fun onReceive(context: Context?, intent: Intent?) {
-                        if (intent?.action == "ACTION_EXIT_APP") {
-                            val manager = context?.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-                            manager?.cancel(1001)
-                            manager?.cancel(1002)
+                val receiver =
+                    object : BroadcastReceiver() {
+                        override fun onReceive(
+                            context: Context?,
+                            intent: Intent?,
+                        ) {
+                            if (intent?.action == "ACTION_EXIT_APP") {
+                                val manager = context?.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
+                                manager?.cancel(1001)
+                                manager?.cancel(1002)
 
-                            val svcIntent = Intent(context, GenerationService::class.java)
-                            context?.stopService(svcIntent)
+                                val svcIntent = Intent(context, GenerationService::class.java)
+                                context?.stopService(svcIntent)
 
-                            if (context is Activity) {
-                                context.finishAndRemoveTask()
+                                if (context is Activity) {
+                                    context.finishAndRemoveTask()
+                                }
+                                Process.killProcess(Process.myPid())
+                                exitProcess(0)
                             }
-                            Process.killProcess(Process.myPid())
-                            exitProcess(0)
                         }
                     }
-                }
                 val filter = IntentFilter("ACTION_EXIT_APP")
                 ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
                 onDispose { context.unregisterReceiver(receiver) }
@@ -276,41 +293,46 @@ class MainActivity : ComponentActivity() {
 
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
-                val observer = LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_START) {
-                        viewModel.setAppForegroundState(true)
-                    } else if (event == Lifecycle.Event.ON_STOP) {
-                        viewModel.setAppForegroundState(false)
-                        if (config.useNativeSecurity) {
-                            isUnlocked = false
+                val observer =
+                    LifecycleEventObserver { _, event ->
+                        if (event == Lifecycle.Event.ON_START) {
+                            viewModel.setAppForegroundState(true)
+                        } else if (event == Lifecycle.Event.ON_STOP) {
+                            viewModel.setAppForegroundState(false)
+                            if (config.useNativeSecurity) {
+                                isUnlocked = false
+                            }
                         }
                     }
-                }
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
             }
 
             // Initialize the Coil image loader configuration using a custom HTTP Client to force a 30-day cache (2.5GB maximum size) for loaded network thumbnails.
-            val imageLoader = remember(context) {
-                val customClient = viewModel.client.newBuilder()
-                    .addNetworkInterceptor { chain ->
-                        val originalResponse = chain.proceed(chain.request())
-                        originalResponse.newBuilder()
-                            .header("Cache-Control", "public, max-age=2592000")
-                            .build()
-                    }
-                    .build()
+            val imageLoader =
+                remember(context) {
+                    val customClient =
+                        viewModel.client
+                            .newBuilder()
+                            .addNetworkInterceptor { chain ->
+                                val originalResponse = chain.proceed(chain.request())
+                                originalResponse
+                                    .newBuilder()
+                                    .header("Cache-Control", "public, max-age=2592000")
+                                    .build()
+                            }.build()
 
-                ImageLoader.Builder(context)
-                    .okHttpClient { customClient }
-                    .diskCache {
-                        DiskCache.Builder()
-                            .directory(context.cacheDir.resolve("image_cache"))
-                            .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
-                            .build()
-                    }
-                    .build()
-            }
+                    ImageLoader
+                        .Builder(context)
+                        .okHttpClient { customClient }
+                        .diskCache {
+                            DiskCache
+                                .Builder()
+                                .directory(context.cacheDir.resolve("image_cache"))
+                                .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
+                                .build()
+                        }.build()
+                }
 
             if (!isUnlocked) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -320,15 +342,18 @@ class MainActivity : ComponentActivity() {
                         Text("App Locked", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
                         Spacer(Modifier.height(32.dp))
                         Button(onClick = {
-                            val authenticators = if (config.useBiometricLock) {
-                                BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                            } else {
-                                BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                            }
-                            val prompt = BiometricPrompt.Builder(activity)
-                                .setTitle("ForgeGen Security")
-                                .setAllowedAuthenticators(authenticators)
-                                .build()
+                            val authenticators =
+                                if (config.useBiometricLock) {
+                                    BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                } else {
+                                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                }
+                            val prompt =
+                                BiometricPrompt
+                                    .Builder(activity)
+                                    .setTitle("ForgeGen Security")
+                                    .setAllowedAuthenticators(authenticators)
+                                    .build()
                             prompt.authenticate(
                                 CancellationSignal(),
                                 activity.mainExecutor,
@@ -336,7 +361,7 @@ class MainActivity : ComponentActivity() {
                                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
                                         isUnlocked = true
                                     }
-                                }
+                                },
                             )
                         }) {
                             Text("Tap to unlock")
@@ -347,63 +372,71 @@ class MainActivity : ComponentActivity() {
             }
 
             LaunchedEffect(config.keepScreenOn) {
-                if (config.keepScreenOn) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (config.keepScreenOn) {
+                    activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
             }
 
             val isOnline by currentConnectivityStatus(this)
             val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
             val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
 
-            val defaultColorScheme = remember(config.isDarkMode) {
-                if (config.isDarkMode) {
-                    darkColorScheme(
-                        primary = Color(0xFF3E80FF),
-                        background = Color.Black,
-                        surface = Color(0xFF151515),
-                        surfaceVariant = Color(0xFF252525),
-                        primaryContainer = Color.Black,
-                        onPrimaryContainer = Color.White
-                    )
-                } else {
-                    lightColorScheme(
-                        primary = Color(0xFF005BFF),
-                        background = Color(0xFFF2F2F2),
-                        surface = Color.White,
-                        surfaceVariant = Color(0xFFE5E5E5),
-                        primaryContainer = Color(0xFFF2F2F2),
-                        onPrimaryContainer = Color.Black
+            val defaultColorScheme =
+                remember(config.isDarkMode) {
+                    if (config.isDarkMode) {
+                        darkColorScheme(
+                            primary = Color(0xFF3E80FF),
+                            background = Color.Black,
+                            surface = Color(0xFF151515),
+                            surfaceVariant = Color(0xFF252525),
+                            primaryContainer = Color.Black,
+                            onPrimaryContainer = Color.White,
+                        )
+                    } else {
+                        lightColorScheme(
+                            primary = Color(0xFF005BFF),
+                            background = Color(0xFFF2F2F2),
+                            surface = Color.White,
+                            surfaceVariant = Color(0xFFE5E5E5),
+                            primaryContainer = Color(0xFFF2F2F2),
+                            onPrimaryContainer = Color.Black,
+                        )
+                    }
+                }
+
+            val defaultTypography =
+                remember {
+                    Typography(
+                        bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp),
+                        bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp),
+                        bodySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp),
+                        labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                        labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 10.sp, fontWeight = FontWeight.Medium),
+                        titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 24.sp, fontWeight = FontWeight.Bold),
+                        titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                        titleSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Bold),
                     )
                 }
-            }
 
-            val defaultTypography = remember {
-                Typography(
-                    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp),
-                    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp),
-                    bodySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp),
-                    labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                    labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 10.sp, fontWeight = FontWeight.Medium),
-                    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 24.sp, fontWeight = FontWeight.Bold),
-                    titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 18.sp, fontWeight = FontWeight.Bold),
-                    titleSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                )
-            }
-
-            val defaultShapes = remember {
-                Shapes(
-                    small = RoundedCornerShape(12.dp),
-                    medium = RoundedCornerShape(20.dp),
-                    large = RoundedCornerShape(26.dp),
-                    extraLarge = RoundedCornerShape(32.dp)
-                )
-            }
+            val defaultShapes =
+                remember {
+                    Shapes(
+                        small = RoundedCornerShape(12.dp),
+                        medium = RoundedCornerShape(20.dp),
+                        large = RoundedCornerShape(26.dp),
+                        extraLarge = RoundedCornerShape(32.dp),
+                    )
+                }
 
             if (Build.VERSION.SDK_INT >= 33) {
                 val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
                 LaunchedEffect(Unit) {
-                    if (ContextCompat.checkSelfPermission(this@MainActivity, "android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                    if (ContextCompat.checkSelfPermission(this@MainActivity, "android.permission.POST_NOTIFICATIONS") !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
                         permissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
                     }
                 }
@@ -412,7 +445,8 @@ class MainActivity : ComponentActivity() {
             val navController = rememberNavController()
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
-            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue" || currentRoute == "wildcards"
+            val isSessionActive =
+                currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue" || currentRoute == "wildcards"
 
             // CIVITAI SYNC STATES
             val isCivitaiSyncing by viewModel.isCivitaiSyncing.collectAsStateWithLifecycle()
@@ -433,7 +467,9 @@ class MainActivity : ComponentActivity() {
             // Global Toast event bus
             LaunchedEffect(Unit) {
                 viewModel.toastMessage.collect { message ->
-                    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                    android.widget.Toast
+                        .makeText(context, message, android.widget.Toast.LENGTH_LONG)
+                        .show()
                 }
             }
 
@@ -441,32 +477,48 @@ class MainActivity : ComponentActivity() {
                 MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .then(if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) Modifier.blur(15.dp) else Modifier),
-                            color = MaterialTheme.colorScheme.background
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .then(if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) Modifier.blur(15.dp) else Modifier),
+                            color = MaterialTheme.colorScheme.background,
                         ) {
                             AppNavigation(viewModel = viewModel, navController = navController)
                         }
 
                         if (shouldBlur) {
                             Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.5f))
+                                        .clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Card(shape = MaterialTheme.shapes.large, elevation = CardDefaults.cardElevation(8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                                Card(
+                                    shape = MaterialTheme.shapes.large,
+                                    elevation = CardDefaults.cardElevation(8.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                ) {
                                     Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                         if (!isOnline) {
-                                            Icon(Icons.Default.SignalWifiOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+                                            Icon(
+                                                Icons.Default.SignalWifiOff,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(48.dp),
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
                                             Spacer(Modifier.height(8.dp))
                                             Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
                                             Text("Turn on the internet to use the app", textAlign = TextAlign.Center)
                                         } else {
-                                            Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+                                            Icon(
+                                                Icons.Default.CloudOff,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(48.dp),
+                                                tint = MaterialTheme.colorScheme.error,
+                                            )
                                             Spacer(Modifier.height(8.dp))
                                             Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
@@ -477,7 +529,7 @@ class MainActivity : ComponentActivity() {
 
                                         Button(
                                             onClick = onSetupClick,
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                         ) {
                                             Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
@@ -503,22 +555,24 @@ class MainActivity : ComponentActivity() {
 
                         if (isRestoringPrompt != IndicatorState.IDLE) {
                             Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .zIndex(100f)
-                                    .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.5f))
+                                        .zIndex(100f)
+                                        .clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     AnimatedStatusIndicator(state = isRestoringPrompt)
                                     Spacer(modifier = Modifier.height(16.dp))
 
-                                    val statusText = when(isRestoringPrompt) {
-                                        IndicatorState.SUCCESS -> "Successfully recovered!"
-                                        IndicatorState.ERROR -> "Failed to recover."
-                                        else -> "Recovering prompt..."
-                                    }
+                                    val statusText =
+                                        when (isRestoringPrompt) {
+                                            IndicatorState.SUCCESS -> "Successfully recovered!"
+                                            IndicatorState.ERROR -> "Failed to recover."
+                                            else -> "Recovering prompt..."
+                                        }
 
                                     Text(statusText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
 
@@ -547,21 +601,27 @@ class MainActivity : ComponentActivity() {
 
                         if (isCivitaiSyncing != IndicatorState.IDLE) {
                             Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.7f))
-                                    .zIndex(150f)
-                                    .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Black.copy(alpha = 0.7f))
+                                        .zIndex(150f)
+                                        .clickable(enabled = false) {},
+                                contentAlignment = Alignment.Center,
                             ) {
                                 Card(
-                                    modifier = Modifier.padding(32.dp).fillMaxWidth(0.85f).animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
+                                    modifier =
+                                        Modifier
+                                            .padding(
+                                                32.dp,
+                                            ).fillMaxWidth(0.85f)
+                                            .animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
                                     shape = MaterialTheme.shapes.large,
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(24.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
+                                        horizontalAlignment = Alignment.CenterHorizontally,
                                     ) {
                                         AnimatedStatusIndicator(state = isCivitaiSyncing)
                                         Spacer(modifier = Modifier.height(16.dp))
@@ -573,7 +633,7 @@ class MainActivity : ComponentActivity() {
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
                                             textAlign = TextAlign.Center,
-                                            maxLines = 2
+                                            maxLines = 2,
                                         )
                                         Spacer(modifier = Modifier.height(16.dp))
 
@@ -582,18 +642,20 @@ class MainActivity : ComponentActivity() {
                                             progress = { if (total > 0) current.toFloat() / total.toFloat() else 0f },
                                             modifier = Modifier.fillMaxWidth().height(6.dp),
                                             color = MaterialTheme.colorScheme.primary,
-                                            trackColor = MaterialTheme.colorScheme.surfaceVariant
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text("Model $current of $total", fontSize = 12.sp)
 
                                         if (civitaiSyncLastResult != null) {
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            val isError = civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true) || civitaiSyncLastResult!!.contains("Error", ignoreCase = true)
+                                            val isError =
+                                                civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true) ||
+                                                    civitaiSyncLastResult!!.contains("Error", ignoreCase = true)
                                             Text(
                                                 text = "Last result: $civitaiSyncLastResult",
                                                 fontSize = 11.sp,
-                                                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                                             )
                                         }
 
@@ -615,24 +677,26 @@ class MainActivity : ComponentActivity() {
                         if (isUpdateDownloading) {
                             AlertDialog(
                                 onDismissRequest = { },
-                                properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+                                properties =
+                                    androidx.compose.ui.window.DialogProperties(
+                                        dismissOnBackPress = false,
+                                        dismissOnClickOutside = false,
+                                    ),
                                 title = { Text("Downloading Update") },
                                 text = {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                                         LinearProgressIndicator(
                                             progress = { updateDownloadProgress },
-                                            modifier = Modifier.fillMaxWidth().padding(16.dp)
+                                            modifier = Modifier.fillMaxWidth().padding(16.dp),
                                         )
                                         val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
                                         val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
                                         Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
                                     }
                                 },
-                                confirmButton = { }
+                                confirmButton = { },
                             )
                         }
-
-
 
                         // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
                         val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
@@ -657,60 +721,79 @@ class MainActivity : ComponentActivity() {
                                     }
                                     viewModel.setImportedImageMetadata(null)
                                     viewModel.showToast("Applied LoRAs")
-                                }
+                                },
                             )
                         }
 
                         // GLOBAL APP BLUR PRIVACY OVERLAY
                         if (isAppBlurred) {
                             Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.9f))
-                                    .blur(25.dp)
-                                    .clickable(enabled = true) {
-                                        if (config.useBiometricLock || config.useNativeSecurity) {
-                                            val authenticators = if (config.useBiometricLock) {
-                                                android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                modifier =
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.9f))
+                                        .blur(25.dp)
+                                        .clickable(enabled = true) {
+                                            if (config.useBiometricLock || config.useNativeSecurity) {
+                                                val authenticators =
+                                                    if (config.useBiometricLock) {
+                                                        android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                                                            android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                                    } else {
+                                                        android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                                    }
+                                                val prompt =
+                                                    android.hardware.biometrics.BiometricPrompt
+                                                        .Builder(activity)
+                                                        .setTitle("ForgeGen Authentication")
+                                                        .setAllowedAuthenticators(authenticators)
+                                                        .build()
+                                                prompt.authenticate(
+                                                    android.os.CancellationSignal(),
+                                                    activity.mainExecutor,
+                                                    object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                                                        override fun onAuthenticationSucceeded(
+                                                            result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?,
+                                                        ) {
+                                                            viewModel.setAppBlurred(false)
+                                                        }
+
+                                                        override fun onAuthenticationError(
+                                                            errorCode: Int,
+                                                            errString: CharSequence?,
+                                                        ) {
+                                                            activity.finishAffinity()
+                                                            java.lang.System.exit(0)
+                                                        }
+
+                                                        override fun onAuthenticationFailed() {
+                                                            activity.finishAffinity()
+                                                            java.lang.System.exit(0)
+                                                        }
+                                                    },
+                                                )
                                             } else {
-                                                android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                                viewModel.setAppBlurred(false)
                                             }
-                                            val prompt = android.hardware.biometrics.BiometricPrompt.Builder(activity)
-                                                .setTitle("ForgeGen Authentication")
-                                                .setAllowedAuthenticators(authenticators)
-                                                .build()
-                                            prompt.authenticate(
-                                                android.os.CancellationSignal(),
-                                                activity.mainExecutor,
-                                                object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
-                                                    override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) {
-                                                        viewModel.setAppBlurred(false)
-                                                    }
-                                                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-                                                        activity.finishAffinity()
-                                                        java.lang.System.exit(0)
-                                                    }
-                                                    override fun onAuthenticationFailed() {
-                                                        activity.finishAffinity()
-                                                        java.lang.System.exit(0)
-                                                    }
-                                                }
-                                            )
-                                        } else {
-                                            viewModel.setAppBlurred(false)
-                                        }
-                                    },
-                                contentAlignment = Alignment.Center
+                                        },
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                                ) {
                                     Icon(
                                         imageVector = Icons.Default.VisibilityOff,
                                         contentDescription = null,
                                         modifier = Modifier.size(64.dp),
-                                        tint = MaterialTheme.colorScheme.primary
+                                        tint = MaterialTheme.colorScheme.primary,
                                     )
                                     Text("App Blurred / Hidden", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                    Text("Tap anywhere to unlock/reveal", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                    Text(
+                                        "Tap anywhere to unlock/reveal",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    )
                                 }
                             }
                         }

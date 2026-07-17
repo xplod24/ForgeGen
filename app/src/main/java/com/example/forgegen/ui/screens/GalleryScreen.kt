@@ -1,12 +1,6 @@
 package com.example.forgegen
 
-import android.app.KeyguardManager
-import android.content.Context
-import android.content.Intent
-import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -18,8 +12,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
@@ -28,8 +20,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -46,28 +36,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING & FRAMES)
@@ -76,25 +54,27 @@ import java.util.concurrent.TimeUnit
 
 @Composable
 fun coloredShimmerBrush(baseColor: Color): Brush {
-    val shimmerColors = listOf(
-        baseColor.copy(alpha = 0.2f),
-        baseColor.copy(alpha = 0.8f),
-        baseColor.copy(alpha = 0.2f)
-    )
+    val shimmerColors =
+        listOf(
+            baseColor.copy(alpha = 0.2f),
+            baseColor.copy(alpha = 0.8f),
+            baseColor.copy(alpha = 0.2f),
+        )
     val transition = rememberInfiniteTransition(label = "shimmer_${baseColor.value}")
     val translateAnim by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1000f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "shimmer_translate_${baseColor.value}"
+        animationSpec =
+            infiniteRepeatable(
+                animation = tween(durationMillis = 1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart,
+            ),
+        label = "shimmer_translate_${baseColor.value}",
     )
     return Brush.linearGradient(
         colors = shimmerColors,
         start = Offset.Zero,
-        end = Offset(x = translateAnim, y = translateAnim)
+        end = Offset(x = translateAnim, y = translateAnim),
     )
 }
 
@@ -112,7 +92,7 @@ fun PreferenceCategory(title: String) {
         color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.Bold,
         fontSize = 12.sp,
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp, end = 16.dp)
+        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp, end = 16.dp),
     )
 }
 
@@ -122,7 +102,10 @@ fun PreferenceCategory(title: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
+fun GalleryScreen(
+    viewModel: ForgeViewModel,
+    navController: NavHostController,
+) {
     val galleryFiles by viewModel.galleryFiles.collectAsStateWithLifecycle()
     val currentPath by viewModel.currentGalleryPath.collectAsStateWithLifecycle()
     val isLoading by viewModel.isGalleryLoading.collectAsStateWithLifecycle()
@@ -152,11 +135,12 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             val lastBackslash = currentPath.lastIndexOf('\\')
             val lastSeparator = maxOf(lastSlash, lastBackslash)
 
-            val parent = if (lastSeparator > 0) {
-                currentPath.substring(0, lastSeparator)
-            } else {
-                config.galleryPath
-            }
+            val parent =
+                if (lastSeparator > 0) {
+                    currentPath.substring(0, lastSeparator)
+                } else {
+                    config.galleryPath
+                }
 
             if (config.galleryPath.isNotEmpty() && config.galleryPath != "Root" && !parent.startsWith(config.galleryPath)) {
                 safePopBack()
@@ -181,12 +165,22 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             TopAppBar(
                 title = {
                     Column {
-                        Text(if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (galleryMode ==
+                                GalleryMode.PROMPT_PICKER
+                            ) {
+                                "Select Image"
+                            } else {
+                                "Gallery"
+                            },
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
                         Text(
                             text = if (currentPath == "virtual://favorites") "⭐ Favorites" else currentPath.ifEmpty { "Root" },
                             fontSize = 12.sp,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 },
@@ -200,24 +194,25 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             )
-        }
+        },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (isLoading) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(4.dp)
+                    contentPadding = PaddingValues(4.dp),
                 ) {
                     items(24) {
                         Box(
-                            modifier = Modifier
-                                .padding(4.dp)
-                                .aspectRatio(1f)
-                                .clip(MaterialTheme.shapes.small)
-                                .background(shimmerBrush())
+                            modifier =
+                                Modifier
+                                    .padding(4.dp)
+                                    .aspectRatio(1f)
+                                    .clip(MaterialTheme.shapes.small)
+                                    .background(shimmerBrush()),
                         )
                     }
                 }
@@ -235,28 +230,34 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(4.dp)
+                    contentPadding = PaddingValues(4.dp),
                 ) {
                     itemsIndexed(galleryFiles) { index, item ->
                         if (item.isDir) {
                             val isFavoritesFolder = item.fullpath == "virtual://favorites"
                             Card(
                                 modifier = Modifier.padding(4.dp).aspectRatio(1f).clickable { viewModel.fetchGalleryFolder(item.fullpath) },
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                             ) {
                                 Column(
                                     modifier = Modifier.fillMaxSize().padding(8.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
+                                    verticalArrangement = Arrangement.Center,
                                 ) {
                                     Icon(
                                         imageVector = if (isFavoritesFolder) Icons.Default.Star else Icons.Default.Folder,
                                         contentDescription = null,
                                         modifier = Modifier.size(48.dp),
-                                        tint = if (isFavoritesFolder) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                                        tint = if (isFavoritesFolder) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary,
                                     )
                                     Spacer(Modifier.height(8.dp))
-                                    Text(item.name, fontSize = 12.sp, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    Text(
+                                        item.name,
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                         } else {
@@ -265,28 +266,35 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             val isForgeGen = item.name.contains("ForgeGen", ignoreCase = true)
 
                             // Grubsza (6.dp) i bardzo dobrze widoczna ramka!
-                            val frameModifier = when {
-                                isFavorite -> Modifier.border(6.dp, coloredShimmerBrush(Color(0xFFFFD54F)), MaterialTheme.shapes.small)
-                                isForgeGen -> Modifier.border(6.dp, coloredShimmerBrush(MaterialTheme.colorScheme.primary), MaterialTheme.shapes.small)
-                                else -> Modifier
-                            }
+                            val frameModifier =
+                                when {
+                                    isFavorite -> Modifier.border(6.dp, coloredShimmerBrush(Color(0xFFFFD54F)), MaterialTheme.shapes.small)
+                                    isForgeGen ->
+                                        Modifier.border(
+                                            6.dp,
+                                            coloredShimmerBrush(MaterialTheme.colorScheme.primary),
+                                            MaterialTheme.shapes.small,
+                                        )
+                                    else -> Modifier
+                                }
 
                             Box(
-                                modifier = Modifier
-                                    .padding(4.dp)
-                                    .aspectRatio(1f)
-                                    .then(frameModifier)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .clickable {
-                                        if (galleryMode == GalleryMode.PROMPT_PICKER) {
-                                            viewModel.recoverPromptFromImage(item)
-                                            if (navController.currentDestination?.route == "gallery") {
-                                                navController.popBackStack()
+                                modifier =
+                                    Modifier
+                                        .padding(4.dp)
+                                        .aspectRatio(1f)
+                                        .then(frameModifier)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .clickable {
+                                            if (galleryMode == GalleryMode.PROMPT_PICKER) {
+                                                viewModel.recoverPromptFromImage(item)
+                                                if (navController.currentDestination?.route == "gallery") {
+                                                    navController.popBackStack()
+                                                }
+                                            } else {
+                                                fullscreenIndex = index
                                             }
-                                        } else {
-                                            fullscreenIndex = index
-                                        }
-                                    }
+                                        },
                             ) {
                                 SubcomposeAsyncImage(
                                     model = viewModel.getGalleryImageUrl(item),
@@ -295,14 +303,15 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         Box(modifier = Modifier.fillMaxSize().background(shimmerBrush()))
                                     },
                                     modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
+                                    contentScale = ContentScale.Crop,
                                 )
                                 Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .background(Color.Black.copy(alpha = 0.6f))
-                                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                                    modifier =
+                                        Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .fillMaxWidth()
+                                            .background(Color.Black.copy(alpha = 0.6f))
+                                            .padding(vertical = 4.dp, horizontal = 2.dp),
                                 ) {
                                     Text(
                                         text = item.name,
@@ -311,7 +320,7 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                         textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
+                                        modifier = Modifier.fillMaxWidth(),
                                     )
                                 }
                             }
@@ -336,13 +345,12 @@ fun GalleryScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     config = config,
                     images = imageFiles,
                     initialIndex = initialPage,
-                    onDismiss = { fullscreenIndex = -1 }
+                    onDismiss = { fullscreenIndex = -1 },
                 )
             }
         }
     }
 }
-
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -351,9 +359,11 @@ fun FullscreenGalleryViewer(
     config: com.example.forgegen.AppConfig,
     images: List<com.example.forgegen.GalleryItem>,
     initialIndex: Int,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
 ) {
-    val pagerState = androidx.compose.foundation.pager.rememberPagerState(initialPage = initialIndex, pageCount = { images.size })
+    val pagerState =
+        androidx.compose.foundation.pager
+            .rememberPagerState(initialPage = initialIndex, pageCount = { images.size })
     val currentItem = images.getOrNull(pagerState.currentPage)
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -366,15 +376,27 @@ fun FullscreenGalleryViewer(
         }
     }
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties =
+            androidx.compose.ui.window
+                .DialogProperties(usePlatformDefaultWidth = false),
+    ) {
         Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
             Row(
                 modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(vertical = 4.dp, horizontal = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, "Close", tint = Color.White) }
-                Text(currentItem?.name ?: "", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
+                Text(
+                    currentItem?.name ?: "",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                )
 
                 IconButton(onClick = {
                     currentItem?.let { viewModel.toggleFavorite(it) }
@@ -382,7 +404,7 @@ fun FullscreenGalleryViewer(
                     Icon(
                         imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = "Favorite",
-                        tint = if (isFavorite) Color(0xFFFFD54F) else Color.White
+                        tint = if (isFavorite) Color(0xFFFFD54F) else Color.White,
                     )
                 }
 
@@ -396,7 +418,15 @@ fun FullscreenGalleryViewer(
 
                 val showMetadata by viewModel.showGalleryMetadata.collectAsStateWithLifecycle()
                 IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {
-                    Icon(Icons.Default.Info, "Info", tint = Color.White, modifier = Modifier.then(if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier))
+                    Icon(
+                        Icons.Default.Info,
+                        "Info",
+                        tint = Color.White,
+                        modifier =
+                            Modifier.then(
+                                if (showMetadata) Modifier.background(Color(0x55FFFFFF), CircleShape).padding(2.dp) else Modifier,
+                            ),
+                    )
                 }
                 IconButton(onClick = { currentItem?.let { viewModel.downloadImage(it) } }) {
                     Icon(Icons.Default.Save, "Save", tint = Color.White)
@@ -416,7 +446,7 @@ fun FullscreenGalleryViewer(
                             },
                             modifier = Modifier.fillMaxWidth(),
                             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                            alignment = Alignment.TopCenter
+                            alignment = Alignment.TopCenter,
                         )
                     }
                 } else {
@@ -432,7 +462,7 @@ fun FullscreenGalleryViewer(
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                                alignment = Alignment.TopCenter
+                                alignment = Alignment.TopCenter,
                             )
                         }
                     }
@@ -442,26 +472,35 @@ fun FullscreenGalleryViewer(
                 val currentMetadata by viewModel.currentImageMetadata.collectAsStateWithLifecycle()
 
                 if (showMetadata) {
-                    val fileInfo = remember(currentItem) {
-                        if (currentItem != null) {
-                            val sizeStr = currentItem.displaySize
-                            val timeStr = currentItem.createdTime?.let { timeVal ->
-                                try {
-                                    val timeLong = timeVal.toDouble().toLong() * 1000
-                                    java.text.SimpleDateFormat("dd MMM yyyy, HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeLong))
-                                } catch (e: Exception) {
-                                    timeVal
-                                }
-                            }
+                    val fileInfo =
+                        remember(currentItem) {
+                            if (currentItem != null) {
+                                val sizeStr = currentItem.displaySize
+                                val timeStr =
+                                    currentItem.createdTime?.let { timeVal ->
+                                        try {
+                                            val timeLong = timeVal.toDouble().toLong() * 1000
+                                            java.text
+                                                .SimpleDateFormat(
+                                                    "dd MMM yyyy, HH:mm",
+                                                    java.util.Locale.getDefault(),
+                                                ).format(java.util.Date(timeLong))
+                                        } catch (e: Exception) {
+                                            timeVal
+                                        }
+                                    }
 
-                            val parts = listOfNotNull(
-                                currentItem.name,
-                                timeStr,
-                                sizeStr.takeIf { it.isNotEmpty() }
-                            )
-                            parts.joinToString(" • ")
-                        } else null
-                    }
+                                val parts =
+                                    listOfNotNull(
+                                        currentItem.name,
+                                        timeStr,
+                                        sizeStr.takeIf { it.isNotEmpty() },
+                                    )
+                                parts.joinToString(" • ")
+                            } else {
+                                null
+                            }
+                        }
 
                     MetadataAlertDialog(
                         metadata = currentMetadata,
@@ -482,7 +521,7 @@ fun FullscreenGalleryViewer(
                                 if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
                             }
                             viewModel.showToast("LoRAs Applied")
-                        }
+                        },
                     )
                 }
             }

@@ -18,7 +18,9 @@ import retrofit2.http.Url
  * ============================================================================ */
 interface ForgeApi {
     @POST("sdapi/v1/txt2img")
-    suspend fun generateImage(@Body payload: Txt2ImgPayloadDto): Response<Txt2ImgResponseDto>
+    suspend fun generateImage(
+        @Body payload: Txt2ImgPayloadDto,
+    ): Response<Txt2ImgResponseDto>
 
     @POST("sdapi/v1/interrupt")
     suspend fun interruptGeneration(): Response<Unit>
@@ -36,29 +38,37 @@ interface ForgeApi {
     suspend fun unloadCheckpoint(): Response<Unit>
 
     @POST("sdapi/v1/png-info")
-    suspend fun getPngInfo(@Body payload: PngInfoPayloadDto): Response<PngInfoResponseDto>
+    suspend fun getPngInfo(
+        @Body payload: PngInfoPayloadDto,
+    ): Response<PngInfoResponseDto>
 
     @POST("sdapi/v1/tokenize")
-    suspend fun tokenize(@Body payload: TokenizePayloadDto): Response<TokenizeResponseDto>
+    suspend fun tokenize(
+        @Body payload: TokenizePayloadDto,
+    ): Response<TokenizeResponseDto>
 
     @GET("sdapi/v1/progress")
-    suspend fun getProgress(@Query("skip_current_image") skipImage: Boolean): Response<ProgressResponseDto>
+    suspend fun getProgress(
+        @Query("skip_current_image") skipImage: Boolean,
+    ): Response<ProgressResponseDto>
 
     @GET("sdapi/v1/memory")
     suspend fun getMemoryStats(): Response<MemoryResponseDto>
 
-    /* --- Physton Prompt History --- */
-    
+    // --- Physton Prompt History ---
+
     @GET("physton_prompt/get_latest_history")
     suspend fun getLatestHistory(
-        @Query("type") type: String // "txt2img" or "txt2img_neg"
+        @Query("type") type: String, // "txt2img" or "txt2img_neg"
     ): Response<PhystonHistoryDto>
 
     @GET("sdapi/v1/options")
     suspend fun getOptions(): Response<OptionsResponseDto>
 
     @POST("sdapi/v1/options")
-    suspend fun setOptions(@Body payload: OptionsPayloadDto): Response<Unit>
+    suspend fun setOptions(
+        @Body payload: OptionsPayloadDto,
+    ): Response<Unit>
 
     @GET("sdapi/v1/samplers")
     suspend fun getSamplers(): Response<List<NameResponseDto>>
@@ -75,8 +85,7 @@ interface ForgeApi {
     @GET("sdapi/v1/loras")
     suspend fun getLoras(): Response<List<LoraItemDto>>
 
-
-    /* --- Custom API & Infinite Image Browsing --- */
+    // --- Custom API & Infinite Image Browsing ---
 
     @GET("customapi/v1/all-models-hashes")
     suspend fun getCustomModelsHashes(): Response<CustomApiModelsResponseDto>
@@ -89,17 +98,19 @@ interface ForgeApi {
     @GET("infinite_image_browsing/files")
     suspend fun getGalleryFiles(
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query(value = "folder_path", encoded = true) folderPath: String? = null
+        @Query(value = "folder_path", encoded = true) folderPath: String? = null,
     ): Response<ResponseBody>
 
     @GET
-    suspend fun getGlobalSettingsDynamic(@Url url: String): Response<GlobalSettingResponseDto>
+    suspend fun getGlobalSettingsDynamic(
+        @Url url: String,
+    ): Response<GlobalSettingResponseDto>
 
     @GET
     suspend fun getGalleryFilesDynamic(
         @Url url: String,
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query(value = "folder_path", encoded = true) folderPath: String? = null
+        @Query(value = "folder_path", encoded = true) folderPath: String? = null,
     ): Response<ResponseBody>
 
     @GET("app/metadata")
@@ -117,6 +128,7 @@ interface ForgeApi {
  * ============================================================================ */
 interface CivitaiApi {
     @GET("api/v1/model-versions/by-hash/{hash}")
-    suspend fun getModelByHash(@Path("hash") hash: String): Response<CivitaiVersionResponseDto>
+    suspend fun getModelByHash(
+        @Path("hash") hash: String,
+    ): Response<CivitaiVersionResponseDto>
 }
-

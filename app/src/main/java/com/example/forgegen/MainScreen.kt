@@ -6,7 +6,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.input.pointer.pointerInput
@@ -23,7 +22,6 @@ import coil.request.CachePolicy
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import okhttp3.internal.http2.FlowControlListener
 
 /* ============================================================================
  * MAIN SCREEN (Orchestrator)
@@ -33,7 +31,10 @@ import okhttp3.internal.http2.FlowControlListener
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
+fun MainScreen(
+    viewModel: ForgeViewModel,
+    navController: NavHostController,
+) {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val state by viewModel.appState.collectAsStateWithLifecycle()
     val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
@@ -66,11 +67,8 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
 
-
-
     var pendingLora by remember { mutableStateOf<ApiResource?>(null) }
     var fullscreenImageIndex by remember { mutableIntStateOf(-1) }
-
 
     var tagsPopupHash by remember { mutableStateOf<String?>(null) }
     var tagsPopupName by remember { mutableStateOf("") }
@@ -88,12 +86,14 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             if (currentModelResource != null) {
                 val url = viewModel.getPreviewUrl(currentModelResource.path, isLora = false)
                 if (url.isNotEmpty()) {
-                    val request = ImageRequest.Builder(context)
-                        .data(url)
-                        .size(150)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
-                        .diskCachePolicy(CachePolicy.ENABLED)
-                        .build()
+                    val request =
+                        ImageRequest
+                            .Builder(context)
+                            .data(url)
+                            .size(150)
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
+                            .build()
                     imageLoader.enqueue(request)
                 }
             }
@@ -103,12 +103,14 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 if (loraResource != null) {
                     val url = viewModel.getPreviewUrl(loraResource.path, isLora = true)
                     if (url.isNotEmpty()) {
-                        val request = ImageRequest.Builder(context)
-                            .data(url)
-                            .size(150)
-                            .memoryCachePolicy(CachePolicy.ENABLED)
-                            .diskCachePolicy(CachePolicy.ENABLED)
-                            .build()
+                        val request =
+                            ImageRequest
+                                .Builder(context)
+                                .data(url)
+                                .size(150)
+                                .memoryCachePolicy(CachePolicy.ENABLED)
+                                .diskCachePolicy(CachePolicy.ENABLED)
+                                .build()
                         imageLoader.enqueue(request)
                     }
                 }
@@ -116,11 +118,12 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         }
     }
 
-    val onGalleryClick = rememberDebounced {
-        viewModel.setGalleryMode(GalleryMode.NORMAL)
-        viewModel.fetchGalleryFolder(config.galleryPath)
-        navController.navigate("gallery")
-    }
+    val onGalleryClick =
+        rememberDebounced {
+            viewModel.setGalleryMode(GalleryMode.NORMAL)
+            viewModel.fetchGalleryFolder(config.galleryPath)
+            navController.navigate("gallery")
+        }
 
     val onSettingsClick = rememberDebounced { navController.navigate("setup") }
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
@@ -129,18 +132,20 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     // Calculate device navigation bar height in pixels to correctly align bottom elements
     val density = LocalDensity.current
-    val navBarHeightDp = with(density) {
-        WindowInsets.navigationBars.getBottom(this).toDp()
-    }
+    val navBarHeightDp =
+        with(density) {
+            WindowInsets.navigationBars.getBottom(this).toDp()
+        }
 
     // Elevate the sheet handle (40.dp peek offset) above the system navigation bar to prevent overlaps
     val peekHeight = 40.dp + navBarHeightDp
 
     // Initialize bottom sheet state with expand status based on AppConfig preferences
-    val sheetState = rememberStandardBottomSheetState(
-        initialValue = if (config.bottomSheetExpandedByDefault) SheetValue.Expanded else SheetValue.PartiallyExpanded,
-        skipHiddenState = true
-    )
+    val sheetState =
+        rememberStandardBottomSheetState(
+            initialValue = if (config.bottomSheetExpandedByDefault) SheetValue.Expanded else SheetValue.PartiallyExpanded,
+            skipHiddenState = true,
+        )
     val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
 
     var showUnloadDialog by remember { mutableStateOf(false) }
@@ -158,14 +163,15 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     // Root screen layout container configured with tap gestures to dismiss the virtual keyboard
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = {
-                    // Gdy użytkownik kliknie gdziekolwiek indziej, zdejmij focus i schowaj klawiaturę
-                    focusManager.clearFocus()
-                })
-            }
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        // Gdy użytkownik kliknie gdziekolwiek indziej, zdejmij focus i schowaj klawiaturę
+                        focusManager.clearFocus()
+                    })
+                },
     ) {
         BottomSheetScaffold(
             modifier = blurModifier,
@@ -182,7 +188,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     isActivelyGenerating = isActivelyGenerating,
                     onUnloadClick = { showUnloadDialog = true },
                     onGalleryClick = onGalleryClick,
-                    onSettingsClick = onSettingsClick
+                    onSettingsClick = onSettingsClick,
                 )
             },
             sheetContent = {
@@ -194,15 +200,14 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     progress = progress,
                     currentEta = currentEta,
                     onQueueClick = onQueueClick,
-                    onNavigateToPresets = { navController.navigate("presets") }
+                    onNavigateToPresets = { navController.navigate("presets") },
                 )
-            }
+            },
         ) { padding ->
             Box(modifier = Modifier.padding(padding).fillMaxSize()) {
                 val scrollState = rememberScrollState()
 
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
-
                     OomAlertSection(viewModel)
 
                     PreviewSection(
@@ -223,7 +228,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             viewModel.setGalleryMode(com.example.forgegen.GalleryMode.PROMPT_PICKER)
                             viewModel.fetchGalleryFolder(config.galleryPath)
                             navController.navigate("gallery")
-                        }
+                        },
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -233,7 +238,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         state = state,
                         config = config,
                         promptHistory = promptHistory,
-                        navController = navController
+                        navController = navController,
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -245,7 +250,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         selectedModel = selectedModel,
                         samplers = samplers,
                         schedulers = schedulers,
-                        upscalers = upscalers
+                        upscalers = upscalers,
                     )
 
                     LorasSection(
@@ -256,7 +261,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         onOpenTagsPopup = { hash, name ->
                             tagsPopupHash = hash
                             tagsPopupName = name
-                        }
+                        },
                     )
 
                     // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
@@ -272,7 +277,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 viewModel = viewModel,
                 state = state,
                 lora = pendingLora!!,
-                onDismiss = { pendingLora = null }
+                onDismiss = { pendingLora = null },
             )
         }
 
@@ -282,7 +287,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 config = config,
                 sessionImages = sessionImages,
                 initialIndex = fullscreenImageIndex,
-                onDismiss = { fullscreenImageIndex = -1 }
+                onDismiss = { fullscreenImageIndex = -1 },
             )
         }
 
@@ -303,16 +308,23 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     } else {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.heightIn(max = 300.dp)
+                            modifier = Modifier.heightIn(max = 300.dp),
                         ) {
                             filteredTags.forEach { tag ->
                                 AssistChip(
                                     onClick = {
                                         val currentPrompt = state.positivePrompt
-                                        val newPrompt = if (currentPrompt.endsWith(",")) "$currentPrompt $tag" else if (currentPrompt.isBlank()) tag else "$currentPrompt, $tag"
+                                        val newPrompt =
+                                            if (currentPrompt.endsWith(",")) {
+                                                "$currentPrompt $tag"
+                                            } else if (currentPrompt.isBlank()) {
+                                                tag
+                                            } else {
+                                                "$currentPrompt, $tag"
+                                            }
                                         viewModel.updateState { it.copy(positivePrompt = newPrompt) }
                                     },
-                                    label = { Text(tag, fontSize = 12.sp) }
+                                    label = { Text(tag, fontSize = 12.sp) },
                                 )
                             }
                         }
@@ -320,7 +332,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 },
                 confirmButton = {
                     TextButton(onClick = { tagsPopupHash = null }) { Text("Close") }
-                }
+                },
             )
         }
 
@@ -328,13 +340,18 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             AlertDialog(
                 onDismissRequest = { showUnloadDialog = false },
                 title = { Text("Unload Model from VRAM", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-                text = { Text("Are you sure you want to unload the active model from GPU VRAM to free up server memory?", fontSize = 14.sp) },
+                text = {
+                    Text(
+                        "Are you sure you want to unload the active model from GPU VRAM to free up server memory?",
+                        fontSize = 14.sp,
+                    )
+                },
                 confirmButton = {
                     TextButton(
                         onClick = {
                             showUnloadDialog = false
                             viewModel.unloadCheckpoint()
-                        }
+                        },
                     ) {
                         Text("Unload", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
                     }
@@ -343,7 +360,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     TextButton(onClick = { showUnloadDialog = false }) {
                         Text("Cancel")
                     }
-                }
+                },
             )
         }
     }

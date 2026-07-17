@@ -1,47 +1,25 @@
 
 package com.example.forgegen
 
-
-
 import android.app.Application
-
 import android.content.Intent
-
 import android.net.Uri
-
 import androidx.datastore.preferences.core.edit
-
 import androidx.datastore.preferences.core.intPreferencesKey
-
 import androidx.lifecycle.AndroidViewModel
-
 import androidx.lifecycle.viewModelScope
-
 import kotlinx.coroutines.Dispatchers
-
 import kotlinx.coroutines.flow.MutableSharedFlow
-
 import kotlinx.coroutines.flow.MutableStateFlow
-
 import kotlinx.coroutines.flow.SharedFlow
-
-import kotlinx.coroutines.flow.StateFlow
-
-import kotlinx.coroutines.flow.asSharedFlow
-
-import kotlinx.coroutines.flow.asStateFlow
-
-import kotlinx.coroutines.flow.map
-
 import kotlinx.coroutines.flow.SharingStarted
-
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-
 import kotlinx.coroutines.launch
-
 import okhttp3.OkHttpClient
-
-
 
 /* ============================================================================
 
@@ -55,51 +33,32 @@ import okhttp3.OkHttpClient
 
  * ============================================================================ */
 
-
-
-class ForgeViewModel(application: Application) : AndroidViewModel(application) {
-
-
-
+class ForgeViewModel(
+    application: Application,
+) : AndroidViewModel(application) {
     // --- GLOBALNY SYSTEM TOASTÓW ---
 
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 10)
 
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
-
-
     fun showToast(message: String) {
-
         _toastMessage.tryEmit(message)
-
     }
-
-
 
     private val _isAppBlurred = MutableStateFlow(false)
 
     val isAppBlurred: StateFlow<Boolean> = _isAppBlurred.asStateFlow()
 
-
-
     fun setAppBlurred(blurred: Boolean) {
-
         _isAppBlurred.value = blurred
-
     }
 
-
-
     // --- INICJALIZACJA MENEDŻERÓW ---
-
-
 
     val networkManager: ForgeNetworkManager
 
     val updateManager: ForgeUpdateManager
-
-
 
     init {
 
@@ -107,44 +66,33 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
 
         ForgeRepository.init(application)
 
-
-
         // 2. Network Manager
 
-        networkManager = ForgeNetworkManager(
-
-            application = application,
-
-            db = ForgeRepository.db,
-
-            getConfig = { ForgeRepository.config.value },
-
-            updateConfig = { ForgeSettingsManager.saveConfig(it) },
-
-            showToast = { showToast(it) },
-
-            managerScope = viewModelScope
-
-        )
-
-
+        networkManager =
+            ForgeNetworkManager(
+                application = application,
+                db = ForgeRepository.db,
+                getConfig = { ForgeRepository.config.value },
+                updateConfig = { ForgeSettingsManager.saveConfig(it) },
+                showToast = { showToast(it) },
+                managerScope = viewModelScope,
+            )
 
         // 3. Gallery & Queue Managers
 
         ForgeGalleryManager.init(application, ForgeRepository.db, networkManager)
         ForgeQueueManager.init(application)
 
-
         // 4. Update Manager
-        updateManager = ForgeUpdateManager(
-            application = application,
-            getForgeApi = { ForgeRepository.forgeApi },
-
-            getConfig = { ForgeRepository.config.value },
-            saveConfig = { ForgeSettingsManager.saveConfig(it) },
-            showToast = { showToast(it) },
-            scope = viewModelScope
-        )
+        updateManager =
+            ForgeUpdateManager(
+                application = application,
+                getForgeApi = { ForgeRepository.forgeApi },
+                getConfig = { ForgeRepository.config.value },
+                saveConfig = { ForgeSettingsManager.saveConfig(it) },
+                showToast = { showToast(it) },
+                scope = viewModelScope,
+            )
 
         // Podłącz logikę subskrypcji zdarzeń toastów z repozytorium do viewModelu
         viewModelScope.launch {
@@ -160,7 +108,7 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val appState: StateFlow<AppState> = ForgeRepository.appState
     val promptHistory: StateFlow<List<PromptHistoryItem>> = ForgeRepository.promptHistory
     val wildcards: StateFlow<List<WildcardEntity>> = ForgePromptManager.wildcards
-    
+
     val activeLoras: StateFlow<List<ActiveLora>> = ForgeRepository.activeLoras
 
     val isConnected: StateFlow<Boolean> = ForgeRepository.isConnected
@@ -236,9 +184,11 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     val isKioskMode: StateFlow<Boolean> = _isKioskMode.asStateFlow()
 
     private val STATS_TIME_RANGE_KEY = intPreferencesKey("stats_time_range")
-    val statsTimeRangeMinutes: StateFlow<Int> = getApplication<Application>().dataStore.data
-        .map { it[STATS_TIME_RANGE_KEY] ?: 15 }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 15)
+    val statsTimeRangeMinutes: StateFlow<Int> =
+        getApplication<Application>()
+            .dataStore.data
+            .map { it[STATS_TIME_RANGE_KEY] ?: 15 }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 15)
 
     fun setStatsTimeRange(minutes: Int) {
         viewModelScope.launch {
@@ -254,26 +204,48 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     // --- DELEGACJA AKCJI DO REPOZYTORIUM ---
     suspend fun getTagsForLora(hash: String) = ForgeModelManager.getTagsForLora(hash)
 
-
-    fun saveWildcard(name: String, content: String) = ForgePromptManager.saveWildcard(name, content)
-    
+    fun saveWildcard(
+        name: String,
+        content: String,
+    ) = ForgePromptManager.saveWildcard(name, content)
 
     fun setAppForegroundState(isForeground: Boolean) = ForgeRepository.setAppForegroundState(isForeground)
 
     fun saveConfig(newConfig: AppConfig) = ForgeSettingsManager.saveConfig(newConfig)
+
     fun saveCurrentAsDefault() = ForgeSettingsManager.saveCurrentAsDefault()
+
     fun resetToDefaults() = ForgeSettingsManager.resetToDefaults()
-    fun savePreset(name: String, includePrompts: Boolean = true) = ForgeSettingsManager.savePreset(name, includePrompts)
+
+    fun savePreset(
+        name: String,
+        includePrompts: Boolean = true,
+    ) = ForgeSettingsManager.savePreset(name, includePrompts)
+
     fun loadPreset(name: String) = ForgeRepository.loadPreset(name)
+
     fun deletePreset(name: String) = ForgeRepository.deletePreset(name)
-    fun updatePreset(oldName: String, updated: GenerationPreset) = ForgeSettingsManager.updatePreset(oldName, updated)
+
+    fun updatePreset(
+        oldName: String,
+        updated: GenerationPreset,
+    ) = ForgeSettingsManager.updatePreset(oldName, updated)
 
     fun fetchAutoConfig() = ForgeRepository.fetchAutoConfig()
 
-    fun getPreviewUrl(originalPath: String, isLora: Boolean = false) = ForgeRepository.getPreviewUrl(originalPath, isLora)
-    fun addServerProfile(name: String, url: String) = ForgeRepository.addServerProfile(name, url)
+    fun getPreviewUrl(
+        originalPath: String,
+        isLora: Boolean = false,
+    ) = ForgeRepository.getPreviewUrl(originalPath, isLora)
+
+    fun addServerProfile(
+        name: String,
+        url: String,
+    ) = ForgeRepository.addServerProfile(name, url)
+
     fun removeServerProfile(name: String) = ForgeSettingsManager.removeServerProfile(name)
-        fun wipeAllData() {
+
+    fun wipeAllData() {
         viewModelScope.launch(Dispatchers.IO) {
             ForgeSettingsManager.resetToDefaults()
             ForgeSettingsManager.clearPromptHistory()
@@ -282,33 +254,59 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun wipeSettings() = ForgeSettingsManager.resetToDefaults()
+
     fun wipePresets() = ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(presets = emptyList()))
-    fun wipeServerProfiles() = ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(serverProfiles = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860"))))
+
+    fun wipeServerProfiles() =
+        ForgeSettingsManager.saveConfig(
+            ForgeSettingsManager.config.value.copy(serverProfiles = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860"))),
+        )
+
     fun wipePromptHistory() = ForgeSettingsManager.clearPromptHistory()
+
     fun wipeWildcards() = ForgePromptManager.deleteAllWildcards()
-    
 
     // --- DELEGACJA AKCJI DO MENEDŻERA KOLEJKI ---
     fun resumeQueue() = ForgeQueueManager.resumeQueue()
+
     fun interruptGeneration() = ForgeQueueManager.interruptGeneration()
+
     fun queueGeneration() = ForgeQueueManager.queueGeneration()
 
-    fun updateQueueItem(id: String, positivePrompt: String, negativePrompt: String) = ForgeQueueManager.updateQueueItem(id, positivePrompt, negativePrompt)
+    fun updateQueueItem(
+        id: String,
+        positivePrompt: String,
+        negativePrompt: String,
+    ) = ForgeQueueManager.updateQueueItem(id, positivePrompt, negativePrompt)
+
     fun clearQueue() = ForgeQueueManager.clearQueue()
+
     fun removeFromQueue(id: String) = ForgeQueueManager.removeFromQueue(id)
+
     fun moveQueueItemUp(id: String) = ForgeQueueManager.moveQueueItemUp(id)
+
     fun moveQueueItemDown(id: String) = ForgeQueueManager.moveQueueItemDown(id)
 
     fun dismissGridPreview(index: Int? = null) = ForgeQueueManager.dismissGridPreview(index)
+
     fun sessionPrev() = ForgeQueueManager.sessionPrev()
+
     fun sessionNext() = ForgeQueueManager.sessionNext()
+
     fun downloadSessionImage(localFilePath: String) = ForgeQueueManager.downloadSessionImage(localFilePath)
-    fun shareSessionImage(localFilePath: String, onIntentReady: (Intent) -> Unit) = ForgeQueueManager.shareSessionImage(localFilePath, onIntentReady)
+
+    fun shareSessionImage(
+        localFilePath: String,
+        onIntentReady: (Intent) -> Unit,
+    ) = ForgeQueueManager.shareSessionImage(localFilePath, onIntentReady)
 
     // --- DELEGACJA AKCJI DO MENEDŻERA AKTUALIZACJI ---
     fun checkForUpdates(manual: Boolean = false) = updateManager.checkForUpdates(manual)
+
     fun downloadUpdate() = updateManager.downloadUpdate()
+
     fun installUpdate() = updateManager.installUpdate()
+
     fun dismissUpdate() = updateManager.dismissUpdate()
 
     // --- REFRESH, VRAM & PNG INFO ACTIONS ---
@@ -320,39 +318,69 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshLoras() {
         networkManager.refreshLoras { success, msg ->
-            if (success) showToast("Loras refreshed!")
-            else showToast("Error: $msg")
+            if (success) {
+                showToast("Loras refreshed!")
+            } else {
+                showToast("Error: $msg")
+            }
         }
     }
 
     // --- DELEGACJA AKCJI DO MENEDŻERÓW (Missing ones) ---
     fun loadMetadataForImage(item: GalleryItem?) = ForgeGalleryManager.loadMetadataForImage(item)
+
     fun checkIfFavorite(path: String) = ForgeGalleryManager.checkIfFavorite(path)
+
     fun toggleFavorite(item: GalleryItem) = ForgeGalleryManager.toggleFavorite(item)
-    fun shareImage(item: GalleryItem, startActivity: (Intent) -> Unit) = ForgeGalleryManager.shareImage(item, startActivity)
+
+    fun shareImage(
+        item: GalleryItem,
+        startActivity: (Intent) -> Unit,
+    ) = ForgeGalleryManager.shareImage(item, startActivity)
+
     fun toggleGalleryMetadata() = ForgeGalleryManager.toggleGalleryMetadata()
+
     fun downloadImage(item: GalleryItem) = ForgeGalleryManager.downloadImage(item)
+
     fun getGalleryImageUrl(item: GalleryItem): String = ForgeGalleryManager.getGalleryImageUrl(item)
+
     fun recoverPromptFromImage(item: GalleryItem) = ForgeGalleryManager.recoverPromptFromImage(item)
+
     fun fetchGalleryFolder(path: String) = ForgeGalleryManager.fetchGalleryFolder(path)
+
     fun triggerManualGallerySync() = ForgeGalleryManager.triggerManualGallerySync()
 
     suspend fun extractMetadataFromUri(uri: android.net.Uri): String? = ForgeGalleryManager.extractMetadataFromUri(uri)
-    fun setImportedImageMetadata(data: String?) { _importedImageMetadata.value = data }
-        fun cancelCivitaiSync() = networkManager.cancelCivitaiSync()
+
+    fun setImportedImageMetadata(data: String?) {
+        _importedImageMetadata.value = data
+    }
+
+    fun cancelCivitaiSync() = networkManager.cancelCivitaiSync()
+
     fun setGalleryMode(mode: GalleryMode) = ForgeGalleryManager.setGalleryMode(mode)
+
     fun removeLora(name: String) = ForgeRepository.removeLora(name)
-    fun updateLoraStrength(name: String, strength: Float) = ForgeRepository.updateLoraStrength(name, strength)
+
+    fun updateLoraStrength(
+        name: String,
+        strength: Float,
+    ) = ForgeRepository.updateLoraStrength(name, strength)
+
     fun recoverLastSeed() = ForgeGalleryManager.recoverLastSeed()
+
     fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
-    
+
     fun recoverLastPrompt() = ForgeGalleryManager.recoverLastPrompt()
 
     fun changeCheckpoint(modelTitle: String) = networkManager.changeCheckpoint(modelTitle)
+
     fun syncCivitaiModelsManual() = networkManager.syncCivitaiModelsManual()
-    
+
     fun appendLora(loraName: String) = ForgeRepository.appendLora(loraName)
+
     fun updateState(transform: (AppState) -> AppState) = ForgeSettingsManager.updateState(transform)
+
     fun deleteWildcard(wildcard: WildcardEntity) = ForgePromptManager.deleteWildcard(wildcard.name)
 
     fun unloadCheckpoint() {
@@ -370,11 +398,18 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun getPngInfoForGalleryItem(item: GalleryItem, onResult: (String?) -> Unit) {
+    fun getPngInfoForGalleryItem(
+        item: GalleryItem,
+        onResult: (String?) -> Unit,
+    ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val imageUrl = getGalleryImageUrl(item)
-                val request = okhttp3.Request.Builder().url(imageUrl).build()
+                val request =
+                    okhttp3.Request
+                        .Builder()
+                        .url(imageUrl)
+                        .build()
                 client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val bytes = response.body.bytes()
@@ -383,21 +418,14 @@ class ForgeViewModel(application: Application) : AndroidViewModel(application) {
                         onResult(info)
                         return@launch
                     }
-
                 }
 
                 onResult(null)
-
             } catch (e: Exception) {
-
                 android.util.Log.e("ForgeViewModel", "Failed to fetch PNG info from server: $e")
 
                 onResult(null)
-
             }
-
         }
-
     }
-
 }

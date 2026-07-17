@@ -40,7 +40,7 @@ fun WelcomeScreen(navController: NavHostController) {
         // Smooth animation from 0.0 to 1.0 extended to 3 seconds to fit the heartbeat effect
         animationProgress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = 3000, easing = FastOutSlowInEasing)
+            animationSpec = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
         )
         // Navigate clearing the stack so the user cannot navigate back to the Welcome Screen
         navController.navigate("main") {
@@ -49,9 +49,10 @@ fun WelcomeScreen(navController: NavHostController) {
     }
 
     Canvas(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background),
     ) {
         val p = animationProgress.value
         val center = Offset(size.width / 2f, size.height / 2f)
@@ -68,9 +69,12 @@ fun WelcomeScreen(navController: NavHostController) {
         val heartbeatProgress = ((p - 0.45f) / 0.4f).coerceIn(0f, 1f)
 
         // Heartbeat effect (two pulse waves) expanding scale by up to 20%
-        val pulse = if (heartbeatProgress > 0f && heartbeatProgress < 1f) {
-            max(0f, sin(heartbeatProgress * Math.PI * 4).toFloat()) * 0.2f
-        } else 0f
+        val pulse =
+            if (heartbeatProgress > 0f && heartbeatProgress < 1f) {
+                max(0f, sin(heartbeatProgress * Math.PI * 4).toFloat()) * 0.2f
+            } else {
+                0f
+            }
 
         // Constant base scale with pulse applied - ensures no translation jitter
         val anvilScale = 1f + pulse
@@ -96,25 +100,26 @@ fun WelcomeScreen(navController: NavHostController) {
                     start = Offset(startX, startY),
                     end = Offset(endX, endY),
                     strokeWidth = 12f,
-                    cap = StrokeCap.Round
+                    cap = StrokeCap.Round,
                 )
             }
         }
 
         // Phase 2 & 3: Drawing the anvil (fade-in + heartbeat scaling in place)
         if (anvilAlpha > 0f) {
-            val anvilPath = Path().apply {
-                moveTo(-60f, -40f) // Top-left corner
-                lineTo(40f, -40f) // Top-right corner (base of horn)
-                quadraticTo(70f, -40f, 70f, -10f) // Tip of horn
-                quadraticTo(40f, -10f, 30f, -10f) // Bottom of horn
-                quadraticTo(15f, -10f, 15f, 20f) // Right-side indent
-                lineTo(30f, 50f) // Right base
-                lineTo(-30f, 50f) // Left base
-                lineTo(-15f, 20f) // Left-side indent
-                quadraticTo(-15f, -10f, -60f, -10f) // Bottom-left tail
-                close()
-            }
+            val anvilPath =
+                Path().apply {
+                    moveTo(-60f, -40f) // Top-left corner
+                    lineTo(40f, -40f) // Top-right corner (base of horn)
+                    quadraticTo(70f, -40f, 70f, -10f) // Tip of horn
+                    quadraticTo(40f, -10f, 30f, -10f) // Bottom of horn
+                    quadraticTo(15f, -10f, 15f, 20f) // Right-side indent
+                    lineTo(30f, 50f) // Right base
+                    lineTo(-30f, 50f) // Left base
+                    lineTo(-15f, 20f) // Left-side indent
+                    quadraticTo(-15f, -10f, -60f, -10f) // Bottom-left tail
+                    close()
+                }
 
             withTransform({
                 translate(left = center.x, top = center.y - 20f)
@@ -124,7 +129,7 @@ fun WelcomeScreen(navController: NavHostController) {
             }) {
                 drawPath(
                     path = anvilPath,
-                    color = onBackgroundColor.copy(alpha = anvilAlpha)
+                    color = onBackgroundColor.copy(alpha = anvilAlpha),
                 )
             }
         }
@@ -132,19 +137,21 @@ fun WelcomeScreen(navController: NavHostController) {
         // Phase 4: Text fade-in of application name and version details during heartbeat
         if (textProgress > 0f) {
             val titleText = "ForgeGen"
-            val titleStyle = TextStyle(
-                color = primaryColor.copy(alpha = textProgress),
-                fontSize = 36.sp,
-                fontWeight = FontWeight.ExtraBold
-            )
+            val titleStyle =
+                TextStyle(
+                    color = primaryColor.copy(alpha = textProgress),
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                )
             val titleLayoutResult = textMeasurer.measure(text = titleText, style = titleStyle)
 
             val buildText = buildTextValue
-            val buildStyle = TextStyle(
-                color = primaryColor.copy(alpha = textProgress),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
+            val buildStyle =
+                TextStyle(
+                    color = primaryColor.copy(alpha = textProgress),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             val buildLayoutResult = textMeasurer.measure(text = buildText, style = buildStyle)
 
             // Subtle vertical entry transition (offset decays to zero as alpha reaches 1.0)
@@ -153,18 +160,20 @@ fun WelcomeScreen(navController: NavHostController) {
 
             drawText(
                 textLayoutResult = titleLayoutResult,
-                topLeft = Offset(
-                    x = center.x - (titleLayoutResult.size.width / 2f),
-                    y = startY
-                )
+                topLeft =
+                    Offset(
+                        x = center.x - (titleLayoutResult.size.width / 2f),
+                        y = startY,
+                    ),
             )
 
             drawText(
                 textLayoutResult = buildLayoutResult,
-                topLeft = Offset(
-                    x = center.x - (buildLayoutResult.size.width / 2f),
-                    y = startY + titleLayoutResult.size.height + 4f
-                )
+                topLeft =
+                    Offset(
+                        x = center.x - (buildLayoutResult.size.width / 2f),
+                        y = startY + titleLayoutResult.size.height + 4f,
+                    ),
             )
         }
     }

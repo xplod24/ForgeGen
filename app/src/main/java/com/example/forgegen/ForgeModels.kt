@@ -20,17 +20,19 @@ import com.google.gson.annotations.SerializedName
 
 data class ServerProfile(
     val name: String,
-    val url: String
+    val url: String,
 )
 
 data class GenerationPreset(
     val name: String,
     val state: AppState,
-    val includePrompts: Boolean = true
+    val includePrompts: Boolean = true,
 )
 
 enum class GallerySyncMode {
-    MANUAL, ON_ENTRY, BACKGROUND
+    MANUAL,
+    ON_ENTRY,
+    BACKGROUND,
 }
 
 data class AppConfig(
@@ -62,7 +64,7 @@ data class AppConfig(
     var lastUpdateCheckDate: String = "",
     var defaultState: AppState = AppState(),
     var presets: List<GenerationPreset> = emptyList(),
-    var gallerySyncMode: GallerySyncMode = GallerySyncMode.MANUAL
+    var gallerySyncMode: GallerySyncMode = GallerySyncMode.MANUAL,
 )
 
 data class AppState(
@@ -84,14 +86,30 @@ data class AppState(
     var denoising: Float = 0.7f,
     var upscaler: String = "Latent",
     var saveImages: Boolean = true,
-    var saveToDevice: Boolean = false
+    var saveToDevice: Boolean = false,
 )
 
-data class PngInfoPayloadDto(val image: String)
-data class PngInfoResponseDto(val info: String, val items: Map<String, String>? = null)
-data class TokenizePayloadDto(val text: String)
-data class TokenizeResponseDto(val tokens: List<Int>? = null)
-data class PhystonHistoryDto(val prompt: String, val tags: List<String>? = null)
+data class PngInfoPayloadDto(
+    val image: String,
+)
+
+data class PngInfoResponseDto(
+    val info: String,
+    val items: Map<String, String>? = null,
+)
+
+data class TokenizePayloadDto(
+    val text: String,
+)
+
+data class TokenizeResponseDto(
+    val tokens: List<Int>? = null,
+)
+
+data class PhystonHistoryDto(
+    val prompt: String,
+    val tags: List<String>? = null,
+)
 
 data class Txt2ImgRequestDto(
     val prompt: String,
@@ -111,13 +129,13 @@ data class Txt2ImgRequestDto(
     val hr_upscaler: String,
     val denoising_strength: Float,
     val save_images: Boolean = true,
-    val send_images: Boolean = true
+    val send_images: Boolean = true,
 )
 
 data class PromptHistoryItem(
     val positivePrompt: String,
     val negativePrompt: String,
-    val timestamp: Long
+    val timestamp: Long,
 )
 
 // DTO zagnieżdżone celowo dla kompatybilności wstecznej w SharedPreferences (kolejka).
@@ -126,13 +144,13 @@ data class QueuedGeneration(
     val id: String,
     val positivePrompt: String,
     val payload: Txt2ImgPayloadDto,
-    val status: GenerationStatus = GenerationStatus.QUEUED
+    val status: GenerationStatus = GenerationStatus.QUEUED,
 )
 
 enum class GenerationStatus {
     QUEUED,
     GENERATING,
-    SUSPENDED
+    SUSPENDED,
 }
 
 data class ServerStatRecord(
@@ -141,14 +159,14 @@ data class ServerStatRecord(
     val ramUsed: Double,
     val ramTotal: Double,
     val vramUsed: Double,
-    val vramTotal: Double
+    val vramTotal: Double,
 )
 
 data class ApiResource(
     val title: String,
     val path: String,
     val name: String,
-    val hash: String? = null
+    val hash: String? = null,
 )
 
 data class UpdateManifest(
@@ -159,12 +177,12 @@ data class UpdateManifest(
     val sha256: String,
     val releaseDate: String? = null,
     val isCritical: Boolean = false,
-    val changelog: Map<String, List<String>>? = null
+    val changelog: Map<String, List<String>>? = null,
 )
 
 enum class GalleryMode {
     NORMAL,
-    PROMPT_PICKER
+    PROMPT_PICKER,
 }
 
 data class GalleryItem(
@@ -173,7 +191,7 @@ data class GalleryItem(
     val type: String,
     val date: String? = null,
     val createdTime: String? = null,
-    val size: String? = null
+    val size: String? = null,
 ) {
     val isDir: Boolean get() = type == "dir"
     val displaySize: String get() {
@@ -193,7 +211,7 @@ data class CivitaiModelEntity(
     val type: String,
     val name: String,
     val trainedWords: String,
-    val previewImage: String?
+    val previewImage: String?,
 )
 
 @Dao
@@ -219,7 +237,7 @@ data class FavoriteImageEntity(
     @PrimaryKey val fullpath: String,
     val name: String,
     val date: String?,
-    val savedAt: Long = System.currentTimeMillis()
+    val savedAt: Long = System.currentTimeMillis(),
 )
 
 @Dao
@@ -257,12 +275,14 @@ data class GalleryImageEntity(
     val sampler: String,
     val seed: String,
     val loras: String,
-    val savedAt: Long
+    val savedAt: Long,
 )
 
 @Dao
 interface GalleryImageDao {
-    @Query("SELECT * FROM gallery_images WHERE positivePrompt LIKE '%' || :query || '%' OR name LIKE '%' || :query || '%' OR loras LIKE '%' || :query || '%'")
+    @Query(
+        "SELECT * FROM gallery_images WHERE positivePrompt LIKE '%' || :query || '%' OR name LIKE '%' || :query || '%' OR loras LIKE '%' || :query || '%'",
+    )
     suspend fun searchImages(query: String): List<GalleryImageEntity>
 
     @Query("SELECT * FROM gallery_images WHERE fullpath = :path LIMIT 1")
@@ -273,7 +293,7 @@ interface GalleryImageDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(images: List<GalleryImageEntity>)
-    
+
     @Query("DELETE FROM gallery_images WHERE fullpath LIKE :folderPath || '%'")
     suspend fun clearFolder(folderPath: String)
 }
@@ -281,12 +301,15 @@ interface GalleryImageDao {
 @Database(
     entities = [CivitaiModelEntity::class, FavoriteImageEntity::class, WildcardEntity::class, GalleryImageEntity::class],
     version = 9,
-    exportSchema = false
+    exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
     abstract fun civitaiModelDao(): CivitaiModelDao
+
     abstract fun favoriteImageDao(): FavoriteImageDao
+
     abstract fun wildcardDao(): WildcardDao
+
     abstract fun galleryImageDao(): GalleryImageDao
 }
 
@@ -297,7 +320,7 @@ abstract class ForgeDatabase : RoomDatabase() {
 
 data class OverrideSettingsDto(
     @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int,
-    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
 )
 
 data class Txt2ImgPayloadDto(
@@ -318,53 +341,55 @@ data class Txt2ImgPayloadDto(
     val hr_upscaler: String,
     val denoising_strength: Float,
     val save_images: Boolean = true,
-    val send_images: Boolean = true
+    val send_images: Boolean = true,
 )
 
 data class ProgressStateDto(
     @SerializedName("job_count") val jobCount: Int = 0,
     @SerializedName("job_no") val jobNo: Int = 0,
     @SerializedName("sampling_step") val samplingStep: Int = 0,
-    @SerializedName("sampling_steps") val samplingSteps: Int = 0
+    @SerializedName("sampling_steps") val samplingSteps: Int = 0,
 )
 
 data class ProgressResponseDto(
     val progress: Double = 0.0,
     @SerializedName("eta_relative") val etaRelative: Double = 0.0,
     val state: ProgressStateDto? = null,
-    @SerializedName("current_image") val currentImage: String? = null
+    @SerializedName("current_image") val currentImage: String? = null,
 )
 
 data class Txt2ImgResponseDto(
     val images: List<String> = emptyList(),
     val info: String = "",
-    val parameters: Map<String, Any>? = null
+    val parameters: Map<String, Any>? = null,
 )
 
 data class OptionsPayloadDto(
-    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String,
 )
 
 data class OptionsResponseDto(
-    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null
+    @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
 )
 
-data class NameResponseDto(val name: String)
+data class NameResponseDto(
+    val name: String,
+)
 
 data class SdModelItemDto(
     val title: String?,
     val filename: String?,
-    @SerializedName("model_name") val modelName: String?
+    @SerializedName("model_name") val modelName: String?,
 )
 
 data class LoraItemDto(
     val name: String?,
     val path: String?,
-    val metadata: LoraMetadataDto?
+    val metadata: LoraMetadataDto?,
 )
 
 data class LoraMetadataDto(
-    @SerializedName("sshs_model_hash") val sshsModelHash: String?
+    @SerializedName("sshs_model_hash") val sshsModelHash: String?,
 )
 
 data class UpdateManifestDto(
@@ -375,11 +400,11 @@ data class UpdateManifestDto(
     val sha256: String?,
     val releaseDate: String? = null,
     val isCritical: Boolean = false,
-    val changelog: Map<String, List<String>>? = null
+    val changelog: Map<String, List<String>>? = null,
 )
 
 data class GalleryFileListDto(
-    val files: List<GalleryItemDto> = emptyList()
+    val files: List<GalleryItemDto> = emptyList(),
 )
 
 data class GalleryItemDto(
@@ -388,48 +413,58 @@ data class GalleryItemDto(
     val type: String?,
     val date: String? = null,
     @SerializedName("created_time") val createdTime: String? = null,
-    val size: String? = null
+    val size: String? = null,
 )
 
 // Nowe DTO dla Custom API (zastępuje org.json.JSONObject)
 data class CustomApiModelsResponseDto(
-    val models: List<CustomApiModelDto>? = emptyList()
+    val models: List<CustomApiModelDto>? = emptyList(),
 )
 
 data class CustomApiModelDto(
     val type: String?,
     val name: String?,
     val filename: String?,
-    val sha256: String?
+    val sha256: String?,
 )
 
 // Nowe DTO dla Civitai (zastępuje org.json.JSONObject)
 data class CivitaiVersionResponseDto(
     val model: CivitaiBaseModelDto?,
     val trainedWords: List<String>?,
-    val images: List<CivitaiImageDto>?
+    val images: List<CivitaiImageDto>?,
 )
 
-data class CivitaiBaseModelDto(val name: String?)
+data class CivitaiBaseModelDto(
+    val name: String?,
+)
 
-data class CivitaiImageDto(val url: String?)
+data class CivitaiImageDto(
+    val url: String?,
+)
 
 // Nowe DTO dla zapytań o pamięć i ustawienia globalne
 data class MemoryResponseDto(
     val ram: MemoryStatDto?,
-    val cuda: CudaStatDto?
+    val cuda: CudaStatDto?,
 )
 
-data class CudaStatDto(val system: MemoryStatDto?)
-data class MemoryStatDto(val used: Double?, val total: Double?)
+data class CudaStatDto(
+    val system: MemoryStatDto?,
+)
+
+data class MemoryStatDto(
+    val used: Double?,
+    val total: Double?,
+)
 
 data class GlobalSettingResponseDto(
     @SerializedName("sd_cwd") val sdCwd: String?,
-    @SerializedName("global_setting") val globalSetting: GlobalSettingInnerDto?
+    @SerializedName("global_setting") val globalSetting: GlobalSettingInnerDto?,
 )
 
 data class GlobalSettingInnerDto(
-    @SerializedName("outdir_txt2img_samples") val outdirTxt2ImgSamples: String?
+    @SerializedName("outdir_txt2img_samples") val outdirTxt2ImgSamples: String?,
 )
 
 /* ============================================================================
@@ -437,47 +472,48 @@ data class GlobalSettingInnerDto(
  * Czyste konwersje pomiędzy warstwą sieciową (DTO) a Domeną.
  * ============================================================================ */
 
-fun UpdateManifestDto.toDomain() = UpdateManifest(
-    versionCode = this.versionCode ?: 0,
-    versionName = this.versionName ?: "Unknown",
-    url = this.url ?: "",
-    channel = this.channel ?: "Stable",
-    sha256 = this.sha256 ?: "",
-    releaseDate = this.releaseDate,
-    isCritical = this.isCritical,
-    changelog = this.changelog
-)
+fun UpdateManifestDto.toDomain() =
+    UpdateManifest(
+        versionCode = this.versionCode ?: 0,
+        versionName = this.versionName ?: "Unknown",
+        url = this.url ?: "",
+        channel = this.channel ?: "Stable",
+        sha256 = this.sha256 ?: "",
+        releaseDate = this.releaseDate,
+        isCritical = this.isCritical,
+        changelog = this.changelog,
+    )
 
-fun GalleryItemDto.toDomain() = GalleryItem(
-    name = this.name ?: "Unknown",
-    fullpath = this.fullpath ?: "",
-    type = this.type ?: "file",
-    date = this.date,
-    createdTime = this.createdTime,
-    size = this.size
-)
+fun GalleryItemDto.toDomain() =
+    GalleryItem(
+        name = this.name ?: "Unknown",
+        fullpath = this.fullpath ?: "",
+        type = this.type ?: "file",
+        date = this.date,
+        createdTime = this.createdTime,
+        size = this.size,
+    )
 
-fun SdModelItemDto.toDomain() = ApiResource(
-    title = this.title ?: "Unknown Model",
-    path = this.filename ?: "",
-    name = this.modelName ?: "Unknown",
-    hash = null
-)
+fun SdModelItemDto.toDomain() =
+    ApiResource(
+        title = this.title ?: "Unknown Model",
+        path = this.filename ?: "",
+        name = this.modelName ?: "Unknown",
+        hash = null,
+    )
 
-fun LoraItemDto.toDomain() = ApiResource(
-    title = this.name ?: "Unknown LoRA",
-    path = this.path ?: "",
-    name = this.name ?: "Unknown",
-    hash = this.metadata?.sshsModelHash?.takeIf { it.isNotEmpty() } ?: this.name
-)
-
-
-
+fun LoraItemDto.toDomain() =
+    ApiResource(
+        title = this.name ?: "Unknown LoRA",
+        path = this.path ?: "",
+        name = this.name ?: "Unknown",
+        hash = this.metadata?.sshsModelHash?.takeIf { it.isNotEmpty() } ?: this.name,
+    )
 
 @androidx.room.Entity(tableName = "wildcards")
 data class WildcardEntity(
     @androidx.room.PrimaryKey val name: String,
-    val content: String
+    val content: String,
 )
 
 @androidx.room.Dao
@@ -490,10 +526,10 @@ interface WildcardDao {
 
     @androidx.room.Query("SELECT * FROM wildcards ORDER BY name ASC")
     suspend fun getAllWildcards(): List<WildcardEntity>
-    
+
     @androidx.room.Query("SELECT COUNT(*) FROM wildcards")
     suspend fun count(): Int
-    
+
     @androidx.room.Query("DELETE FROM wildcards")
     suspend fun clearAll()
 }

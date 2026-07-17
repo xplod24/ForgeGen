@@ -4,8 +4,6 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
-import android.content.Context
-import android.content.Intent
 import android.util.Log
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
@@ -36,7 +34,6 @@ import java.util.concurrent.TimeUnit
 
 @SuppressLint("StaticFieldLeak")
 object ForgeSettingsManager {
-
     private const val TAG = "ForgeSettingsManager"
 
     lateinit var application: Application
@@ -120,8 +117,9 @@ object ForgeSettingsManager {
     }
 
     // --- Client creation ---
-    fun createClient(timeoutSeconds: Int): OkHttpClient {
-        return OkHttpClient.Builder()
+    fun createClient(timeoutSeconds: Int): OkHttpClient =
+        OkHttpClient
+            .Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(180, TimeUnit.SECONDS)
             .addInterceptor { chain ->
@@ -140,21 +138,29 @@ object ForgeSettingsManager {
                     Log.e(TAG, "API CALL FAILED: ${e.message}", e)
                     throw e
                 }
-            }
-            .build()
-    }
+            }.build()
 
     // --- Load/Save Config ---
     fun loadConfig(prefs: Preferences): AppConfig {
         val json = prefs[CONFIG_KEY]
-        val parsed = if (json != null) {
-            try { gson.fromJson(json, AppConfig::class.java) } catch(_: Exception) { null }
-        } else null
+        val parsed =
+            if (json != null) {
+                try {
+                    gson.fromJson(json, AppConfig::class.java)
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
 
-        val oldLivePreviewState = try {
-            val jsonObj = org.json.JSONObject(json ?: "{}")
-            jsonObj.optBoolean("livePreviews", false)
-        } catch(_: Exception) { false }
+        val oldLivePreviewState =
+            try {
+                val jsonObj = org.json.JSONObject(json ?: "{}")
+                jsonObj.optBoolean("livePreviews", false)
+            } catch (_: Exception) {
+                false
+            }
 
         val finalPreviewMode = parsed?.previewMode ?: if (oldLivePreviewState) "Normal" else "Finished"
 
@@ -201,9 +207,11 @@ object ForgeSettingsManager {
             application.dataStore.edit { it[CONFIG_KEY] = gson.toJson(updatedConfig) }
         }
 
-        client = client.newBuilder()
-            .connectTimeout(updatedConfig.connectionTimeout.toLong(), TimeUnit.SECONDS)
-            .build()
+        client =
+            client
+                .newBuilder()
+                .connectTimeout(updatedConfig.connectionTimeout.toLong(), TimeUnit.SECONDS)
+                .build()
 
         if (updatedConfig.enablePersistentService != oldPersistent) {
             onPersistentServiceChanged?.invoke(updatedConfig.enablePersistentService)
@@ -215,11 +223,21 @@ object ForgeSettingsManager {
     }
 
     // --- Load/Save State ---
-    fun loadState(prefs: Preferences, currentConfig: AppConfig? = null): AppState {
+    fun loadState(
+        prefs: Preferences,
+        currentConfig: AppConfig? = null,
+    ): AppState {
         val json = prefs[STATE_KEY]
-        val parsed = if (json != null) {
-            try { gson.fromJson(json, AppState::class.java) } catch(_: Exception) { null }
-        } else null
+        val parsed =
+            if (json != null) {
+                try {
+                    gson.fromJson(json, AppState::class.java)
+                } catch (_: Exception) {
+                    null
+                }
+            } else {
+                null
+            }
 
         if (parsed != null) return parsed
         return (currentConfig ?: _config.value).defaultState.copy()
@@ -261,7 +279,10 @@ object ForgeSettingsManager {
         }
     }
 
-    fun saveToPromptHistory(positive: String, negative: String) {
+    fun saveToPromptHistory(
+        positive: String,
+        negative: String,
+    ) {
         if (positive.isBlank() && negative.isBlank()) return
 
         val currentList = _promptHistory.value.toMutableList()
@@ -288,7 +309,10 @@ object ForgeSettingsManager {
     }
 
     // --- Presets ---
-    fun savePreset(name: String, includePrompts: Boolean = true) {
+    fun savePreset(
+        name: String,
+        includePrompts: Boolean = true,
+    ) {
         val currentPresets = _config.value.presets.toMutableList()
         currentPresets.removeAll { it.name == name }
         currentPresets.add(GenerationPreset(name, _appState.value.copy(), includePrompts))
@@ -312,14 +336,20 @@ object ForgeSettingsManager {
         saveConfig(_config.value.copy(presets = currentPresets))
     }
 
-    fun updatePreset(oldName: String, preset: GenerationPreset) {
+    fun updatePreset(
+        oldName: String,
+        preset: GenerationPreset,
+    ) {
         val current = _config.value
         val newPresets = current.presets.map { if (it.name == oldName) preset else it }
         saveConfig(current.copy(presets = newPresets))
     }
 
     // --- Server profiles ---
-    fun addServerProfile(name: String, url: String) {
+    fun addServerProfile(
+        name: String,
+        url: String,
+    ) {
         val currentProfiles = _config.value.serverProfiles.toMutableList()
         currentProfiles.removeAll { it.name == name }
         currentProfiles.add(ServerProfile(name, url))
@@ -360,5 +390,4 @@ object ForgeSettingsManager {
     suspend fun saveLastGeneratedInfo(info: String) {
         // Placeholder
     }
-
 }

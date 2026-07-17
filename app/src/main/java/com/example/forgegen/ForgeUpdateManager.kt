@@ -1,19 +1,12 @@
 package com.example.forgegen
 
 import android.app.Application
-import android.app.DownloadManager
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.util.Log
 import androidx.core.content.FileProvider
-import androidx.core.net.toUri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -34,11 +27,10 @@ import java.util.Locale
 class ForgeUpdateManager(
     private val application: Application,
     private val getForgeApi: () -> ForgeApi?,
-
     private val getConfig: () -> AppConfig,
     private val saveConfig: (AppConfig) -> Unit,
     private val showToast: (String) -> Unit,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
 ) {
     private val TAG = "ForgeUpdateManager"
 
@@ -104,7 +96,14 @@ class ForgeUpdateManager(
                 } else {
                     Log.e(TAG, "NETWORK ERROR (OTA): HTTP status ${response.code()}")
                     if (manual) {
-                        val msg = if (response.code() == 403) "Access denied (HTTP 403). Check Beta token!" else "Server error (HTTP ${response.code()})"
+                        val msg =
+                            if (response.code() ==
+                                403
+                            ) {
+                                "Access denied (HTTP 403). Check Beta token!"
+                            } else {
+                                "Server error (HTTP ${response.code()})"
+                            }
                         showToast(msg)
                     }
                 }
@@ -121,7 +120,7 @@ class ForgeUpdateManager(
 
         scope.launch(Dispatchers.IO) {
             val file = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
-            
+
             // Check if existing file is already the correct update
             if (file.exists() && manifest.sha256.isNotEmpty()) {
                 try {
@@ -134,7 +133,7 @@ class ForgeUpdateManager(
                         }
                     }
                     val calculatedSha256 = digest.digest().joinToString("") { "%02x".format(it) }
-                    
+
                     if (calculatedSha256.equals(manifest.sha256, ignoreCase = true)) {
                         Log.i(TAG, "Existing APK matches manifest hash. Skipping download.")
                         withContext(Dispatchers.Main) {
@@ -174,10 +173,10 @@ class ForgeUpdateManager(
                     val body = response.body()!!
                     val file = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
                     val totalBytes = body.contentLength()
-                    
+
                     var downloadedBytes = 0L
                     var lastUpdate = 0L
-                    
+
                     body.byteStream().use { inputStream ->
                         file.outputStream().use { outputStream ->
                             val buffer = ByteArray(8 * 1024)
@@ -185,7 +184,7 @@ class ForgeUpdateManager(
                             while (inputStream.read(buffer).also { read = it } != -1) {
                                 outputStream.write(buffer, 0, read)
                                 downloadedBytes += read
-                                
+
                                 val now = System.currentTimeMillis()
                                 if (now - lastUpdate > 200 || downloadedBytes == totalBytes) { // Throttle UI updates
                                     lastUpdate = now
@@ -197,7 +196,7 @@ class ForgeUpdateManager(
                             }
                         }
                     }
-                    
+
                     _updateDownloadProgress.value = 1f
                     verifyAndPrepareApk(manifest.sha256)
                 } else {
@@ -269,10 +268,11 @@ class ForgeUpdateManager(
             }
 
             val installUri = FileProvider.getUriForFile(application, "${application.packageName}.fileprovider", file)
-            val installIntent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(installUri, "application/vnd.android.package-archive")
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-            }
+            val installIntent =
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(installUri, "application/vnd.android.package-archive")
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                }
             application.startActivity(installIntent)
 
             // Reset update states after launching installation

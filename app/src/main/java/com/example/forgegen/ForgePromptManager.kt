@@ -1,6 +1,5 @@
 package com.example.forgegen
 
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -14,13 +13,10 @@ object ForgePromptManager {
     private const val TAG = "ForgePromptManager"
     private val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-
-
     private val _wildcards = MutableStateFlow<List<WildcardEntity>>(emptyList())
     val wildcards: StateFlow<List<WildcardEntity>> = _wildcards.asStateFlow()
 
     fun init() {
-
         loadWildcards()
     }
 
@@ -30,7 +26,10 @@ object ForgePromptManager {
         }
     }
 
-    fun saveWildcard(name: String, content: String) {
+    fun saveWildcard(
+        name: String,
+        content: String,
+    ) {
         repositoryScope.launch(Dispatchers.IO) {
             ForgeRepository.db.wildcardDao().insertWildcard(WildcardEntity(name, content))
             _wildcards.value = ForgeRepository.db.wildcardDao().getAllWildcards()
@@ -44,8 +43,6 @@ object ForgePromptManager {
         }
     }
 
-
-
     fun deleteAllWildcards() {
         repositoryScope.launch(Dispatchers.IO) {
             ForgeRepository.db.wildcardDao().clearAll()
@@ -53,12 +50,14 @@ object ForgePromptManager {
         }
     }
 
-    suspend fun getWildcardCount(): Int = withContext(Dispatchers.IO) {
-        ForgeRepository.db.wildcardDao().count()
-    }
+    suspend fun getWildcardCount(): Int =
+        withContext(Dispatchers.IO) {
+            ForgeRepository.db.wildcardDao().count()
+        }
 
-    suspend fun clearWildcards() = withContext(Dispatchers.IO) {
-        ForgeRepository.db.wildcardDao().clearAll()
-        _wildcards.value = emptyList()
-    }
+    suspend fun clearWildcards() =
+        withContext(Dispatchers.IO) {
+            ForgeRepository.db.wildcardDao().clearAll()
+            _wildcards.value = emptyList()
+        }
 }

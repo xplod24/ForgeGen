@@ -12,21 +12,23 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
+fun PresetsScreen(
+    viewModel: ForgeViewModel,
+    navController: NavHostController,
+) {
     val context = LocalContext.current
     val config by viewModel.config.collectAsStateWithLifecycle()
     val appState by viewModel.appState.collectAsStateWithLifecycle()
@@ -48,17 +50,17 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     IconButton(onClick = { showDefaultConfirm = true }) {
                         Icon(Icons.Default.SettingsBackupRestore, contentDescription = "Set current settings as startup default")
                     }
-                }
+                },
             )
         },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { showAddDialog = true },
-                containerColor = MaterialTheme.colorScheme.primary
+                containerColor = MaterialTheme.colorScheme.primary,
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Save current configuration as Preset")
             }
-        }
+        },
     ) { paddingValues ->
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             if (config.presets.isEmpty()) {
@@ -68,20 +70,20 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             Icons.Default.SettingsSuggest,
                             contentDescription = null,
                             modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
                         )
                         Text(
                             "No presets saved",
                             fontSize = 16.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Medium,
                         )
                         Text(
                             "Tap + to save your current generation parameters as a Preset",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                             modifier = Modifier.padding(horizontal = 32.dp),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                         )
                     }
                 }
@@ -89,7 +91,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(config.presets, key = { it.name }) { preset ->
                         var presetName by remember(preset.name) { mutableStateOf(preset.name) }
@@ -99,28 +101,30 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
                         // Function to save preset inline
                         val saveChangesInline = {
-                            val updatedPreset = preset.copy(
-                                name = presetName,
-                                includePrompts = includePrompts,
-                                state = preset.state.copy(
-                                    positivePrompt = positivePrompt,
-                                    negativePrompt = negativePrompt
+                            val updatedPreset =
+                                preset.copy(
+                                    name = presetName,
+                                    includePrompts = includePrompts,
+                                    state =
+                                        preset.state.copy(
+                                            positivePrompt = positivePrompt,
+                                            negativePrompt = negativePrompt,
+                                        ),
                                 )
-                            )
                             viewModel.updatePreset(preset.name, updatedPreset)
                         }
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         ) {
                             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 // Inline editable Preset Name & Top Actions
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     OutlinedTextField(
                                         value = presetName,
@@ -132,15 +136,19 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         placeholder = { Text("Preset Name", fontSize = 16.sp) },
                                         modifier = Modifier.weight(1f).height(48.dp),
                                         singleLine = true,
-                                        colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            disabledContainerColor = Color.Transparent,
-                                            focusedIndicatorColor = Color.Transparent,
-                                            unfocusedIndicatorColor = Color.Transparent
-                                        )
+                                        colors =
+                                            TextFieldDefaults.colors(
+                                                focusedContainerColor = Color.Transparent,
+                                                unfocusedContainerColor = Color.Transparent,
+                                                disabledContainerColor = Color.Transparent,
+                                                focusedIndicatorColor = Color.Transparent,
+                                                unfocusedIndicatorColor = Color.Transparent,
+                                            ),
                                     )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
                                         Button(
                                             onClick = {
                                                 viewModel.loadPreset(preset.name)
@@ -148,7 +156,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                                 navController.popBackStack()
                                             },
                                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                            modifier = Modifier.height(32.dp)
+                                            modifier = Modifier.height(32.dp),
                                         ) {
                                             Icon(Icons.Default.Check, null, modifier = Modifier.size(14.dp))
                                             Spacer(Modifier.width(4.dp))
@@ -156,13 +164,13 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         }
                                         IconButton(
                                             onClick = { showDeleteConfirm = preset },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(32.dp),
                                         ) {
                                             Icon(
                                                 Icons.Default.Delete,
                                                 contentDescription = "Delete Preset",
                                                 tint = MaterialTheme.colorScheme.error,
-                                                modifier = Modifier.size(18.dp)
+                                                modifier = Modifier.size(18.dp),
                                             )
                                         }
                                     }
@@ -172,25 +180,63 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 FlowRow(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    verticalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     val state = preset.state
-                                    val sizeText = if (state.aspectRatio == "Custom") "${state.width}x${state.height}" else state.aspectRatio
-                                    Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer) {
-                                        Text("Steps: ${state.steps}", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
+                                    val sizeText =
+                                        if (state.aspectRatio ==
+                                            "Custom"
+                                        ) {
+                                            "${state.width}x${state.height}"
+                                        } else {
+                                            state.aspectRatio
+                                        }
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    ) {
+                                        Text(
+                                            "Steps: ${state.steps}",
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                            fontSize = 10.sp,
+                                        )
                                     }
-                                    Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer) {
-                                        Text("CFG: ${state.cfgScale}", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    ) {
+                                        Text(
+                                            "CFG: ${state.cfgScale}",
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                            fontSize = 10.sp,
+                                        )
                                     }
-                                    Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer) {
-                                        Text(state.sampler, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    ) {
+                                        Text(
+                                            state.sampler,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                            fontSize = 10.sp,
+                                        )
                                     }
-                                    Badge(containerColor = MaterialTheme.colorScheme.secondaryContainer, contentColor = MaterialTheme.colorScheme.onSecondaryContainer) {
+                                    Badge(
+                                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    ) {
                                         Text(sizeText, modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
                                     }
                                     if (state.hiresFix) {
-                                        Badge(containerColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer) {
-                                            Text("Hires.Fix", modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
+                                        Badge(
+                                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                                        ) {
+                                            Text(
+                                                "Hires.Fix",
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                                                fontSize = 10.sp,
+                                            )
                                         }
                                     }
                                 }
@@ -199,7 +245,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
                                     Text("Include prompts in preset", fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                     Checkbox(
@@ -207,14 +253,19 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                         onCheckedChange = {
                                             includePrompts = it
                                             saveChangesInline()
-                                        }
+                                        },
                                     )
                                 }
 
                                 // Editable Prompts (Only if prompts inclusion is checked)
                                 if (includePrompts) {
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Text("Positive Prompt (Inline Edit):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                                        Text(
+                                            "Positive Prompt (Inline Edit):",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.Gray,
+                                        )
                                         OutlinedTextField(
                                             value = positivePrompt,
                                             onValueChange = {
@@ -223,12 +274,17 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                             },
                                             textStyle = TextStyle(fontSize = 12.sp),
                                             modifier = Modifier.fillMaxWidth(),
-                                            maxLines = 4
+                                            maxLines = 4,
                                         )
 
                                         Spacer(modifier = Modifier.height(2.dp))
 
-                                        Text("Negative Prompt (Inline Edit):", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+                                        Text(
+                                            "Negative Prompt (Inline Edit):",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.Gray,
+                                        )
                                         OutlinedTextField(
                                             value = negativePrompt,
                                             onValueChange = {
@@ -237,7 +293,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                                             },
                                             textStyle = TextStyle(fontSize = 12.sp),
                                             modifier = Modifier.fillMaxWidth(),
-                                            maxLines = 4
+                                            maxLines = 4,
                                         )
                                     }
                                 }
@@ -265,28 +321,36 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         onValueChange = { presetName = it },
                         label = { Text("Preset Name") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text("Include current prompts", fontSize = 14.sp)
                         Checkbox(
                             checked = includePromptsByDef,
-                            onCheckedChange = { includePromptsByDef = it }
+                            onCheckedChange = { includePromptsByDef = it },
                         )
                     }
                     Text("Settings to save:", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
-                            .padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                                .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        val sizeText = if (appState.aspectRatio == "Custom") "${appState.width}x${appState.height}" else appState.aspectRatio
+                        val sizeText =
+                            if (appState.aspectRatio ==
+                                "Custom"
+                            ) {
+                                "${appState.width}x${appState.height}"
+                            } else {
+                                appState.aspectRatio
+                            }
                         Text("• Sampler: ${appState.sampler} (${appState.scheduler})", fontSize = 11.sp)
                         Text("• Steps: ${appState.steps} | CFG: ${appState.cfgScale}", fontSize = 11.sp)
                         Text("• Resolution: $sizeText", fontSize = 11.sp)
@@ -310,14 +374,14 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                             Toast.makeText(context, "Preset saved: $presetName", Toast.LENGTH_LONG).show()
                         }
                     },
-                    enabled = presetName.isNotBlank()
+                    enabled = presetName.isNotBlank(),
                 ) {
                     Text("Save", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showAddDialog = false }) { Text("Cancel") }
-            }
+            },
         )
     }
 
@@ -326,7 +390,11 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
         AlertDialog(
             onDismissRequest = { showDefaultConfirm = false },
             title = { Text("Set Default Startup settings") },
-            text = { Text("Make your current layout (prompts, steps, sampler, resolution) the default settings loaded every time ForgeGen starts up?") },
+            text = {
+                Text(
+                    "Make your current layout (prompts, steps, sampler, resolution) the default settings loaded every time ForgeGen starts up?",
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.saveCurrentAsDefault()
@@ -338,7 +406,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             },
             dismissButton = {
                 TextButton(onClick = { showDefaultConfirm = false }) { Text("Cancel") }
-            }
+            },
         )
     }
 
@@ -359,7 +427,7 @@ fun PresetsScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = null }) { Text("Cancel") }
-            }
+            },
         )
     }
 }
@@ -370,12 +438,12 @@ private fun FlowRow(
     modifier: Modifier = Modifier,
     horizontalArrangement: Arrangement.Horizontal = Arrangement.Start,
     verticalArrangement: Arrangement.Vertical = Arrangement.Top,
-    content: @Composable FlowRowScope.() -> Unit
+    content: @Composable FlowRowScope.() -> Unit,
 ) {
     androidx.compose.foundation.layout.FlowRow(
         modifier = modifier,
         horizontalArrangement = horizontalArrangement,
         verticalArrangement = verticalArrangement,
-        content = content
+        content = content,
     )
 }

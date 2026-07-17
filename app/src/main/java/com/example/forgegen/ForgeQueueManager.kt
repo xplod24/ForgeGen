@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Environment
 import android.provider.MediaStore
@@ -21,7 +20,6 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.File
-import java.io.FileOutputStream
 import java.util.Collections
 import java.util.UUID
 
@@ -92,7 +90,11 @@ object ForgeQueueManager {
         cleanupRecoveredImages()
     }
 
-    fun updateExternalProgress(progress: Float, eta: Double, image: String?) {
+    fun updateExternalProgress(
+        progress: Float,
+        eta: Double,
+        image: String?,
+    ) {
         _progress.value = progress
         _currentEta.value = eta
         if (image != null) _livePreviewImage.value = image
@@ -144,7 +146,6 @@ object ForgeQueueManager {
                     val firstItem = queue.firstOrNull()
 
                     if (firstItem != null && !_isGenerating.value && !ForgeRepository.isServerBusy.value && !_isQueuePaused.value) {
-
                         // Resume suspended task if the queue is unpaused
                         if (firstItem.status == GenerationStatus.SUSPENDED) {
                             _generationQueue.update { q ->
@@ -155,9 +156,10 @@ object ForgeQueueManager {
                         }
 
                         _isGenerating.value = true
-                        currentGenerationJob = launch {
-                            executeGeneration(firstItem)
-                        }
+                        currentGenerationJob =
+                            launch {
+                                executeGeneration(firstItem)
+                            }
                         currentGenerationJob?.join()
                     }
                 } catch (e: Exception) {
@@ -169,7 +171,10 @@ object ForgeQueueManager {
         }
     }
 
-    private fun applyWildcards(prompt: String, allWildcards: List<WildcardEntity>): String {
+    private fun applyWildcards(
+        prompt: String,
+        allWildcards: List<WildcardEntity>,
+    ): String {
         var result = prompt
         val regex = Regex("__([a-zA-Z0-9_\\-]+)__")
         var match = regex.find(result)
@@ -179,7 +184,11 @@ object ForgeQueueManager {
             val entity = allWildcards.find { it.name == wildcardName }
             var replacement = match.value
             if (entity != null) {
-                val options = entity.content.split("\n", ",").map { it.trim() }.filter { it.isNotEmpty() }
+                val options =
+                    entity.content
+                        .split("\n", ",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
                 if (options.isNotEmpty()) {
                     replacement = options.random()
                 }
@@ -199,36 +208,39 @@ object ForgeQueueManager {
             val finalPositive = applyWildcards(state.positivePrompt, wildcards)
             val finalNegative = applyWildcards(state.negativePrompt, wildcards)
 
-            val payload = Txt2ImgPayloadDto(
-                prompt = finalPositive,
-                negative_prompt = finalNegative,
-                steps = state.steps,
-                cfg_scale = state.cfgScale,
-                width = state.width,
-                height = state.height,
-                n_iter = state.batchCount,
-                batch_size = state.batchSize,
-                seed = state.seed,
-                sampler_name = state.sampler,
-                scheduler = state.scheduler,
-                override_settings = OverrideSettingsDto(
-                    clipSkip = state.clipSkip,
-                    sdModelCheckpoint = currentModel
-                ),
-                enable_hr = state.hiresFix,
-                hr_scale = state.hiresScale,
-                hr_upscaler = state.upscaler,
-                denoising_strength = state.denoising,
-                save_images = state.saveImages,
-                send_images = true
-            )
+            val payload =
+                Txt2ImgPayloadDto(
+                    prompt = finalPositive,
+                    negative_prompt = finalNegative,
+                    steps = state.steps,
+                    cfg_scale = state.cfgScale,
+                    width = state.width,
+                    height = state.height,
+                    n_iter = state.batchCount,
+                    batch_size = state.batchSize,
+                    seed = state.seed,
+                    sampler_name = state.sampler,
+                    scheduler = state.scheduler,
+                    override_settings =
+                        OverrideSettingsDto(
+                            clipSkip = state.clipSkip,
+                            sdModelCheckpoint = currentModel,
+                        ),
+                    enable_hr = state.hiresFix,
+                    hr_scale = state.hiresScale,
+                    hr_upscaler = state.upscaler,
+                    denoising_strength = state.denoising,
+                    save_images = state.saveImages,
+                    send_images = true,
+                )
 
-            val item = QueuedGeneration(
-                id = UUID.randomUUID().toString(),
-                positivePrompt = finalPositive,
-                payload = payload,
-                status = GenerationStatus.QUEUED
-            )
+            val item =
+                QueuedGeneration(
+                    id = UUID.randomUUID().toString(),
+                    positivePrompt = finalPositive,
+                    payload = payload,
+                    status = GenerationStatus.QUEUED,
+                )
 
             _generationQueue.update { it + item }
             saveQueueState()
@@ -269,9 +281,10 @@ object ForgeQueueManager {
         val initialBatchInfo = if (job.payload.n_iter > 1) "(Batch 1 of ${job.payload.n_iter}) " else ""
         _statusText.value = "Preparing $initialBatchInfo\"$previewText...\""
 
-        val serviceIntent = Intent(application, GenerationService::class.java).apply {
-            action = "ACTION_START_GENERATION"
-        }
+        val serviceIntent =
+            Intent(application, GenerationService::class.java).apply {
+                action = "ACTION_START_GENERATION"
+            }
         try {
             application.startForegroundService(serviceIntent)
         } catch (e: Exception) {
@@ -293,7 +306,7 @@ object ForgeQueueManager {
                         val file = File("$cachePath/gen_${System.currentTimeMillis()}_$i.png")
                         file.writeBytes(bytes)
                         currentList.add(file.absolutePath)
-                        
+
                         // Save the very first image of the batch as the local fallback "last generated image"
                         if (i == 0) {
                             try {
@@ -308,11 +321,12 @@ object ForgeQueueManager {
                         if (shouldSaveToDevice) {
                             try {
                                 val fileName = "Gen_${System.currentTimeMillis()}_$i.png"
-                                val contentValues = ContentValues().apply {
-                                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen")
-                                }
+                                val contentValues =
+                                    ContentValues().apply {
+                                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen")
+                                    }
                                 val resolver = application.contentResolver
                                 val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                                 val uri = resolver.insert(insertUri, contentValues)
@@ -345,7 +359,10 @@ object ForgeQueueManager {
                 }
             } else {
                 val errorBody = response?.errorBody()?.string() ?: ""
-                if (response?.code() == 500 || errorBody.contains("OutOfMemoryError", true) || errorBody.contains("CUDA out of memory", true)) {
+                if (response?.code() == 500 ||
+                    errorBody.contains("OutOfMemoryError", true) ||
+                    errorBody.contains("CUDA out of memory", true)
+                ) {
                     _statusText.value = "SERVER OUT OF MEMORY (OOM)"
                     _isQueuePaused.value = true
                     _oomAlert.value = true
@@ -363,7 +380,9 @@ object ForgeQueueManager {
                 _isQueuePaused.value = true
             }
         } finally {
-            val isSuspended = _generationQueue.value.firstOrNull()?.id == job.id && _generationQueue.value.firstOrNull()?.status == GenerationStatus.SUSPENDED
+            val isSuspended =
+                _generationQueue.value.firstOrNull()?.id == job.id &&
+                    _generationQueue.value.firstOrNull()?.status == GenerationStatus.SUSPENDED
 
             if (!isSuspended) {
                 _generationQueue.update { q -> q.filter { it.id != job.id } }
@@ -372,9 +391,14 @@ object ForgeQueueManager {
                 if (_generationQueue.value.isEmpty()) {
                     _totalQueueSize.value = 0
                     _completedQueueItems.value = 0
-                    
+
                     if (ForgeRepository.config.value.notifOnQueueFinish) {
-                        launchNotification(job.positivePrompt, _sessionImages.value.lastOrNull(), ForgeRepository.config.value, isQueueFinished = true)
+                        launchNotification(
+                            job.positivePrompt,
+                            _sessionImages.value.lastOrNull(),
+                            ForgeRepository.config.value,
+                            isQueueFinished = true,
+                        )
                     }
 
                     try {
@@ -393,25 +417,37 @@ object ForgeQueueManager {
         }
     }
 
-    private fun launchNotification(prompt: String, lastImagePath: String?, config: AppConfig, isQueueFinished: Boolean = false) {
+    private fun launchNotification(
+        prompt: String,
+        lastImagePath: String?,
+        config: AppConfig,
+        isQueueFinished: Boolean = false,
+    ) {
         try {
             val notifManager = application.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val openIntent = Intent(application, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = PendingIntent.getActivity(application, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val openIntent =
+                Intent(application, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+            val pendingIntent =
+                PendingIntent.getActivity(
+                    application,
+                    0,
+                    openIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
             val channelId = "forge_default"
             val title = if (isQueueFinished) "Queue Completed" else "Batch Completed"
             val text = if (isQueueFinished) "All generation jobs have finished." else "Finished: ${prompt.take(35)}..."
 
-            val builder = NotificationCompat.Builder(application, channelId)
-                .setSmallIcon(R.mipmap.ic_launcher_foreground)
-                .setContentTitle(title)
-                .setContentText(text)
-                .setContentIntent(pendingIntent)
-                .setAutoCancel(true)
-
-
+            val builder =
+                NotificationCompat
+                    .Builder(application, channelId)
+                    .setSmallIcon(R.mipmap.ic_launcher_foreground)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setContentIntent(pendingIntent)
+                    .setAutoCancel(true)
 
             val uniqueNotifId = System.currentTimeMillis().toInt()
             notifManager.notify(uniqueNotifId, builder.build())
@@ -445,12 +481,21 @@ object ForgeQueueManager {
         saveQueueState()
     }
 
-    fun updateQueueItem(id: String, positivePrompt: String, negativePrompt: String) {
+    fun updateQueueItem(
+        id: String,
+        positivePrompt: String,
+        negativePrompt: String,
+    ) {
         _generationQueue.update { currentQueue ->
             currentQueue.map {
                 if (it.id == id) {
-                    it.copy(positivePrompt = positivePrompt, payload = it.payload.copy(prompt = positivePrompt, negative_prompt = negativePrompt))
-                } else it
+                    it.copy(
+                        positivePrompt = positivePrompt,
+                        payload = it.payload.copy(prompt = positivePrompt, negative_prompt = negativePrompt),
+                    )
+                } else {
+                    it
+                }
             }
         }
         saveQueueState()
@@ -482,7 +527,9 @@ object ForgeQueueManager {
                 val list = q.toMutableList()
                 Collections.swap(list, idx, idx - 1)
                 list
-            } else q
+            } else {
+                q
+            }
         }
         saveQueueState()
     }
@@ -494,7 +541,9 @@ object ForgeQueueManager {
                 val list = q.toMutableList()
                 Collections.swap(list, idx, idx + 1)
                 list
-            } else q
+            } else {
+                q
+            }
         }
         saveQueueState()
     }
@@ -523,7 +572,7 @@ object ForgeQueueManager {
                     Log.e(TAG, "Cannot cache empty recovered image bytes.")
                     return@withContext
                 }
-                
+
                 val file = File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
                 file.writeBytes(bytes)
 
@@ -594,11 +643,12 @@ object ForgeQueueManager {
                 if (!file.exists()) throw Exception("Local file missing")
 
                 val fileName = "Gen_${System.currentTimeMillis()}.png"
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ForgeGen")
-                }
+                val contentValues =
+                    ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ForgeGen")
+                    }
 
                 val resolver = application.contentResolver
                 val insertUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
@@ -611,25 +661,31 @@ object ForgeQueueManager {
                         }
                     }
                     ForgeRepository.showToast("Saved to Downloads")
-                } else throw Exception("Failed to create file in MediaStore")
+                } else {
+                    throw Exception("Failed to create file in MediaStore")
+                }
             } catch (e: Exception) {
                 ForgeRepository.showToast("Download Failed: ${e.message}")
             }
         }
     }
 
-    fun shareSessionImage(localFilePath: String, onIntentReady: (Intent) -> Unit) {
+    fun shareSessionImage(
+        localFilePath: String,
+        onIntentReady: (Intent) -> Unit,
+    ) {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
                 val file = File(localFilePath)
                 if (!file.exists()) throw Exception("Local file missing")
 
                 val fileName = "Shared_${System.currentTimeMillis()}.png"
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen_Shared")
-                }
+                val contentValues =
+                    ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen_Shared")
+                    }
 
                 val resolver = application.contentResolver
                 val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
@@ -642,14 +698,17 @@ object ForgeQueueManager {
                         }
                     }
 
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "image/png"
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
+                    val shareIntent =
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "image/png"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
                     withContext(Dispatchers.Main) { onIntentReady(Intent.createChooser(shareIntent, "Share Image")) }
-                } else throw Exception("Failed to prepare file for sharing")
-            } catch(e: Exception) {
+                } else {
+                    throw Exception("Failed to prepare file for sharing")
+                }
+            } catch (e: Exception) {
                 ForgeRepository.showToast("Share Failed: ${e.message}")
             }
         }
