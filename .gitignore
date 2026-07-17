@@ -13,3 +13,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Agent temporary files
+*.py
+*.txt
+old_*.kt
+init_*.kt
+git_*.kt
+temp_*.kt
