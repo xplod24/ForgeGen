@@ -12,8 +12,9 @@ import retrofit2.http.Url
 
 /* ============================================================================
  * 1. FORGE / AUTOMATIC1111 API
- * Główny interfejs komunikacji z serwerem generowania obrazów.
- * Używamy klasy Response<T> w celu bezpiecznej obsługi kodów błędów (np. 401/403).
+ * Main communication interface with the Stable Diffusion WebUI (Forge/Automatic1111) image generation server.
+ * Retrofit's Response<T> wrapper is used to safely inspect raw HTTP status codes (such as 401 Unauthorized
+ * or 403 Forbidden) and retrieve custom error bodies without throwing exceptions during network calls.
  * ============================================================================ */
 interface ForgeApi {
     @POST("sdapi/v1/txt2img")
@@ -22,11 +23,36 @@ interface ForgeApi {
     @POST("sdapi/v1/interrupt")
     suspend fun interruptGeneration(): Response<Unit>
 
+    @POST("sdapi/v1/skip")
+    suspend fun skipGeneration(): Response<Unit>
+
+    @POST("sdapi/v1/refresh-checkpoints")
+    suspend fun refreshCheckpoints(): Response<Unit>
+
+    @POST("sdapi/v1/refresh-loras")
+    suspend fun refreshLoras(): Response<Unit>
+
+    @POST("sdapi/v1/unload-checkpoint")
+    suspend fun unloadCheckpoint(): Response<Unit>
+
+    @POST("sdapi/v1/png-info")
+    suspend fun getPngInfo(@Body payload: PngInfoPayloadDto): Response<PngInfoResponseDto>
+
+    @POST("sdapi/v1/tokenize")
+    suspend fun tokenize(@Body payload: TokenizePayloadDto): Response<TokenizeResponseDto>
+
     @GET("sdapi/v1/progress")
     suspend fun getProgress(@Query("skip_current_image") skipImage: Boolean): Response<ProgressResponseDto>
 
     @GET("sdapi/v1/memory")
     suspend fun getMemoryStats(): Response<MemoryResponseDto>
+
+    /* --- Physton Prompt History --- */
+    
+    @GET("physton_prompt/get_latest_history")
+    suspend fun getLatestHistory(
+        @Query("type") type: String // "txt2img" or "txt2img_neg"
+    ): Response<PhystonHistoryDto>
 
     @GET("sdapi/v1/options")
     suspend fun getOptions(): Response<OptionsResponseDto>
@@ -49,6 +75,7 @@ interface ForgeApi {
     @GET("sdapi/v1/loras")
     suspend fun getLoras(): Response<List<LoraItemDto>>
 
+
     /* --- Custom API & Infinite Image Browsing --- */
 
     @GET("customapi/v1/all-models-hashes")
@@ -57,32 +84,39 @@ interface ForgeApi {
     @GET("infinite_image_browsing/global_setting")
     suspend fun getGlobalSettings(): Response<GlobalSettingResponseDto>
 
-    // ResponseBody zapobiega błędom parsowania na skrajnie różniących się wersjach rozszerzenia IIB.
+    // Using ResponseBody directly prevents serialization/parsing failures across vastly different versions
+    // of the Infinite Image Browsing (IIB) extension, allowing us to parse the raw JSON dynamically.
     @GET("infinite_image_browsing/files")
     suspend fun getGalleryFiles(
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query("folder_path") folderPath: String? = null
+        @Query(value = "folder_path", encoded = true) folderPath: String? = null
     ): Response<ResponseBody>
+
+    @GET
+    suspend fun getGlobalSettingsDynamic(@Url url: String): Response<GlobalSettingResponseDto>
+
+    @GET
+    suspend fun getGalleryFilesDynamic(
+        @Url url: String,
+        @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
+        @Query(value = "folder_path", encoded = true) folderPath: String? = null
+    ): Response<ResponseBody>
+
+    @GET("app/metadata")
+    suspend fun getAppMetadata(): Response<UpdateManifestDto>
+
+    @retrofit2.http.Streaming
+    @GET("app/download?apk")
+    suspend fun downloadAppUpdate(): Response<ResponseBody>
 }
 
 /* ============================================================================
  * 2. CIVITAI API
- * Pobieranie metadanych modeli na podstawie ich hash'a SHA256.
+ * Civitai integration API.
+ * Used for fetching model metadata, image previews, and model versions from Civitai based on their SHA256 hashes.
  * ============================================================================ */
 interface CivitaiApi {
     @GET("api/v1/model-versions/by-hash/{hash}")
     suspend fun getModelByHash(@Path("hash") hash: String): Response<CivitaiVersionResponseDto>
 }
 
-/* ============================================================================
- * 3. UPDATE API
- * Weryfikacja i pobieranie manifestów aktualizacji z własnego serwera.
- * Używa dynamicznego adresu URL dla wersji Stable/Beta.
- * ============================================================================ */
-interface UpdateApi {
-    @GET
-    suspend fun getUpdateManifest(
-        @Url url: String,
-        @Header("Beta-Tester") betaToken: String? = null
-    ): Response<UpdateManifestDto>
-}

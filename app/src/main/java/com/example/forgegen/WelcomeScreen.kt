@@ -29,14 +29,7 @@ import kotlin.math.sin
 @Composable
 fun WelcomeScreen(navController: NavHostController) {
     val context = LocalContext.current
-    val buildNumber = remember {
-        try {
-            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            pInfo.longVersionCode.toString()
-        } catch (e: Exception) {
-            "Unknown"
-        }
-    }
+    val buildTextValue = remember { AppVersion.currentVersion }
 
     val animationProgress = remember { Animatable(0f) }
     val textMeasurer = rememberTextMeasurer()
@@ -44,12 +37,12 @@ fun WelcomeScreen(navController: NavHostController) {
     val onBackgroundColor = MaterialTheme.colorScheme.onBackground
 
     LaunchedEffect(Unit) {
-        // Płynna animacja od 0.0 do 1.0 wydłużona do 3 sekund, by zmieścić efekt bicia serca
+        // Smooth animation from 0.0 to 1.0 extended to 3 seconds to fit the heartbeat effect
         animationProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 3000, easing = FastOutSlowInEasing)
         )
-        // Nawigacja z wyczyszczeniem stosu, by nie można było wrócić do Splash Screena
+        // Navigate clearing the stack so the user cannot navigate back to the Welcome Screen
         navController.navigate("main") {
             popUpTo("welcome") { inclusive = true }
         }
@@ -63,29 +56,29 @@ fun WelcomeScreen(navController: NavHostController) {
         val p = animationProgress.value
         val center = Offset(size.width / 2f, size.height / 2f)
 
-        // Fazy animacji:
-        // 0.0 - 0.3: Promienie zbliżają się do środka
-        // 0.3 - 0.45: Kowadło pojawia się znikąd (fade-in)
-        // 0.45 - 0.85: Kowadło pulsuje (heartbeat), napis pojawia się w tym samym czasie
+        // Animation phases:
+        // 0.0 - 0.3: Rays converging towards the center
+        // 0.3 - 0.45: Anvil fading in
+        // 0.45 - 0.85: Anvil beating (heartbeat effect) while text fades in
 
         val rayProgress = (p / 0.3f).coerceIn(0f, 1f)
         val rayAlpha = 1f - ((p - 0.3f) / 0.15f).coerceIn(0f, 1f)
 
-        val anvilAlpha = ((p - 0.3f) / 0.15f).coerceIn(0f, 1f) // Czysty fade-in
+        val anvilAlpha = ((p - 0.3f) / 0.15f).coerceIn(0f, 1f) // Pure fade-in
         val heartbeatProgress = ((p - 0.45f) / 0.4f).coerceIn(0f, 1f)
 
-        // Efekt bicia serca (dwie pulsujące fale) powiększające o maksymalnie 20%
+        // Heartbeat effect (two pulse waves) expanding scale by up to 20%
         val pulse = if (heartbeatProgress > 0f && heartbeatProgress < 1f) {
             max(0f, sin(heartbeatProgress * Math.PI * 4).toFloat()) * 0.2f
         } else 0f
 
-        // Stały rozmiar z nałożonym pulsem - gwarantuje brak efektu wyjazdu/ruchu
+        // Constant base scale with pulse applied - ensures no translation jitter
         val anvilScale = 1f + pulse
 
-        // Pojawienie się tekstu "ForgeApp" i "BUILD"
+        // Text "ForgeGen" and version build info fade-in
         val textProgress = ((p - 0.45f) / 0.3f).coerceIn(0f, 1f)
 
-        // 1. Faza: Pięć promieni schodzących się do środka
+        // Phase 1: Five rays converging to the center
         if (rayAlpha > 0f) {
             val maxRadius = size.width.coerceAtLeast(size.height)
             val rayLength = 150f
@@ -108,25 +101,25 @@ fun WelcomeScreen(navController: NavHostController) {
             }
         }
 
-        // 2 & 3. Faza: Rysowanie kowadła (fade-in + bicie serca w miejscu)
+        // Phase 2 & 3: Drawing the anvil (fade-in + heartbeat scaling in place)
         if (anvilAlpha > 0f) {
             val anvilPath = Path().apply {
-                moveTo(-60f, -40f) // Lewy górny róg
-                lineTo(40f, -40f) // Prawy górny róg (baza rogu)
-                quadraticBezierTo(70f, -40f, 70f, -10f) // Czubek rogu
-                quadraticBezierTo(40f, -10f, 30f, -10f) // Dół rogu
-                quadraticBezierTo(15f, -10f, 15f, 20f) // Wcięcie z prawej
-                lineTo(30f, 50f) // Prawa podstawa
-                lineTo(-30f, 50f) // Lewa podstawa
-                lineTo(-15f, 20f) // Wcięcie z lewej
-                quadraticBezierTo(-15f, -10f, -60f, -10f) // Spód tylnej części
+                moveTo(-60f, -40f) // Top-left corner
+                lineTo(40f, -40f) // Top-right corner (base of horn)
+                quadraticTo(70f, -40f, 70f, -10f) // Tip of horn
+                quadraticTo(40f, -10f, 30f, -10f) // Bottom of horn
+                quadraticTo(15f, -10f, 15f, 20f) // Right-side indent
+                lineTo(30f, 50f) // Right base
+                lineTo(-30f, 50f) // Left base
+                lineTo(-15f, 20f) // Left-side indent
+                quadraticTo(-15f, -10f, -60f, -10f) // Bottom-left tail
                 close()
             }
 
             withTransform({
                 translate(left = center.x, top = center.y - 20f)
-                // Ustawiamy pivot dokładnie na matematyczny środek ścieżki (5f, 5f)
-                // Dzięki temu skalowanie podczas bicia serca odbędzie się idealnie ze środka
+                // Set the pivot exactly on the geometric center of the path (5f, 5f)
+                // This ensures heartbeat scaling is performed perfectly from the center
                 scale(scaleX = anvilScale, scaleY = anvilScale, pivot = Offset(5f, 5f))
             }) {
                 drawPath(
@@ -136,9 +129,9 @@ fun WelcomeScreen(navController: NavHostController) {
             }
         }
 
-        // 4. Faza: Pojawienie się tekstu "ForgeApp" oraz numeru "BUILD" podczas bicia serca
+        // Phase 4: Text fade-in of application name and version details during heartbeat
         if (textProgress > 0f) {
-            val titleText = "ForgeApp"
+            val titleText = "ForgeGen"
             val titleStyle = TextStyle(
                 color = primaryColor.copy(alpha = textProgress),
                 fontSize = 36.sp,
@@ -146,7 +139,7 @@ fun WelcomeScreen(navController: NavHostController) {
             )
             val titleLayoutResult = textMeasurer.measure(text = titleText, style = titleStyle)
 
-            val buildText = "BUILD $buildNumber"
+            val buildText = buildTextValue
             val buildStyle = TextStyle(
                 color = primaryColor.copy(alpha = textProgress),
                 fontSize = 14.sp,
@@ -154,7 +147,7 @@ fun WelcomeScreen(navController: NavHostController) {
             )
             val buildLayoutResult = textMeasurer.measure(text = buildText, style = buildStyle)
 
-            // Lekkie wsunięcie tekstu od dołu (zanikanie wyjazdu wraz z zanikaniem alpha)
+            // Subtle vertical entry transition (offset decays to zero as alpha reaches 1.0)
             val textYOffset = (1f - textProgress) * 50f
             val startY = center.y + 70f + textYOffset
 

@@ -25,8 +25,13 @@ data class ServerProfile(
 
 data class GenerationPreset(
     val name: String,
-    val state: AppState
+    val state: AppState,
+    val includePrompts: Boolean = true
 )
+
+enum class GallerySyncMode {
+    MANUAL, ON_ENTRY, BACKGROUND
+}
 
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
@@ -35,10 +40,12 @@ data class AppConfig(
     var isDarkMode: Boolean = false,
     var connectionTimeout: Int = 10,
     var checkpointTimeout: Int = 45,
-    var receiveGenerationNotification: Boolean = true,
-    var notifImagePreview: Boolean = true,
+    var receiveGenerationNotification: Boolean = true, // Legacy field (could remove, but keeping it to avoid breaking other things right now if it's used elsewhere like in Service)
+    var notifOnBatchFinish: Boolean = false,
+    var notifOnQueueFinish: Boolean = true,
+    var notifCivitaiSync: Boolean = true,
+    var autoDismissCivitaiNotif: Boolean = false,
     var notifQueueStatus: Boolean = false,
-    var notificationPriority: String = "Normal",
     var notificationMode: String = "Simple",
     var keepScreenOn: Boolean = false,
     var enablePersistentService: Boolean = false,
@@ -51,10 +58,11 @@ data class AppConfig(
     var overnightMode: Boolean = false,
     var showGridAfterGeneration: Boolean = true,
     var showActiveTagsUI: Boolean = true,
-    var updateChannel: String = "Stable",
-    var betaToken: String = "",
+    var enableLogging: Boolean = false,
+    var lastUpdateCheckDate: String = "",
     var defaultState: AppState = AppState(),
-    var presets: List<GenerationPreset> = emptyList()
+    var presets: List<GenerationPreset> = emptyList(),
+    var gallerySyncMode: GallerySyncMode = GallerySyncMode.MANUAL
 )
 
 data class AppState(
@@ -79,6 +87,33 @@ data class AppState(
     var saveToDevice: Boolean = false
 )
 
+data class PngInfoPayloadDto(val image: String)
+data class PngInfoResponseDto(val info: String, val items: Map<String, String>? = null)
+data class TokenizePayloadDto(val text: String)
+data class TokenizeResponseDto(val tokens: List<Int>? = null)
+data class PhystonHistoryDto(val prompt: String, val tags: List<String>? = null)
+
+data class Txt2ImgRequestDto(
+    val prompt: String,
+    val negative_prompt: String,
+    val steps: Int,
+    val cfg_scale: Float,
+    val width: Int,
+    val height: Int,
+    val n_iter: Int,
+    val batch_size: Int,
+    val seed: Long,
+    val sampler_name: String,
+    val scheduler: String,
+    val override_settings: OverrideSettingsDto,
+    val enable_hr: Boolean,
+    val hr_scale: Float,
+    val hr_upscaler: String,
+    val denoising_strength: Float,
+    val save_images: Boolean = true,
+    val send_images: Boolean = true
+)
+
 data class PromptHistoryItem(
     val positivePrompt: String,
     val negativePrompt: String,
@@ -90,8 +125,15 @@ data class PromptHistoryItem(
 data class QueuedGeneration(
     val id: String,
     val positivePrompt: String,
-    val payload: Txt2ImgPayloadDto
+    val payload: Txt2ImgPayloadDto,
+    val status: GenerationStatus = GenerationStatus.QUEUED
 )
+
+enum class GenerationStatus {
+    QUEUED,
+    GENERATING,
+    SUSPENDED
+}
 
 data class ServerStatRecord(
     val timestamp: Long,
@@ -167,6 +209,9 @@ interface CivitaiModelDao {
 
     @Query("DELETE FROM civitai_models")
     suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM civitai_models")
+    suspend fun count(): Int
 }
 
 @Entity(tableName = "favorite_images")
@@ -174,7 +219,7 @@ data class FavoriteImageEntity(
     @PrimaryKey val fullpath: String,
     val name: String,
     val date: String?,
-    val savedAt: Long
+    val savedAt: Long = System.currentTimeMillis()
 )
 
 @Dao
@@ -182,46 +227,67 @@ interface FavoriteImageDao {
     @Query("SELECT * FROM favorite_images ORDER BY savedAt DESC")
     suspend fun getAllFavorites(): List<FavoriteImageEntity>
 
-    @Query("SELECT EXISTS(SELECT 1 FROM favorite_images WHERE fullpath = :path)")
+    @Query("SELECT EXISTS(SELECT 1 FROM favorite_images WHERE fullpath = :path LIMIT 1)")
     suspend fun isFavorite(path: String): Boolean
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertFavorite(entity: FavoriteImageEntity)
+    suspend fun insertFavorite(favorite: FavoriteImageEntity)
+
+    @Delete
+    suspend fun deleteFavoriteEntity(favorite: FavoriteImageEntity)
 
     @Query("DELETE FROM favorite_images WHERE fullpath = :path")
     suspend fun deleteFavorite(path: String)
+
+    @Query("SELECT COUNT(*) FROM favorite_images")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM favorite_images")
+    suspend fun clearAll()
 }
 
-// Nazwa klasy pozostaje niezmieniona, ponieważ jest częścią publicznego API StateFlow
-@Entity(tableName = "prompt_styles")
-data class PromptStyleEntity(
-    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+@Entity(tableName = "gallery_images")
+data class GalleryImageEntity(
+    @PrimaryKey val fullpath: String,
     val name: String,
+    val date: String,
     val positivePrompt: String,
-    val negativePrompt: String
+    val negativePrompt: String,
+    val model: String,
+    val sampler: String,
+    val seed: String,
+    val loras: String,
+    val savedAt: Long
 )
 
 @Dao
-interface PromptStyleDao {
-    @Query("SELECT * FROM prompt_styles ORDER BY name ASC")
-    suspend fun getAllStyles(): List<PromptStyleEntity>
+interface GalleryImageDao {
+    @Query("SELECT * FROM gallery_images WHERE positivePrompt LIKE '%' || :query || '%' OR name LIKE '%' || :query || '%' OR loras LIKE '%' || :query || '%'")
+    suspend fun searchImages(query: String): List<GalleryImageEntity>
+
+    @Query("SELECT * FROM gallery_images WHERE fullpath = :path LIMIT 1")
+    suspend fun getImageByPath(path: String): GalleryImageEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertStyle(style: PromptStyleEntity)
+    suspend fun insertImage(image: GalleryImageEntity)
 
-    @Delete
-    suspend fun deleteStyle(style: PromptStyleEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(images: List<GalleryImageEntity>)
+    
+    @Query("DELETE FROM gallery_images WHERE fullpath LIKE :folderPath || '%'")
+    suspend fun clearFolder(folderPath: String)
 }
 
 @Database(
-    entities = [CivitaiModelEntity::class, FavoriteImageEntity::class, PromptStyleEntity::class],
-    version = 7,
+    entities = [CivitaiModelEntity::class, FavoriteImageEntity::class, WildcardEntity::class, GalleryImageEntity::class],
+    version = 9,
     exportSchema = false
 )
 abstract class ForgeDatabase : RoomDatabase() {
     abstract fun civitaiModelDao(): CivitaiModelDao
     abstract fun favoriteImageDao(): FavoriteImageDao
-    abstract fun promptStyleDao(): PromptStyleDao
+    abstract fun wildcardDao(): WildcardDao
+    abstract fun galleryImageDao(): GalleryImageDao
 }
 
 /* ============================================================================
@@ -270,7 +336,9 @@ data class ProgressResponseDto(
 )
 
 data class Txt2ImgResponseDto(
-    val images: List<String> = emptyList()
+    val images: List<String> = emptyList(),
+    val info: String = "",
+    val parameters: Map<String, Any>? = null
 )
 
 data class OptionsPayloadDto(
@@ -402,3 +470,30 @@ fun LoraItemDto.toDomain() = ApiResource(
     name = this.name ?: "Unknown",
     hash = this.metadata?.sshsModelHash?.takeIf { it.isNotEmpty() } ?: this.name
 )
+
+
+
+
+@androidx.room.Entity(tableName = "wildcards")
+data class WildcardEntity(
+    @androidx.room.PrimaryKey val name: String,
+    val content: String
+)
+
+@androidx.room.Dao
+interface WildcardDao {
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun insertWildcard(wildcard: WildcardEntity)
+
+    @androidx.room.Delete
+    suspend fun deleteWildcard(wildcard: WildcardEntity)
+
+    @androidx.room.Query("SELECT * FROM wildcards ORDER BY name ASC")
+    suspend fun getAllWildcards(): List<WildcardEntity>
+    
+    @androidx.room.Query("SELECT COUNT(*) FROM wildcards")
+    suspend fun count(): Int
+    
+    @androidx.room.Query("DELETE FROM wildcards")
+    suspend fun clearAll()
+}

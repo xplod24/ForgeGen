@@ -28,6 +28,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -184,6 +186,9 @@ fun AppNavigation(viewModel: ForgeViewModel, navController: NavHostController) {
         composable("main") { MainScreen(viewModel, navController) }
         composable("gallery") { GalleryScreen(viewModel, navController) }
         composable("queue") { QueueScreen(viewModel, navController) }
+        composable("wildcards") { WildcardsScreen(viewModel, navController) }
+        composable("presets") { PresetsScreen(viewModel, navController) }
+
     }
 }
 
@@ -203,7 +208,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Natychmiastowe ukrycie systemowego splash screena by oddać renderowanie WelcomeScreen
+        // Immediately dismiss the system splash screen to pass composition control to the custom WelcomeScreen.
         installSplashScreen().apply {
             setKeepOnScreenCondition { false }
         }
@@ -222,7 +227,7 @@ class MainActivity : ComponentActivity() {
             val config by viewModel.config.collectAsStateWithLifecycle()
             val activity = context.findActivity() ?: return@setContent
 
-            // Wychwytywanie intencji udostępniania z zewnątrz i ekstrakcja danych
+            // Capture incoming Android Share Intents containing images and extract generation parameters.
             LaunchedEffect(Unit) {
                 pendingIntents.collect { receivedIntent ->
                     if (receivedIntent.action == Intent.ACTION_SEND && receivedIntent.type?.startsWith("image/") == true) {
@@ -234,7 +239,7 @@ class MainActivity : ComponentActivity() {
                                     if (metadata != null) {
                                         viewModel.setImportedImageMetadata(metadata)
                                     } else {
-                                        viewModel.showSnackbar("No generation data found in this image.")
+                                        viewModel.showToast("No generation data found in this image.")
                                     }
                                 }
                             }
@@ -267,22 +272,29 @@ class MainActivity : ComponentActivity() {
                 onDispose { context.unregisterReceiver(receiver) }
             }
 
+            var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
+
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_START) viewModel.setAppForegroundState(true)
-                    else if (event == Lifecycle.Event.ON_STOP) viewModel.setAppForegroundState(false)
+                    if (event == Lifecycle.Event.ON_START) {
+                        viewModel.setAppForegroundState(true)
+                    } else if (event == Lifecycle.Event.ON_STOP) {
+                        viewModel.setAppForegroundState(false)
+                        if (config.useNativeSecurity) {
+                            isUnlocked = false
+                        }
+                    }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
             }
 
-            // Inicjalizacja biblioteki Coil ze zdefiniowanym kluczem Cache (2.5GB + Interceptor na 30 dni)
-            val imageLoader = remember(config.connectionTimeout, config.apiUrl) {
+            // Initialize the Coil image loader configuration using a custom HTTP Client to force a 30-day cache (2.5GB maximum size) for loaded network thumbnails.
+            val imageLoader = remember(context) {
                 val customClient = viewModel.client.newBuilder()
                     .addNetworkInterceptor { chain ->
                         val originalResponse = chain.proceed(chain.request())
-                        // Wymuszenie na bibliotece zaufania, że plik będzie ważny przez 30 dni (2592000 sekund)
                         originalResponse.newBuilder()
                             .header("Cache-Control", "public, max-age=2592000")
                             .build()
@@ -294,14 +306,11 @@ class MainActivity : ComponentActivity() {
                     .diskCache {
                         DiskCache.Builder()
                             .directory(context.cacheDir.resolve("image_cache"))
-                            // Twardy limit wielkości cache dyskowego: 2.5 GB
                             .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
                             .build()
                     }
                     .build()
             }
-
-            var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
 
             if (!isUnlocked) {
                 Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -330,7 +339,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         }) {
-                            Text("Tap to Unlock")
+                            Text("Tap to unlock")
                         }
                     }
                 }
@@ -403,7 +412,7 @@ class MainActivity : ComponentActivity() {
             val navController = rememberNavController()
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
-            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue"
+            val isSessionActive = currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue" || currentRoute == "wildcards"
 
             // CIVITAI SYNC STATES
             val isCivitaiSyncing by viewModel.isCivitaiSyncing.collectAsStateWithLifecycle()
@@ -418,36 +427,13 @@ class MainActivity : ComponentActivity() {
             val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
             val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
             val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
+            val updateDownloadStats by viewModel.updateDownloadStats.collectAsStateWithLifecycle()
+            val isAppBlurred by viewModel.isAppBlurred.collectAsStateWithLifecycle()
 
-            val snackbarHostState = remember { SnackbarHostState() }
-            var showUpdateDialog by remember { mutableStateOf(false) }
-            var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
-
-            // GLOBALNY EVENT BUS DLA SNACKBARÓW Z EFEKTEM MARQUEE
+            // Global Toast event bus
             LaunchedEffect(Unit) {
-                viewModel.snackbarMessage.collect { message ->
-                    snackbarHostState.currentSnackbarData?.dismiss()
-                    snackbarHostState.showSnackbar(
-                        message = message,
-                        duration = SnackbarDuration.Short
-                    )
-                }
-            }
-
-            // LOGIKA SNACKBARA AKTUALIZACYJNEGO
-            LaunchedEffect(updateManifest, isUpdateDownloading) {
-                val manifest = updateManifest
-                if (manifest != null && manifest.versionCode > dismissedUpdateVersion && !isUpdateDownloading) {
-                    val result = snackbarHostState.showSnackbar(
-                        message = "Update Available: ${manifest.versionName}",
-                        actionLabel = "OK",
-                        duration = SnackbarDuration.Indefinite
-                    )
-                    if (result == SnackbarResult.ActionPerformed) {
-                        showUpdateDialog = true
-                    } else {
-                        dismissedUpdateVersion = manifest.versionCode
-                    }
+                viewModel.toastMessage.collect { message ->
+                    android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
                 }
             }
 
@@ -478,13 +464,13 @@ class MainActivity : ComponentActivity() {
                                             Spacer(Modifier.height(8.dp))
                                             Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("Turn on internet connection to use app", textAlign = TextAlign.Center)
+                                            Text("Turn on the internet to use the app", textAlign = TextAlign.Center)
                                         } else {
                                             Icon(Icons.Default.CloudOff, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
                                             Spacer(Modifier.height(8.dp))
                                             Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                                             Spacer(Modifier.height(8.dp))
-                                            Text("Make sure your API server is running.", textAlign = TextAlign.Center)
+                                            Text("Make sure the API server is running.", textAlign = TextAlign.Center)
                                         }
 
                                         Spacer(modifier = Modifier.height(16.dp))
@@ -503,6 +489,18 @@ class MainActivity : ComponentActivity() {
                         }
 
                         val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
+                        var showPromptCancel by remember { mutableStateOf(false) }
+
+                        LaunchedEffect(isRestoringPrompt) {
+                            if (isRestoringPrompt == IndicatorState.LOADING) {
+                                showPromptCancel = false
+                                kotlinx.coroutines.delay(3000)
+                                showPromptCancel = true
+                            } else {
+                                showPromptCancel = false
+                            }
+                        }
+
                         if (isRestoringPrompt != IndicatorState.IDLE) {
                             Box(
                                 modifier = Modifier
@@ -517,17 +515,36 @@ class MainActivity : ComponentActivity() {
                                     Spacer(modifier = Modifier.height(16.dp))
 
                                     val statusText = when(isRestoringPrompt) {
-                                        IndicatorState.SUCCESS -> "Recovered successfully!"
+                                        IndicatorState.SUCCESS -> "Successfully recovered!"
                                         IndicatorState.ERROR -> "Failed to recover."
                                         else -> "Recovering prompt..."
                                     }
 
                                     Text(statusText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                                    if (showPromptCancel) {
+                                        Spacer(modifier = Modifier.height(16.dp))
+                                        OutlinedButton(onClick = { viewModel.cancelPromptRestore() }) {
+                                            Text("Cancel", color = Color.White)
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        // GLOBALNE OKNO SYNCHRONIZACJI Z CIVITAI
+                        // GLOBAL CIVITAI SYNCHRONIZATION OVERLAY DIALOG
+                        var showCivitaiCancel by remember { mutableStateOf(false) }
+
+                        LaunchedEffect(isCivitaiSyncing) {
+                            if (isCivitaiSyncing == IndicatorState.LOADING) {
+                                showCivitaiCancel = false
+                                kotlinx.coroutines.delay(3000)
+                                showCivitaiCancel = true
+                            } else {
+                                showCivitaiCancel = false
+                            }
+                        }
+
                         if (isCivitaiSyncing != IndicatorState.IDLE) {
                             Box(
                                 modifier = Modifier
@@ -538,7 +555,7 @@ class MainActivity : ComponentActivity() {
                                 contentAlignment = Alignment.Center
                             ) {
                                 Card(
-                                    modifier = Modifier.padding(32.dp).fillMaxWidth(0.85f),
+                                    modifier = Modifier.padding(32.dp).fillMaxWidth(0.85f).animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
                                     shape = MaterialTheme.shapes.large,
                                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                                 ) {
@@ -548,7 +565,7 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         AnimatedStatusIndicator(state = isCivitaiSyncing)
                                         Spacer(modifier = Modifier.height(16.dp))
-                                        Text("Civitai Synchronization", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
+                                        Text("Civitai Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
                                         Spacer(modifier = Modifier.height(12.dp))
                                         Text("Fetching metadata for:", fontSize = 12.sp, color = Color.Gray)
                                         Text(
@@ -572,7 +589,7 @@ class MainActivity : ComponentActivity() {
 
                                         if (civitaiSyncLastResult != null) {
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            val isError = civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true)
+                                            val isError = civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true) || civitaiSyncLastResult!!.contains("Error", ignoreCase = true)
                                             Text(
                                                 text = "Last result: $civitaiSyncLastResult",
                                                 fontSize = 11.sp,
@@ -581,98 +598,24 @@ class MainActivity : ComponentActivity() {
                                         }
 
                                         Spacer(modifier = Modifier.height(8.dp))
-                                        Text("Rate limits applied to prevent IP ban.", fontSize = 10.sp, color = Color.Gray)
+                                        Text("API limits applied to prevent IP ban.", fontSize = 10.sp, color = Color.Gray)
+
+                                        if (showCivitaiCancel) {
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            OutlinedButton(onClick = { viewModel.cancelCivitaiSync() }) {
+                                                Text("Cancel")
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
 
-                        // SNACKBAR WYŚWIETLANY NA DOLE Z EFEKTEM MARQUEE (Nienachalny UI)
-                        SnackbarHost(
-                            hostState = snackbarHostState,
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 16.dp)
-                                .zIndex(200f),
-                            snackbar = { data ->
-                                Snackbar(
-                                    modifier = Modifier.padding(12.dp),
-                                    action = {
-                                        data.visuals.actionLabel?.let { actionLabel ->
-                                            TextButton(onClick = { data.performAction() }) {
-                                                Text(actionLabel, color = MaterialTheme.colorScheme.inversePrimary)
-                                            }
-                                        }
-                                    },
-                                    containerColor = MaterialTheme.colorScheme.inverseSurface,
-                                    contentColor = MaterialTheme.colorScheme.inverseOnSurface
-                                ) {
-                                    Text(
-                                        text = data.visuals.message,
-                                        modifier = Modifier.basicMarquee(),
-                                        maxLines = 1
-                                    )
-                                }
-                            }
-                        )
-
-                        // GLOBALNE OKNO AKTUALIZACJI
-                        if (showUpdateDialog && updateManifest != null && !isUpdateDownloading) {
-                            val manifest = updateManifest!!
-                            AlertDialog(
-                                onDismissRequest = {
-                                    if (!manifest.isCritical) {
-                                        dismissedUpdateVersion = manifest.versionCode
-                                        showUpdateDialog = false
-                                    }
-                                },
-                                title = { Text("Update Available", fontWeight = FontWeight.Bold) },
-                                text = {
-                                    Column(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
-                                        Text("Version ${manifest.versionName} (${manifest.channel})", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                        if (!manifest.releaseDate.isNullOrEmpty()) {
-                                            Text("Released: ${manifest.releaseDate}", fontSize = 12.sp, color = Color.Gray)
-                                        }
-                                        Spacer(Modifier.height(12.dp))
-
-                                        val lang = Locale.getDefault().language
-                                        val changelogText = manifest.changelog?.get(lang) ?: manifest.changelog?.get("en") ?: emptyList()
-
-                                        if (changelogText.isNotEmpty()) {
-                                            Text("What's new:", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                                            Spacer(Modifier.height(4.dp))
-                                            changelogText.forEach { item ->
-                                                Row(modifier = Modifier.padding(bottom = 4.dp)) {
-                                                    Text("• ", fontSize = 14.sp)
-                                                    Text(item, fontSize = 14.sp)
-                                                }
-                                            }
-                                        } else {
-                                            Text("Do you want to download and install the new version?", fontSize = 14.sp)
-                                        }
-                                    }
-                                },
-                                confirmButton = {
-                                    Button(onClick = {
-                                        showUpdateDialog = false
-                                        viewModel.downloadAndInstallUpdate()
-                                    }) { Text("Update") }
-                                },
-                                dismissButton = {
-                                    if (!manifest.isCritical) {
-                                        TextButton(onClick = {
-                                            dismissedUpdateVersion = manifest.versionCode
-                                            showUpdateDialog = false
-                                        }) { Text("Later") }
-                                    }
-                                }
-                            )
-                        }
-
-                        // GLOBALNE OKNO POBIERANIA
+                        // GLOBAL DOWNLOAD PROGRESS DIALOG
                         if (isUpdateDownloading) {
                             AlertDialog(
                                 onDismissRequest = { },
+                                properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
                                 title = { Text("Downloading Update") },
                                 text = {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
@@ -680,28 +623,32 @@ class MainActivity : ComponentActivity() {
                                             progress = { updateDownloadProgress },
                                             modifier = Modifier.fillMaxWidth().padding(16.dp)
                                         )
-                                        Text("${(updateDownloadProgress * 100).toInt()}%")
+                                        val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
+                                        val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
+                                        Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
                                     }
                                 },
                                 confirmButton = { }
                             )
                         }
 
-                        // GLOBALNE OKNO METADANYCH Z ZEWNĘTRZNEGO IMPORTU
+
+
+                        // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
                         val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
                         if (importedImageMetadata != null) {
-                            MetadataAlertDialog(
+                            AppMetadataAlertDialog(
                                 metadata = importedImageMetadata,
                                 onDismiss = { viewModel.setImportedImageMetadata(null) },
                                 onApplyPrompt = { pos, neg ->
                                     viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
                                     viewModel.setImportedImageMetadata(null)
-                                    viewModel.showSnackbar("Prompts Applied")
+                                    viewModel.showToast("Applied Prompts")
                                 },
                                 onApplyModel = { modelName ->
                                     viewModel.changeCheckpoint(modelName)
                                     viewModel.setImportedImageMetadata(null)
-                                    viewModel.showSnackbar("Model Applied: $modelName")
+                                    viewModel.showToast("Applied Model: $modelName")
                                 },
                                 onApplyLoras = { loras ->
                                     loras.forEach { loraTag ->
@@ -709,9 +656,63 @@ class MainActivity : ComponentActivity() {
                                         if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
                                     }
                                     viewModel.setImportedImageMetadata(null)
-                                    viewModel.showSnackbar("LoRAs Applied")
+                                    viewModel.showToast("Applied LoRAs")
                                 }
                             )
+                        }
+
+                        // GLOBAL APP BLUR PRIVACY OVERLAY
+                        if (isAppBlurred) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.background.copy(alpha = 0.9f))
+                                    .blur(25.dp)
+                                    .clickable(enabled = true) {
+                                        if (config.useBiometricLock || config.useNativeSecurity) {
+                                            val authenticators = if (config.useBiometricLock) {
+                                                android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                            } else {
+                                                android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                                            }
+                                            val prompt = android.hardware.biometrics.BiometricPrompt.Builder(activity)
+                                                .setTitle("ForgeGen Authentication")
+                                                .setAllowedAuthenticators(authenticators)
+                                                .build()
+                                            prompt.authenticate(
+                                                android.os.CancellationSignal(),
+                                                activity.mainExecutor,
+                                                object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+                                                    override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) {
+                                                        viewModel.setAppBlurred(false)
+                                                    }
+                                                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                                                        activity.finishAffinity()
+                                                        java.lang.System.exit(0)
+                                                    }
+                                                    override fun onAuthenticationFailed() {
+                                                        activity.finishAffinity()
+                                                        java.lang.System.exit(0)
+                                                    }
+                                                }
+                                            )
+                                        } else {
+                                            viewModel.setAppBlurred(false)
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Icon(
+                                        imageVector = Icons.Default.VisibilityOff,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(64.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                    Text("App Blurred / Hidden", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                                    Text("Tap anywhere to unlock/reveal", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
+                            }
                         }
                     }
                 }

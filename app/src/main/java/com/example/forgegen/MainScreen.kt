@@ -18,16 +18,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import coil.compose.LocalImageLoader
+import coil.imageLoader
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import okhttp3.internal.http2.FlowControlListener
 
 /* ============================================================================
  * MAIN SCREEN (Orchestrator)
- * Czysty szkielet UI. Wszystkie duże komponenty pochodzą z MainComponents.kt
- * Integruje BottomSheetScaffold dla wysuwanej szuflady z ustawieniami.
+ * UI shell for the main workspace. Core layout sections are imported from MainComponents.kt.
+ * Integrates BottomSheetScaffold to overlay parameters and generation controls.
  * ============================================================================ */
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -41,6 +42,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val vram by viewModel.vramUsage.collectAsStateWithLifecycle()
+    val ram by viewModel.ramUsage.collectAsStateWithLifecycle()
 
     val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
     val generationQueue by viewModel.generationQueue.collectAsStateWithLifecycle()
@@ -64,20 +66,20 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
 
-    val serverStats by viewModel.serverStats.collectAsStateWithLifecycle()
+
 
     var pendingLora by remember { mutableStateOf<ApiResource?>(null) }
     var fullscreenImageIndex by remember { mutableIntStateOf(-1) }
-    var showStatsDialog by remember { mutableStateOf(false) }
+
 
     var tagsPopupHash by remember { mutableStateOf<String?>(null) }
     var tagsPopupName by remember { mutableStateOf("") }
     var availableTagsForPopup by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val context = LocalContext.current
-    val imageLoader = LocalImageLoader.current
+    val imageLoader = context.imageLoader
 
-    // Manager do kontroli focusu na ekranie
+    // Focus manager to clear focus and dismiss keyboard
     val focusManager = LocalFocusManager.current
 
     LaunchedEffect(selectedModel, activeLoras, models, availableLoras) {
@@ -125,23 +127,36 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
     val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
 
-    // Twarde, matematyczne wyliczenie wysokości paska nawigacyjnego urządzenia
+    // Calculate device navigation bar height in pixels to correctly align bottom elements
     val density = LocalDensity.current
     val navBarHeightDp = with(density) {
         WindowInsets.navigationBars.getBottom(this).toDp()
     }
 
-    // Podnosimy uchwyt szuflady (40.dp to wysokość widocznego uchwytu) ponad systemową nawigację
+    // Elevate the sheet handle (40.dp peek offset) above the system navigation bar to prevent overlaps
     val peekHeight = 40.dp + navBarHeightDp
 
-    // Konfiguracja stanu szuflady na podstawie AppConfig
+    // Initialize bottom sheet state with expand status based on AppConfig preferences
     val sheetState = rememberStandardBottomSheetState(
         initialValue = if (config.bottomSheetExpandedByDefault) SheetValue.Expanded else SheetValue.PartiallyExpanded,
         skipHiddenState = true
     )
     val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
 
-    // Główny kontener ekranu przechwytujący dotknięcia
+    var showUnloadDialog by remember { mutableStateOf(false) }
+
+    // Estimate image pixel dimensions dynamically and warn the user about potential CUDA VRAM out-of-memory errors
+    LaunchedEffect(state.width, state.height, state.hiresFix, state.hiresScale) {
+        val basePixels = state.width * state.height
+        val finalPixels = if (state.hiresFix) basePixels * (state.hiresScale * state.hiresScale) else basePixels.toFloat()
+
+        // Estymata: Powyżej 2.5 miliona pikseli przy Hires zaczyna być niebezpiecznie dla standardowych kart 8GB.
+        if (finalPixels > 2500000) {
+            viewModel.showToast("High VRAM usage warning. Risk of server OOM.")
+        }
+    }
+
+    // Root screen layout container configured with tap gestures to dismiss the virtual keyboard
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -158,11 +173,14 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
             sheetPeekHeight = peekHeight,
             sheetContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             topBar = {
+                val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
                 ForgeTopAppBar(
                     isConnected = isConnected,
                     pingMs = pingMs,
+                    ram = ram,
                     vram = vram,
-                    onStatsClick = { showStatsDialog = true },
+                    isActivelyGenerating = isActivelyGenerating,
+                    onUnloadClick = { showUnloadDialog = true },
                     onGalleryClick = onGalleryClick,
                     onSettingsClick = onSettingsClick
                 )
@@ -175,7 +193,8 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
                     progress = progress,
                     currentEta = currentEta,
-                    onQueueClick = onQueueClick
+                    onQueueClick = onQueueClick,
+                    onNavigateToPresets = { navController.navigate("presets") }
                 )
             }
         ) { padding ->
@@ -198,7 +217,13 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         onDismissGrid = { viewModel.dismissGridPreview(it) },
                         onFullscreen = { fullscreenImageIndex = it },
                         onPrev = { viewModel.sessionPrev() },
-                        onNext = { viewModel.sessionNext() }
+                        onNext = { viewModel.sessionNext() },
+                        onRecoverLast = { viewModel.recoverLastPrompt() },
+                        onRecoverFromGallery = {
+                            viewModel.setGalleryMode(com.example.forgegen.GalleryMode.PROMPT_PICKER)
+                            viewModel.fetchGalleryFolder(config.galleryPath)
+                            navController.navigate("gallery")
+                        }
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -234,19 +259,13 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                         }
                     )
 
-                    // Margines na dole zawartości, aby ostatnie kontrolki można było swobodnie przewinąć nad szufladę
+                    // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
                     Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         }
 
         // --- ROOT DIALOGS ---
-        if (showStatsDialog) {
-            ServerStatsDialog(
-                serverStats = serverStats,
-                onDismiss = { showStatsDialog = false }
-            )
-        }
 
         if (pendingLora != null) {
             LoraTriggerDialog(
@@ -280,7 +299,7 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                     val filteredTags = availableTagsForPopup.filter { !promptTags.contains(it) }
 
                     if (filteredTags.isEmpty()) {
-                        Text("Brak nowych tagów. Odśwież API, jeśli model został zaktualizowany na Civitai.", fontSize = 14.sp)
+                        Text("No new tags found. Refresh API if the model was updated on Civitai.", fontSize = 14.sp)
                     } else {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -301,6 +320,29 @@ fun MainScreen(viewModel: ForgeViewModel, navController: NavHostController) {
                 },
                 confirmButton = {
                     TextButton(onClick = { tagsPopupHash = null }) { Text("Close") }
+                }
+            )
+        }
+
+        if (showUnloadDialog) {
+            AlertDialog(
+                onDismissRequest = { showUnloadDialog = false },
+                title = { Text("Unload Model from VRAM", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+                text = { Text("Are you sure you want to unload the active model from GPU VRAM to free up server memory?", fontSize = 14.sp) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showUnloadDialog = false
+                            viewModel.unloadCheckpoint()
+                        }
+                    ) {
+                        Text("Unload", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUnloadDialog = false }) {
+                        Text("Cancel")
+                    }
                 }
             )
         }

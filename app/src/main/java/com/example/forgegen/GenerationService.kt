@@ -8,6 +8,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -31,6 +32,15 @@ class GenerationService : Service() {
 
     private var generationStartTime: Long = 0
     private var wasGenerating = false
+    @Volatile private var isNotificationDismissed = false
+
+    private val dismissReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == "ACTION_NOTIFICATION_DISMISSED") {
+                isNotificationDismissed = true
+            }
+        }
+    }
 
     private var partialWakeLock: PowerManager.WakeLock? = null
 
@@ -45,6 +55,11 @@ class GenerationService : Service() {
             Log.e("GenerationService", "Failed to init WakeLock", e)
         }
 
+        val filter = android.content.IntentFilter("ACTION_NOTIFICATION_DISMISSED")
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, dismissReceiver, filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
         serviceScope.launch {
             var lastProgress = -1
             var lastText = ""
@@ -52,14 +67,16 @@ class GenerationService : Service() {
 
             while (isActive) {
                 val config = ForgeRepository.config.value
-                val isActivelyGenerating = ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value
-                val oomAlert = ForgeRepository.oomAlert.value
-                val progress = ForgeRepository.progress.value
+                val isActivelyGenerating = ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value
+                val oomAlert = ForgeQueueManager.oomAlert.value
+                val progress = ForgeQueueManager.progress.value
                 val progInt = (progress * 100).toInt()
-                val text = ForgeRepository.statusText.value
+                val text = ForgeQueueManager.statusText.value
                 val mode = config.notificationMode
                 val jobNo = ForgeRepository.currentJobNo.value
                 val jobCount = ForgeRepository.currentJobCount.value
+                val queue = ForgeQueueManager.generationQueue.value
+                val batchSize = queue.firstOrNull()?.payload?.batch_size ?: 1
 
                 if (isActivelyGenerating && !wasGenerating) {
                     generationStartTime = System.currentTimeMillis()
@@ -70,12 +87,13 @@ class GenerationService : Service() {
                     releaseWakeLock()
                 }
 
-                val shouldUpdate = (progInt != lastProgress) || (text != lastText) || (jobNo != lastJobNo)
+                val shouldUpdate = (progInt != lastProgress) || (text != lastText) || (jobNo != lastJobNo) || isNotificationDismissed
 
-                if (shouldUpdate) {
+                if (shouldUpdate && isActivelyGenerating) {
                     lastProgress = progInt
                     lastText = text
                     lastJobNo = jobNo
+                    isNotificationDismissed = false
 
                     val notification = createNotification(
                         isActivelyGenerating,
@@ -84,7 +102,8 @@ class GenerationService : Service() {
                         oomAlert,
                         mode,
                         jobNo,
-                        jobCount
+                        jobCount,
+                        batchSize
                     )
 
                     val manager = getSystemService(NotificationManager::class.java)
@@ -104,7 +123,7 @@ class GenerationService : Service() {
             "ACTION_UPDATE_PERSISTENCE" -> {
                 serviceScope.launch {
                     val config = ForgeRepository.config.value
-                    val isActivelyGenerating = ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value
+                    val isActivelyGenerating = ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value
                     if (config.enablePersistentService || isActivelyGenerating) {
                         startForegroundSafe()
                     } else {
@@ -121,7 +140,7 @@ class GenerationService : Service() {
                         val manager = getSystemService(NotificationManager::class.java)
                         manager.notify(
                             notificationId,
-                            createNotification(false, 0f, "Ready", false, config.notificationMode, 0, 0)
+                            createNotification(false, 0f, "Ready", false, config.notificationMode, 0, 0, 1)
                         )
                     }
                 }
@@ -154,13 +173,14 @@ class GenerationService : Service() {
         try {
             val config = ForgeRepository.config.value
             val notification = createNotification(
-                ForgeRepository.isGenerating.value || ForgeRepository.isServerBusy.value,
-                ForgeRepository.progress.value,
-                ForgeRepository.statusText.value,
-                ForgeRepository.oomAlert.value,
+                ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value,
+                ForgeQueueManager.progress.value,
+                ForgeQueueManager.statusText.value,
+                ForgeQueueManager.oomAlert.value,
                 config.notificationMode,
                 ForgeRepository.currentJobNo.value,
-                ForgeRepository.currentJobCount.value
+                ForgeRepository.currentJobCount.value,
+                ForgeQueueManager.generationQueue.value.firstOrNull()?.payload?.batch_size ?: 1
             )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -168,7 +188,7 @@ class GenerationService : Service() {
                     this,
                     notificationId,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
                 )
             } else {
                 startForeground(notificationId, notification)
@@ -186,13 +206,11 @@ class GenerationService : Service() {
         oomAlert: Boolean,
         notificationMode: String,
         jobNo: Int,
-        jobCount: Int
+        jobCount: Int,
+        batchSize: Int
     ): Notification {
-        val config = ForgeRepository.config.value
         val channelId = when {
             oomAlert -> "forge_high"
-            config.notificationPriority == "High" -> "forge_high"
-            config.notificationPriority == "Low" -> "forge_low"
             else -> "forge_default"
         }
 
@@ -210,10 +228,17 @@ class GenerationService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val deleteIntent = PendingIntent.getBroadcast(
+            this, 2,
+            Intent("ACTION_NOTIFICATION_DISMISSED"),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val builder = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.mipmap.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
-            .setOngoing(isActivelyGenerating || config.enablePersistentService)
+            .setOngoing(false) // Allow dismissal
+            .setDeleteIntent(deleteIntent)
             .setOnlyAlertOnce(true)
 
         if (oomAlert) {
@@ -221,27 +246,39 @@ class GenerationService : Service() {
             builder.setContentText("Out of Memory (OOM)! Queue paused.")
             builder.color = 0xFFFF0000.toInt()
         } else if (isActivelyGenerating) {
-            // Dodane wyświetlanie postępu paczki zadań
-            val batchStr = if (jobCount > 1) " (Batch ${jobNo + 1}/$jobCount)" else ""
-            builder.setContentTitle("Generating$batchStr")
-
-            if (notificationMode == "Disabled") {
-                builder.setContentText("Task in progress...")
-            } else {
-                builder.setContentText(statusText)
-            }
             builder.color = 0xFF005BFF.toInt()
+
+            val max = 100
+            val progInt = (progress * 100).toInt()
+            builder.setProgress(max, progInt, progInt == 0)
+
+            when (notificationMode) {
+                "Verbose" -> {
+                    builder.setContentTitle("Batch Count: $jobCount | Batch Size: $batchSize")
+                    builder.setContentText("Current image: ${jobNo + 1}/$jobCount | ${progInt}%")
+                    builder.addAction(R.drawable.ic_launcher_foreground, "Open App", pendingIntent)
+                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
+                }
+                "Normal" -> {
+                    builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
+                    builder.setContentText("Size: $batchSize | Progress: ${progInt}%")
+                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
+                }
+                "Minimal" -> {
+                    builder.setContentTitle("Generating...")
+                    builder.setContentText("Progress: ${progInt}%")
+                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
+                }
+                else -> { // Fallback to Normal
+                    builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
+                    builder.setContentText("Size: $batchSize | Progress: ${progInt}%")
+                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
+                }
+            }
         } else {
             builder.setContentTitle("ForgeGen is Active")
             builder.setContentText("Ready for generation")
             builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
-        }
-
-        if (isActivelyGenerating && !oomAlert && notificationMode != "Disabled") {
-            val max = 100
-            val progInt = (progress * 100).toInt()
-            builder.setProgress(max, progInt, progInt == 0)
-        } else {
             builder.setProgress(0, 0, false)
         }
 
@@ -262,6 +299,13 @@ class GenerationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        stopSelf()
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.cancel(notificationId)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -269,6 +313,7 @@ class GenerationService : Service() {
         } catch (e: Exception) {
             Log.e("GenerationService", "Failed to release WakeLock in onDestroy", e)
         }
+        try { unregisterReceiver(dismissReceiver) } catch (e: Exception) {}
         serviceScope.cancel()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
     }
