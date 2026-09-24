@@ -1,14 +1,20 @@
 package com.example.forgegen
 
+import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
+import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Streaming
 import retrofit2.http.Url
+import java.util.concurrent.TimeUnit
 
 /* ============================================================================
  * 1. FORGE / AUTOMATIC1111 API
@@ -93,13 +99,6 @@ interface ForgeApi {
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
         @Query(value = "folder_path", encoded = true) folderPath: String = "",
     ): Response<ResponseBody>
-
-    @GET("app/metadata")
-    suspend fun getAppMetadata(): Response<UpdateManifestDto>
-
-    @retrofit2.http.Streaming
-    @GET("app/download?apk")
-    suspend fun downloadAppUpdate(): Response<ResponseBody>
 }
 
 /* ============================================================================
@@ -112,4 +111,41 @@ interface CivitaiApi {
     suspend fun getModelByHash(
         @Path("hash") hash: String,
     ): Response<CivitaiVersionResponseDto>
+}
+
+/* ============================================================================
+ * 3. GITHUB RELEASES API
+ * App updates come from the latest release of the (public) GitHub repository, so no token is needed.
+ * ============================================================================ */
+interface GitHubApi {
+    @Headers("Accept: application/vnd.github+json")
+    @GET("repos/{repository}/releases/latest")
+    suspend fun getLatestRelease(
+        @Path(value = "repository", encoded = true) repository: String,
+    ): Response<GitHubReleaseDto>
+
+    // Absolute browser_download_url of a release asset; OkHttp follows GitHub's redirect to the file host.
+    @Streaming
+    @GET
+    suspend fun downloadAsset(
+        @Url url: String,
+    ): Response<ResponseBody>
+
+    companion object {
+        fun create(): GitHubApi {
+            val client =
+                OkHttpClient
+                    .Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(60, TimeUnit.SECONDS)
+                    .build()
+            return Retrofit
+                .Builder()
+                .baseUrl("https://api.github.com/")
+                .client(client)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(GitHubApi::class.java)
+        }
+    }
 }

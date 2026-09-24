@@ -483,7 +483,7 @@ fun SetupScreen(
             item {
                 TextPreference(
                     title = "Check for Updates",
-                    subtitle = "Look for new versions on the server",
+                    subtitle = "Look for a newer release on GitHub",
                     value = "",
                 ) {
                     dismissedUpdateVersion = -1
@@ -511,10 +511,8 @@ fun SetupScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                if (!manifest.isCritical) {
-                                    TextButton(onClick = { dismissedUpdateVersion = manifest.versionCode }) {
-                                        Text("Dismiss")
-                                    }
+                                TextButton(onClick = { dismissedUpdateVersion = manifest.versionCode }) {
+                                    Text("Dismiss")
                                 }
                                 Spacer(Modifier.width(8.dp))
                                 Button(onClick = { viewModel.downloadUpdate() }) {

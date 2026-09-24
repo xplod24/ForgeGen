@@ -1,34 +1,36 @@
-import java.time.Year
-import java.time.LocalDate
-import java.security.MessageDigest
-import java.io.File
-import java.net.URL
-import java.net.HttpURLConnection
-import java.io.PrintWriter
-import java.io.OutputStreamWriter
-import java.nio.file.Files
-
-// ==========================================
-// 1. ODCZYT KONFIGURACJI I WERSJONOWANIE
-// ==========================================
-val buildNumberFile = file("build_number.txt")
-var buildNumber = 1
-if (buildNumberFile.exists()) {
-    buildNumber = buildNumberFile.readText().trim().toIntOrNull() ?: 1
-}
-
-val currentYear = Year.now().value
-
-// ZMIANA: versionCode jest teraz dokładnie równy buildNumber
-val calculatedVersionCode = buildNumber
-
-val calculatedVersionName = "build-$buildNumber-$currentYear"
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     id("com.google.devtools.ksp")
     id("androidx.room")
+}
+
+// ==========================================
+// VERSIONING
+// ==========================================
+// versionCode = 1000 + number of commits. It grows with every commit and is identical for a local build and
+// the CI build of the same commit, so the in-app updater always sees a newer GitHub release as an update.
+// (The offset keeps it above the codes of the old build_number.txt scheme, which reached 277.)
+// Needs the full git history: the release workflow checks out with fetch-depth 0.
+val gitCommitCount: Int? =
+    runCatching {
+        providers
+            .exec {
+                commandLine("git", "rev-list", "--count", "HEAD")
+                isIgnoreExitValue = true // outside a git checkout fall back below instead of failing the build
+            }.standardOutput.asText
+            .get()
+            .trim()
+            .toIntOrNull()
+    }.getOrNull()
+
+if (gitCommitCount == null) logger.warn("ForgeGen: git commit count unavailable, using versionCode 1000")
+
+val appVersionCode: Int = 1000 + (gitCommitCount ?: 0)
+
+tasks.register("printVersionCode") {
+    val code = appVersionCode
+    doLast { println(code) }
 }
 
 android {
@@ -40,13 +42,24 @@ android {
         schemaDirectory("$projectDir/schemas")
     }
 
+    signingConfigs {
+        // The keystore is committed on purpose: Android Studio and the release workflow must sign with the
+        // same key, otherwise the phone refuses to install a GitHub release over the installed app.
+        // To keep an installation built with your own key, replace this file with ~/.android/debug.keystore.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.forgegen"
         minSdk = 31
         targetSdk = 37
-        // ZASTĄP STATYCZNE WERSJE TYM:
-        versionCode = calculatedVersionCode
-        versionName = calculatedVersionName
+        versionCode = appVersionCode
+        versionName = "build-$appVersionCode"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resValue("string", "app_name", "ForgeGen (Beta)")
@@ -75,6 +88,10 @@ android {
         compose = true
         resValues = true
         buildConfig = true
+    }
+    testOptions {
+        // Plain JVM unit tests: android.* calls (e.g. Log) return defaults instead of throwing "not mocked".
+        unitTests.isReturnDefaultValues = true
     }
 }
 
@@ -121,215 +138,4 @@ dependencies{
     implementation(libs.lifecycle.viewmodel.compose)
 
 
-}
-
-// ==========================================
-// 2. ZADANIA (TASKI) AUTOMATYZUJĄCE BUDOWANIE
-// ==========================================
-
-// Task inkrementujący build po kompilacji
-tasks.register("incrementBuildNumber") {
-    doLast {
-        val nextBuild = buildNumber + 1
-        buildNumberFile.writeText(nextBuild.toString())
-        println("=========================================================")
-        println("+++ ForgeGen Build Number $buildNumber completed. Next build will be: $nextBuild +++")
-        println("=========================================================")
-    }
-}
-
-// Funkcja rejestrująca taski generujące JSON w zależności od wariantu
-fun registerGenerateJsonTask(variant: String, channelName: String) {
-    val taskName = "generateUpdateJson${variant.replaceFirstChar { it.uppercase() }}"
-
-    tasks.register(taskName) {
-        doLast {
-            val standardDir = layout.buildDirectory.dir("outputs/apk/$variant").get().asFile
-            val intermediateDir = layout.buildDirectory.dir("intermediates/apk/$variant").get().asFile
-            val apkFile = standardDir.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-                ?: intermediateDir.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-
-            if (apkFile != null && apkFile.exists()) {
-                val digest = MessageDigest.getInstance("SHA-256")
-                val buffer = ByteArray(8192)
-                apkFile.inputStream().use { fis ->
-                    var bytesRead: Int
-                    while (fis.read(buffer).also { bytesRead = it } != -1) {
-                        digest.update(buffer, 0, bytesRead)
-                    }
-                }
-                val sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-                val releaseDate = LocalDate.now().toString()
-
-                val targetApkName = "forgegen-release.apk"
-                val serverPort = 7778
-
-                // Parse CHANGELOG.md
-                val changelogFile = rootProject.file("CHANGELOG.md")
-                var changelogJson = "[\"Changelog for build $calculatedVersionCode\"]"
-
-                if (changelogFile.exists()) {
-                    val lines = changelogFile.readLines()
-                    val changelogList = mutableListOf<String>()
-                    
-                    for (line in lines) {
-                        val trimmed = line.trim()
-                        if (trimmed.startsWith("## ")) continue
-                        
-                        if (trimmed.isNotBlank()) {
-                            val cleaned = trimmed.removePrefix("- ").removePrefix("* ").replace("\"", "\\\"")
-                            changelogList.add(cleaned)
-                        }
-                    }
-                    if (changelogList.isNotEmpty()) changelogJson = changelogList.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
-                }
-
-                val jsonContent = """
-                {
-                  "versionCode": $calculatedVersionCode,
-                  "versionName": "$calculatedVersionName",
-                  "url": "http://192.168.1.142:$serverPort/$targetApkName",
-                  "channel": "$channelName",
-                  "sha256": "$sha256",
-                  "releaseDate": "$releaseDate",
-                  "isCritical": false,
-                  "changelog": $changelogJson
-                }
-                """.trimIndent()
-
-                // Keep local ones in build folder
-                val localJsonFile = File(apkFile.parentFile, "update.json")
-                localJsonFile.writeText(jsonContent)
-                println("Generated local update manifest: ${localJsonFile.absolutePath}")
-            } else {
-                println("--- WARNING: APK file not found in $standardDir. Skipped update.json ---")
-            }
-        }
-    }
-}
-
-// Rejestrujemy task dla obu wariantów
-registerGenerateJsonTask("debug", "Release")
-registerGenerateJsonTask("release", "Release")
-
-// Task kopiujący pliki na serwer aktualizacji
-tasks.register("copyAndPasteUpdateFileIntoServer") {
-    group = "publishing"
-    description = "Copies built APK and manifest to updateServer"
-    
-    mustRunAfter("generateUpdateJsonDebug")
-    mustRunAfter("generateUpdateJsonRelease")
-
-    doLast {
-        val targetApkName = "forgegen-release.apk"
-        val targetFolder = "release"
-
-        val releaseDirOutputs = layout.buildDirectory.dir("outputs/apk/release").get().asFile
-        val releaseDirIntermediates = layout.buildDirectory.dir("intermediates/apk/release").get().asFile
-        val debugDirOutputs = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
-        val debugDirIntermediates = layout.buildDirectory.dir("intermediates/apk/debug").get().asFile
-
-        val releaseApk = releaseDirOutputs.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-            ?: releaseDirIntermediates.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-        val debugApk = debugDirOutputs.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-            ?: debugDirIntermediates.listFiles()?.firstOrNull { it.name.endsWith(".apk") }
-
-        val apkFile = when {
-            releaseApk != null && releaseApk.exists() && debugApk != null && debugApk.exists() -> {
-                if (releaseApk.lastModified() > debugApk.lastModified()) releaseApk else debugApk
-            }
-            releaseApk != null && releaseApk.exists() -> releaseApk
-            debugApk != null && debugApk.exists() -> debugApk
-            else -> null
-        }
-
-        val localJsonFile = if (apkFile != null) File(apkFile.parentFile, "update.json") else null
-
-        if (apkFile != null && apkFile.exists() && localJsonFile != null && localJsonFile.exists()) {
-            val serverDir = rootDir.resolve("updateServer").resolve(targetFolder)
-            serverDir.mkdirs()
-            
-            var uploadSuccess = false
-            try {
-                println("Attempting to upload to Forge server at http://10.8.0.1:7860/app/upload...")
-                val boundary = "Boundary-" + System.currentTimeMillis()
-                // You can change the IP here if the server is running on a different machine
-                val url = URL("http://10.8.0.1:7860/app/upload")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-                connection.connectTimeout = 5000
-                connection.readTimeout = 15000
-                
-                connection.outputStream.use { outputStream ->
-                    val writer = PrintWriter(OutputStreamWriter(outputStream, "UTF-8"), true)
-                    
-                    // add update_json
-                    writer.append("--$boundary\r\n")
-                    writer.append("Content-Disposition: form-data; name=\"update_json\"; filename=\"${localJsonFile.name}\"\r\n")
-                    writer.append("Content-Type: application/json\r\n\r\n")
-                    writer.flush()
-                    Files.copy(localJsonFile.toPath(), outputStream)
-                    outputStream.flush()
-                    writer.append("\r\n")
-                    
-                    // add apk_file
-                    writer.append("--$boundary\r\n")
-                    writer.append("Content-Disposition: form-data; name=\"apk_file\"; filename=\"${apkFile.name}\"\r\n")
-                    writer.append("Content-Type: application/vnd.android.package-archive\r\n\r\n")
-                    writer.flush()
-                    Files.copy(apkFile.toPath(), outputStream)
-                    outputStream.flush()
-                    writer.append("\r\n")
-                    
-                    writer.append("--$boundary--\r\n")
-                    writer.close()
-                }
-                
-                val responseCode = connection.responseCode
-                if (responseCode in 200..299) {
-                    println("=========================================================")
-                    println("✅ SUCCESS: Uploaded APK and JSON automatically to Forge server!")
-                    println("=========================================================")
-                    uploadSuccess = true
-                } else {
-                    println("⚠️ WARNING: Upload failed with HTTP $responseCode. Falling back to copy task.")
-                }
-            } catch (e: Exception) {
-                println("⚠️ WARNING: Connection to Forge server failed (${e.message}). Server might be offline. Falling back to copy task.")
-            }
-
-            if (!uploadSuccess) {
-                // Copy APK
-                val destApkFile = File(serverDir, targetApkName)
-                apkFile.copyTo(destApkFile, overwrite = true)
-    
-                // Copy JSON
-                val destJsonFile = File(serverDir, "update.json")
-                localJsonFile.copyTo(destJsonFile, overwrite = true)
-    
-                println("=========================================================")
-                println("✅ SUCCESS: copyAndPasteUpdateFileIntoServer completed via COPY!")
-                println("📁 SOURCE APK: file://${apkFile.absolutePath}")
-                println("📁 COPIED APK TO: file://${destApkFile.absolutePath}")
-                println("📁 COPIED MANIFEST TO: file://${destJsonFile.absolutePath}")
-                println("=========================================================")
-            }
-        } else {
-            println("=========================================================")
-            println("⚠️ WARNING: Built APK or update.json not found. copyAndPasteUpdateFileIntoServer skipped.")
-            println("=========================================================")
-        }
-    }
-}
-
-// Rejestrujemy kolejność wykonywania tasków
-tasks.whenTaskAdded {
-    if (name == "assembleDebug") {
-        finalizedBy("generateUpdateJsonDebug", "copyAndPasteUpdateFileIntoServer", "incrementBuildNumber")
-    }
-    if (name == "assembleRelease") {
-        finalizedBy("generateUpdateJsonRelease", "copyAndPasteUpdateFileIntoServer", "incrementBuildNumber")
-    }
 }

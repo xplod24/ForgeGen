@@ -1,3 +1,5 @@
+- App updates now come from the latest GitHub release (Settings → App Updates → Check for Updates); the Forge server is no longer involved.
+- Every build is signed with the same key, so a new release installs over the previous one without losing data.
 - Favourite images show their star right after the app starts, not only after something is toggled.
 - Turning "background service" on or off in Settings now really starts or stops the persistent notification.
 - Notification mode "Disabled" really hides progress; "Simple" is no longer shown as a different mode.
@@ -15,7 +17,6 @@
 - Removed the "Show Foreground Service Notification" switch, which did nothing.
 - The app shares only its update folder with the installer instead of the whole storage.
 - Removed about 1600 lines of unused code.
-
 - Fixed generations longer than the "Connection Timeout" setting (10 s by default) failing with a timeout and pausing the queue.
 - Fixed the checkpoint picked in the UI being ignored: jobs kept forcing the model that was active at app start.
 - The progress bar, ETA and live preview now update during generation (in the app and in the notification).

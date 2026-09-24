@@ -7,7 +7,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, stored in the Room `app_settings` table.
 - **Queue & Notifications:** Managed by `ForgeQueueManager.kt`. 
 - **Foreground Service:** `GenerationService.kt` runs the persistent foreground notification.
-- **Updates:** `ForgeUpdateManager.kt` checks for updates and verifies SHA-256 hashes before installation. 
+- **Updates:** `ForgeUpdateManager.kt` reads `releases/latest` of `xplod24/ForgeGen` through `GitHubApi` (public repo, no token), offers releases tagged `build-<versionCode>` newer than the installed build, downloads the `.apk` asset and checks the SHA-256 `digest` GitHub reports.
+- **Versioning:** `versionCode = 1000 + git commit count` (`app/build.gradle.kts`), `versionName = "build-<versionCode>"`. Same commit = same code locally and on CI; needs a full clone (CI uses `fetch-depth: 0`).
+- **Signing:** debug builds are signed with the committed `app/debug.keystore` (password `android`) so local and CI builds can update each other. Changing the key forces users to uninstall.
+- **Releasing:** `.github/workflows/release.yml` runs the unit tests, builds `app-debug.apk` and publishes release `build-<versionCode>` on every push to master (Markdown-only changes skipped), on a pushed `build-<versionCode>` tag, or by hand. Release notes = first block of `CHANGELOG.md` (up to the first empty line), so start a new block at the top after each release. `ci.yml` only tests PRs and must never publish a release (it would become "latest").
 - **Selected checkpoint:** single source of truth is `ForgeModelManager.selectedModel`. `ForgeNetworkManager` (UI lists, `changeCheckpoint`) writes to it and `ForgeQueueManager` reads it for `override_settings`. Never keep a second copy.
 - **Model/sampler/LoRA lists:** fetched only by `ForgeNetworkManager` (on connect and on URL change). `ForgeRepository` just rebuilds its Retrofit instance when the URL or timeout changes.
 - **Generation state:** `ForgeQueueManager` owns progress, ETA, live preview, status and the queue. The ping loop in `ForgeRepository` pushes server progress via `ForgeQueueManager.updateExternalProgress()`.

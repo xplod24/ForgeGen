@@ -72,7 +72,7 @@ class ForgeViewModel(
         updateManager =
             ForgeUpdateManager(
                 application = getApplication(),
-                getForgeApi = { ForgeRepository.forgeApi },
+                gitHubApi = GitHubApi.create(),
                 getConfig = { ForgeRepository.config.value },
                 saveConfig = { ForgeSettingsManager.saveConfig(it) },
                 showToast = { showToast(it) },

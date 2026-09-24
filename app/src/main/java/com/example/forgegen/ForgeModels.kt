@@ -116,14 +116,14 @@ data class ApiResource(
     val hash: String? = null,
 )
 
+/** An app update offered by the latest GitHub release. */
 data class UpdateManifest(
     val versionCode: Int,
     val versionName: String,
     val url: String,
-    val channel: String,
-    val sha256: String,
+    val sha256: String?, // null when GitHub did not report a digest for the asset
+    val size: Long = 0,
     val releaseDate: String? = null,
-    val isCritical: Boolean = false,
     val changelog: List<String>? = null,
 )
 
@@ -345,15 +345,19 @@ data class LoraMetadataDto(
     @SerializedName("sshs_model_hash") val sshsModelHash: String?,
 )
 
-data class UpdateManifestDto(
-    val versionCode: Int?,
-    val versionName: String?,
-    val url: String?,
-    val channel: String?,
-    val sha256: String?,
-    val releaseDate: String? = null,
-    val isCritical: Boolean = false,
-    val changelog: List<String>? = null,
+data class GitHubReleaseDto(
+    @SerializedName("tag_name") val tagName: String?,
+    val name: String?,
+    val body: String?,
+    @SerializedName("published_at") val publishedAt: String?,
+    val assets: List<GitHubAssetDto>? = null,
+)
+
+data class GitHubAssetDto(
+    val name: String?,
+    @SerializedName("browser_download_url") val downloadUrl: String?,
+    val size: Long = 0,
+    val digest: String? = null, // "sha256:<hex>"
 )
 
 data class GalleryFileListDto(
@@ -425,17 +429,35 @@ data class GlobalSettingInnerDto(
  * Pure conversions between the network layer (DTO) and the Domain.
  * ============================================================================ */
 
-fun UpdateManifestDto.toDomain() =
-    UpdateManifest(
-        versionCode = this.versionCode ?: 0,
-        versionName = this.versionName ?: "Unknown",
-        url = this.url ?: "",
-        channel = this.channel ?: "Stable",
-        sha256 = this.sha256 ?: "",
-        releaseDate = this.releaseDate,
-        isCritical = this.isCritical,
-        changelog = this.changelog,
+private val RELEASE_TAG = Regex("^build-(\\d+)$")
+
+/**
+ * Releases are tagged "build-<versionCode>" by the release workflow. Anything else (e.g. an old
+ * "release-main" tag) or a release without an APK is not an update and gives null.
+ */
+fun GitHubReleaseDto.toUpdateManifest(): UpdateManifest? {
+    val tagMatch = tagName?.let { RELEASE_TAG.find(it.trim()) } ?: return null
+    val versionCode = tagMatch.groupValues[1].toIntOrNull() ?: return null
+    val apk = assets.orEmpty().firstOrNull { it.name?.endsWith(".apk") == true && !it.downloadUrl.isNullOrEmpty() } ?: return null
+    return UpdateManifest(
+        versionCode = versionCode,
+        versionName = name?.takeIf { it.isNotBlank() } ?: tagMatch.value,
+        url = apk.downloadUrl!!,
+        sha256 = apk.digest?.takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:"),
+        size = apk.size,
+        releaseDate = publishedAt?.take(10),
+        changelog = parseReleaseNotes(body),
     )
+}
+
+/** The "- item" lines of a release description (the workflow copies them from CHANGELOG.md). */
+fun parseReleaseNotes(body: String?): List<String> =
+    body
+        .orEmpty()
+        .lines()
+        .map { it.trim() }
+        .filter { it.startsWith("- ") || it.startsWith("* ") }
+        .map { it.drop(2).trim() }
 
 fun GalleryItemDto.toDomain() =
     GalleryItem(
