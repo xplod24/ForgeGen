@@ -1,11 +1,11 @@
 
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -25,18 +25,18 @@ import okhttp3.OkHttpClient
 
  * VIEW MODEL (UI STATE HOLDER)
 
- * Drastycznie odchudzony komponent. Służy wyłącznie jako lekkie proxy
+ * Drastically slimmed down component. Serves exclusively as a lightweight proxy
 
- * przekazujące stan i akcje z Menedżerów oraz Repozytorium do warstwy UI.
+ * passing state and actions from Managers and Repository to the UI layer.
 
- * Poprawiono architekturę, wiążąc osierocone Menedżery.
+ * Improved architecture by linking orphaned Managers.
 
  * ============================================================================ */
 
 class ForgeViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
-    // --- GLOBALNY SYSTEM TOASTÓW ---
+    // --- GLOBAL TOAST SYSTEM ---
 
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 10)
 
@@ -54,39 +54,30 @@ class ForgeViewModel(
         _isAppBlurred.value = blurred
     }
 
-    // --- INICJALIZACJA MENEDŻERÓW ---
+    // --- INITIALIZATION OF MANAGERS ---
 
     val networkManager: ForgeNetworkManager
 
     val updateManager: ForgeUpdateManager
 
     init {
-
-        // 1. Core Repository (SSOT)
-
-        ForgeRepository.init(application)
-
-        // 2. Network Manager
-
+        // Create managers but do NOT start them yet.
         networkManager =
             ForgeNetworkManager(
-                application = application,
-                db = ForgeRepository.db,
+                application = getApplication(),
+                getDb = { ForgeRepository.db },
                 getConfig = { ForgeRepository.config.value },
                 updateConfig = { ForgeSettingsManager.saveConfig(it) },
                 showToast = { showToast(it) },
                 managerScope = viewModelScope,
             )
 
-        // 3. Gallery & Queue Managers
+        ForgeGalleryManager.init(getApplication(), { ForgeRepository.db }, networkManager)
+        ForgeQueueManager.init(getApplication())
 
-        ForgeGalleryManager.init(application, ForgeRepository.db, networkManager)
-        ForgeQueueManager.init(application)
-
-        // 4. Update Manager
         updateManager =
             ForgeUpdateManager(
-                application = application,
+                application = getApplication(),
                 getForgeApi = { ForgeRepository.forgeApi },
                 getConfig = { ForgeRepository.config.value },
                 saveConfig = { ForgeSettingsManager.saveConfig(it) },
@@ -94,20 +85,52 @@ class ForgeViewModel(
                 scope = viewModelScope,
             )
 
-        // Podłącz logikę subskrypcji zdarzeń toastów z repozytorium do viewModelu
+        // Connect toast event subscription logic from repository to viewmodel
         viewModelScope.launch {
-            ForgeRepository.snackbarMessage.collect {
+            ForgeSettingsManager.snackbarMessage.collect {
                 showToast(it)
             }
         }
     }
 
-    // --- DELEGACJA STANU Z FORGE REPOSITORY ---
+    suspend fun initializeApp() {
+        if (ForgeSettingsManager.isInitialized.value) return
+
+        // 1. Init Database & Settings
+        ForgeRepository.initializeDatabaseAndSettings(getApplication())
+
+        // Load stats time range from database
+        val json = ForgeRepository.db.appSettingDao().getSetting(STATS_TIME_RANGE_KEY)?.value
+        if (json != null) {
+            try {
+                _statsTimeRangeMinutes.value = json.toInt()
+            } catch (e: Exception) {}
+        }
+
+        // 2. Init API Clients
+        ForgeRepository.initializeApiClientAndData()
+
+        // 3. Start Managers
+        ForgeSettingsManager.updateInitStatus("Starting Managers...")
+        networkManager.start()
+        ForgeGalleryManager.start()
+        ForgeQueueManager.start()
+
+        // Check for updates (runs in background)
+        updateManager.checkForUpdates(manual = false)
+
+        // 4. Mark as Initialized
+        ForgeSettingsManager.setInitialized()
+        ForgeSettingsManager.updateInitStatus("Ready")
+    }
+
+    // --- DELEGATION OF STATE FROM FORGE REPOSITORY ---
     val config: StateFlow<AppConfig> = ForgeRepository.config
     val client: OkHttpClient get() = ForgeRepository.client
     val appState: StateFlow<AppState> = ForgeRepository.appState
     val promptHistory: StateFlow<List<PromptHistoryItem>> = ForgeRepository.promptHistory
     val wildcards: StateFlow<List<WildcardEntity>> = ForgePromptManager.wildcards
+    val pinnedImages: StateFlow<Set<String>> = ForgeSettingsManager.pinnedImages
 
     val activeLoras: StateFlow<List<ActiveLora>> = ForgeRepository.activeLoras
 
@@ -125,7 +148,7 @@ class ForgeViewModel(
     val ramUsage: StateFlow<String?> = kotlinx.coroutines.flow.MutableStateFlow(null)
     val positivePromptTokens: StateFlow<Int?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 
-    // --- DELEGACJA STANU Z FORGE NETWORK MANAGER ---
+    // --- DELEGATION OF STATE FROM FORGE NETWORK MANAGER ---
     val selectedModel: StateFlow<String> = networkManager.selectedModel
     val samplers: StateFlow<List<String>> = networkManager.samplers
     val schedulers: StateFlow<List<String>> = networkManager.schedulers
@@ -138,11 +161,15 @@ class ForgeViewModel(
     val civitaiSyncProgress: StateFlow<Pair<Int, Int>> = networkManager.civitaiSyncProgress
     val civitaiSyncLastResult: StateFlow<String?> = networkManager.civitaiSyncLastResult
 
-    // --- DELEGACJA STANU Z FORGE GALLERY MANAGER ---
+    // --- DELEGATION OF STATE FROM FORGE GALLERY MANAGER ---
     val galleryFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.galleryFiles
-    val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NOWE (zoptymalizowane filtrowanie)
+    val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NEW (optimized filtering)
     val currentGalleryPath: StateFlow<String> = ForgeGalleryManager.currentGalleryPath
     val isGalleryLoading: StateFlow<Boolean> = ForgeGalleryManager.isGalleryLoading
+    val isGallerySyncing: StateFlow<IndicatorState> = ForgeGalleryManager.isGallerySyncing
+    val gallerySyncCurrentFile: StateFlow<String> = ForgeGalleryManager.gallerySyncCurrentFile
+    val gallerySyncProgress: StateFlow<Pair<Int, Int>> = ForgeGalleryManager.gallerySyncProgress
+    val galleryIndexCount: StateFlow<Int> = ForgeGalleryManager.galleryIndexCount
     val galleryError: StateFlow<String?> = ForgeGalleryManager.galleryError
     val showGalleryMetadata: StateFlow<Boolean> = ForgeGalleryManager.showGalleryMetadata
     val currentImageMetadata: StateFlow<String?> = ForgeGalleryManager.currentImageMetadata
@@ -152,7 +179,7 @@ class ForgeViewModel(
     val favoritePaths: StateFlow<Set<String>> = ForgeGalleryManager.favoritePaths
     val isRestoringPrompt: StateFlow<IndicatorState> = ForgeGalleryManager.isRestoringPrompt
 
-    // --- DELEGACJA STANU Z FORGE QUEUE MANAGER ---
+    // --- DELEGATION OF STATE FROM FORGE QUEUE MANAGER ---
     val progress: StateFlow<Float> = ForgeQueueManager.progress
     val currentEta: StateFlow<Double> = ForgeQueueManager.currentEta
     val isGenerating: StateFlow<Boolean> = ForgeQueueManager.isGenerating
@@ -169,39 +196,43 @@ class ForgeViewModel(
     val currentBatchStartIndex: StateFlow<Int> = ForgeQueueManager.currentBatchStartIndex
     val currentBatchEndIndex: StateFlow<Int> = ForgeQueueManager.currentBatchEndIndex
 
-    // --- DELEGACJA STANU Z FORGE UPDATE MANAGER ---
+    // --- DELEGATION OF STATE FROM FORGE UPDATE MANAGER ---
     val updateManifest: StateFlow<UpdateManifest?> = updateManager.updateManifest
     val isUpdateDownloading: StateFlow<Boolean> = updateManager.isUpdateDownloading
     val updateDownloadProgress: StateFlow<Float> = updateManager.updateDownloadProgress
     val updateDownloadStats: StateFlow<Pair<Long, Long>> = updateManager.updateDownloadStats
 
-    // --- STAN DLA IMPORTOWANEGO OBRAZU (Share Intent) ---
+    // --- STATE FOR IMPORTED IMAGE (Share Intent) ---
     private val _importedImageMetadata = MutableStateFlow<String?>(null)
     val importedImageMetadata: StateFlow<String?> = _importedImageMetadata.asStateFlow()
 
-    // --- STAN DLA NOWYCH FUNKCJI (Kiosk Mode, Server Stats Range) ---
+    // --- STATE FOR NEW FEATURES (Kiosk Mode, Server Stats Range) ---
     private val _isKioskMode = MutableStateFlow(false)
     val isKioskMode: StateFlow<Boolean> = _isKioskMode.asStateFlow()
 
-    private val STATS_TIME_RANGE_KEY = intPreferencesKey("stats_time_range")
-    val statsTimeRangeMinutes: StateFlow<Int> =
-        getApplication<Application>()
-            .dataStore.data
-            .map { it[STATS_TIME_RANGE_KEY] ?: 15 }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 15)
+    private val STATS_TIME_RANGE_KEY = "stats_time_range"
+    private val _statsTimeRangeMinutes = MutableStateFlow(15)
+    val statsTimeRangeMinutes: StateFlow<Int> = _statsTimeRangeMinutes.asStateFlow()
 
     fun setStatsTimeRange(minutes: Int) {
-        viewModelScope.launch {
-            getApplication<Application>().dataStore.edit { it[STATS_TIME_RANGE_KEY] = minutes }
+        _statsTimeRangeMinutes.value = minutes
+        viewModelScope.launch(Dispatchers.IO) {
+            ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(STATS_TIME_RANGE_KEY, minutes.toString()))
         }
     }
 
     // Gallery Filters Delegation
-    val favoritesSearchQuery: StateFlow<String> = ForgeGalleryManager.favoritesSearchQuery
-    val favoritesSortOrder: StateFlow<String> = ForgeGalleryManager.favoritesSortOrder
-    val favoritesFilterModels: StateFlow<Set<String>> = ForgeGalleryManager.favoritesFilterModels
+    val galleryFilters: StateFlow<ForgeGalleryManager.GalleryFilters> = ForgeGalleryManager.galleryFilters
+    val availableModels: StateFlow<List<String>> = ForgeGalleryManager.availableModels
+    val galleryAvailableLoras: StateFlow<List<String>> = ForgeGalleryManager.availableLoras
 
-    // --- DELEGACJA AKCJI DO REPOZYTORIUM ---
+    fun applyGalleryFilters(filters: ForgeGalleryManager.GalleryFilters) = ForgeGalleryManager.applyFilters(filters)
+    fun clearGalleryFilters() = ForgeGalleryManager.clearFilters()
+    fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
+
+    fun togglePinnedImage(path: String) = ForgeSettingsManager.togglePinnedImage(path)
+
+    // --- DELEGATION OF ACTIONS TO REPOSITORY ---
     suspend fun getTagsForLora(hash: String) = ForgeModelManager.getTagsForLora(hash)
 
     fun saveWildcard(
@@ -241,10 +272,22 @@ class ForgeViewModel(
     fun addServerProfile(
         name: String,
         url: String,
-    ) = ForgeRepository.addServerProfile(name, url)
+    ) = ForgeSettingsManager.addServerProfile(name, url)
 
     fun removeServerProfile(name: String) = ForgeSettingsManager.removeServerProfile(name)
 
+    fun wipeGalleryIndex() {
+        ForgeGalleryManager.clearDatabase()
+    }
+    
+    fun cancelManualGallerySync() {
+        ForgeGalleryManager.cancelManualGallerySync()
+    }
+    
+    fun putSyncToBackground() {
+        ForgeGalleryManager.putSyncToBackground()
+    }
+    
     fun wipeAllData() {
         viewModelScope.launch(Dispatchers.IO) {
             ForgeSettingsManager.resetToDefaults()
@@ -266,7 +309,7 @@ class ForgeViewModel(
 
     fun wipeWildcards() = ForgePromptManager.deleteAllWildcards()
 
-    // --- DELEGACJA AKCJI DO MENEDŻERA KOLEJKI ---
+    // --- DELEGATION OF ACTIONS TO QUEUE MANAGER ---
     fun resumeQueue() = ForgeQueueManager.resumeQueue()
 
     fun interruptGeneration() = ForgeQueueManager.interruptGeneration()
@@ -300,7 +343,7 @@ class ForgeViewModel(
         onIntentReady: (Intent) -> Unit,
     ) = ForgeQueueManager.shareSessionImage(localFilePath, onIntentReady)
 
-    // --- DELEGACJA AKCJI DO MENEDŻERA AKTUALIZACJI ---
+    // --- DELEGATION OF ACTIONS TO UPDATE MANAGER ---
     fun checkForUpdates(manual: Boolean = false) = updateManager.checkForUpdates(manual)
 
     fun downloadUpdate() = updateManager.downloadUpdate()
@@ -326,7 +369,7 @@ class ForgeViewModel(
         }
     }
 
-    // --- DELEGACJA AKCJI DO MENEDŻERÓW (Missing ones) ---
+    // --- DELEGATION OF ACTIONS TO MANAGERS (Missing ones) ---
     fun loadMetadataForImage(item: GalleryItem?) = ForgeGalleryManager.loadMetadataForImage(item)
 
     fun checkIfFavorite(path: String) = ForgeGalleryManager.checkIfFavorite(path)
@@ -368,8 +411,6 @@ class ForgeViewModel(
     ) = ForgeRepository.updateLoraStrength(name, strength)
 
     fun recoverLastSeed() = ForgeGalleryManager.recoverLastSeed()
-
-    fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
 
     fun recoverLastPrompt() = ForgeGalleryManager.recoverLastPrompt()
 

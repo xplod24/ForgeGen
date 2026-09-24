@@ -1,5 +1,6 @@
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.*
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -189,7 +190,7 @@ fun HybridPromptEditor(
             visualTransformation = PromptVisualTransformation(),
         )
 
-        // Rozbijamy tagi szanując zagnieżdżenia za pomocą customowego Tokenizera
+        // Split tags respecting nesting using a custom Tokenizer
         val activeTags = remember(prompt) { parseTags(prompt) }
 
         if (activeTags.isNotEmpty() || disabledTags.isNotEmpty()) {
@@ -227,12 +228,12 @@ fun HybridPromptEditor(
                     var dragOffsetX by remember { mutableFloatStateOf(0f) }
                     var dragOffsetY by remember { mutableFloatStateOf(0f) }
 
-                    // Tymczasowa lista mutowalna podczas przeciągania
+                    // Temporary mutable list during dragging
                     var displayTags by remember(activeTags) { mutableStateOf(activeTags.toList()) }
                     var editingTagWeight by remember { mutableStateOf<String?>(null) }
 
                     val dashColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                    // POPRAWKA BŁĘDU (Zdefiniowany jawny typ oraz prawidłowa metoda dashPathEffect)
+                    // BUG FIX (Explicit type defined and correct dashPathEffect method)
                     val dashEffect: PathEffect = remember { PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f) }
 
                     FlowRow(
@@ -243,7 +244,7 @@ fun HybridPromptEditor(
                         displayTags.forEachIndexed { index, tag ->
                             val isGhost = index == draggingIndex
 
-                            // Modifikator offsetu działa tylko dla warstwy unoszącej się
+                            // Offset modifier only works for the floating layer
                             val flyingModifier =
                                 if (isGhost) {
                                     Modifier
@@ -267,7 +268,7 @@ fun HybridPromptEditor(
                                 }
 
                             Box {
-                                // GHOST - Puste pole w miejscu w którym wyląduje tag (renderowane tylko w pierwotnym slocie)
+                                // GHOST - Empty space where the tag will land (rendered only in the original slot)
                                 if (isGhost) {
                                     Box(
                                         modifier =
@@ -283,7 +284,7 @@ fun HybridPromptEditor(
                                     )
                                 }
 
-                                // CHIP - Normalny lub "latający" chip
+                                // CHIP - Normal or "flying" chip
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
                                     color = MaterialTheme.colorScheme.primaryContainer,
@@ -644,10 +645,11 @@ fun ForgeTopAppBar(
             }
         },
         actions = {
-            if (!isActivelyGenerating) {
-                IconButton(onClick = onUnloadClick) {
-                    Icon(Icons.Default.Memory, contentDescription = "Unload Models")
-                }
+            IconButton(
+                onClick = onUnloadClick,
+                enabled = !isActivelyGenerating
+            ) {
+                Icon(Icons.Default.Memory, contentDescription = "Unload Models")
             }
 
             IconButton(onClick = onGalleryClick) {
@@ -704,7 +706,6 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
 @Composable
 fun PreviewSection(
     isGenerating: Boolean,
-    previewMode: String,
     livePreviewBase64: String?,
     isShowingGridPreview: Boolean,
     sessionImages: List<String>,
@@ -732,7 +733,7 @@ fun PreviewSection(
         val blurModifier = if (isBlurred) Modifier.blur(25.dp) else Modifier
 
         Box(modifier = Modifier.fillMaxSize().then(blurModifier)) {
-            if (isGenerating && previewMode == "None") {
+            if (isGenerating && livePreviewBase64.isNullOrEmpty()) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -887,72 +888,99 @@ fun PromptsSection(
 
     val context = LocalContext.current
 
-    SectionHeader("Prompts")
-
-    PromptHistoryCarousel(
-        history = promptHistory,
-        onSelect = { item ->
-            viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
-            disabledPosTags = emptySet()
-            disabledNegTags = emptySet()
-        },
-    )
-
-    HybridPromptEditor(
-        prompt = state.positivePrompt,
-        onPromptChange = {
-            viewModel.updateState { s -> s.copy(positivePrompt = it) }
-        },
-        disabledTags = disabledPosTags,
-        onDisabledTagsChange = { disabledPosTags = it },
-        label = "Positive Prompt",
-    )
+    val expanded = config.mainPromptsExpanded
 
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().clickable {
+            viewModel.saveConfig(config.copy(mainPromptsExpanded = !expanded))
+        }.padding(vertical = 12.dp)
     ) {
-        Text("${countTokens(state.positivePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        Row {
-            TextButton(onClick = {
-                val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                clipboardManager.setPrimaryClip(ClipData.newPlainText("Prompt", state.positivePrompt))
-                viewModel.showToast("Prompt Copied")
-            }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-                Text("Copy Prompt", fontSize = 10.sp)
-            }
-            TextButton(onClick = {
-                viewModel.updateState { s -> s.copy(positivePrompt = "") }
-                disabledPosTags = emptySet()
-            }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-                Text("Clear", fontSize = 10.sp)
-            }
-        }
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            "Prompts",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
     }
 
-    Spacer(modifier = Modifier.height(4.dp))
+    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+        Column {
+            PromptHistoryCarousel(
+                history = promptHistory,
+                onSelect = { item ->
+                    viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
+                    disabledPosTags = emptySet()
+                    disabledNegTags = emptySet()
+                },
+            )
 
-    HybridPromptEditor(
-        prompt = state.negativePrompt,
-        onPromptChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
-        disabledTags = disabledNegTags,
-        onDisabledTagsChange = { disabledNegTags = it },
-        label = "Negative Prompt",
-    )
+            HybridPromptEditor(
+                prompt = state.positivePrompt,
+                onPromptChange = {
+                    viewModel.updateState { s -> s.copy(positivePrompt = it) }
+                },
+                disabledTags = disabledPosTags,
+                onDisabledTagsChange = { disabledPosTags = it },
+                label = "Positive Prompt",
+            )
 
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("${countTokens(state.negativePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-        TextButton(onClick = {
-            viewModel.resetToDefaults()
-            disabledPosTags = emptySet()
-            disabledNegTags = emptySet()
-        }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-            Text("Reset to Defaults", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${countTokens(state.positivePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                Row {
+                    TextButton(onClick = {
+                        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboardManager.setPrimaryClip(ClipData.newPlainText("Prompt", state.positivePrompt))
+                        viewModel.showToast("Prompt Copied")
+                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
+                        Text("Copy Prompt", fontSize = 10.sp)
+                    }
+                    TextButton(onClick = {
+                        viewModel.updateState { s -> s.copy(positivePrompt = "") }
+                        disabledPosTags = emptySet()
+                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
+                        Text("Clear", fontSize = 10.sp)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            HybridPromptEditor(
+                prompt = state.negativePrompt,
+                onPromptChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
+                disabledTags = disabledNegTags,
+                onDisabledTagsChange = { disabledNegTags = it },
+                label = "Negative Prompt",
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("${countTokens(state.negativePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
+                TextButton(onClick = {
+                    viewModel.resetToDefaults()
+                    disabledPosTags = emptySet()
+                    disabledNegTags = emptySet()
+                }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
+                    Text("Reset to Defaults", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
+                }
+            }
         }
     }
 }
@@ -989,10 +1017,35 @@ fun GenerationSettingsSection(
     samplers: List<String>,
     schedulers: List<String>,
     upscalers: List<String>,
+    config: AppConfig,
 ) {
-    SectionHeader("Settings")
+    val expanded = config.mainSettingsExpanded
 
-    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().clickable {
+            viewModel.saveConfig(config.copy(mainSettingsExpanded = !expanded))
+        }.padding(vertical = 12.dp)
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            "Settings",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
+    }
+
+    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
         var modelExpanded by remember { mutableStateOf(false) }
         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
             OutlinedButton(
@@ -1346,6 +1399,7 @@ fun GenerationSettingsSection(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -1353,12 +1407,37 @@ fun LorasSection(
     viewModel: ForgeViewModel,
     availableLoras: List<ApiResource>,
     activeLoras: List<ActiveLora>,
+    config: AppConfig,
     onPendingLora: (ApiResource) -> Unit,
     onOpenTagsPopup: (String, String) -> Unit,
 ) {
-    SectionHeader("LoRAs")
+    val expanded = config.mainLorasExpanded
 
-    Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().clickable {
+            viewModel.saveConfig(config.copy(mainLorasExpanded = !expanded))
+        }.padding(vertical = 12.dp)
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            "LoRAs",
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Icon(
+            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
+    }
+
+    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
         var loraExpanded by remember { mutableStateOf(false) }
         Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
             OutlinedButton(
@@ -1494,9 +1573,10 @@ fun LorasSection(
             }
         }
     }
+    }
 }
 
-// Kompaktowy panel dedykowany dla Bottom Sheet
+// Compact panel dedicated for Bottom Sheet
 @Composable
 fun BottomControlsSection(
     viewModel: ForgeViewModel,
@@ -1513,10 +1593,10 @@ fun BottomControlsSection(
         modifier =
             modifier
                 .fillMaxWidth()
-                .navigationBarsPadding() // Zabezpieczenie przed nachodzeniem na systemowe przyciski (np. wstecz, home)
+                .navigationBarsPadding() // Protection against overlapping system buttons (e.g. back, home)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        // Górny rząd: Checkboxy do zarządzania miejscem zapisu
+        // Top row: Checkboxes for managing save location
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1592,7 +1672,7 @@ fun BottomControlsSection(
             }
         }
 
-        // Dolny rząd: Akcje główne (Queue, Interrupt, Add)
+        // Bottom row: Main actions (Queue, Interrupt, Add)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1667,7 +1747,7 @@ fun BottomControlsSection(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Dolny rząd dodatkowych akcji
+        // Bottom row of additional actions
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1832,7 +1912,7 @@ fun FullscreenImageViewer(
 
     LaunchedEffect(pagerState.currentPage) {
         if (currentFile.isNotEmpty()) {
-            // Czyszczenie starych metadanych, ponieważ funkcja dla plików lokalnych została usunięta
+            // Clearing old metadata because the function for local files was removed
             viewModel.loadMetadataForImage(null)
         }
     }

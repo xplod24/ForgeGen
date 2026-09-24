@@ -1,15 +1,10 @@
-@file:Suppress("unused", "MemberVisibilityCanBePrivate")
-
 package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
 import android.util.Log
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.gson.Gson
+import kotlinx.coroutines.runBlocking
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,7 +24,7 @@ import java.util.concurrent.TimeUnit
  * SETTINGS MANAGER (SINGLETON)
  * Owns all settings/configuration state: AppConfig, AppState, prompt history,
  * gallery metadata toggle, snackbar event bus, OkHttpClient, Gson instance,
- * DataStore preference keys, preset management, and server profiles.
+ * Preference keys, preset management, and server profiles.
  * ============================================================================ */
 
 @SuppressLint("StaticFieldLeak")
@@ -43,13 +38,29 @@ object ForgeSettingsManager {
 
     val settingsScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // --- DataStore preference keys ---
-    val CONFIG_KEY = stringPreferencesKey("config")
-    val STATE_KEY = stringPreferencesKey("last_state")
-    val HISTORY_KEY = stringPreferencesKey("prompt_history")
-    val SHOW_META_KEY = booleanPreferencesKey("show_gallery_meta")
+    // --- Preference keys ---
+    const val CONFIG_KEY = "config"
+    const val STATE_KEY = "last_state"
+    const val HISTORY_KEY = "prompt_history"
+    const val SHOW_META_KEY = "show_gallery_meta"
+    const val PINNED_IMAGES_KEY = "pinned_images"
 
-    // --- EVENT BUS DLA SNACKBARÓW ---
+    // --- INITIALIZATION STATE ---
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
+
+    private val _initStatus = MutableStateFlow("Initializing...")
+    val initStatus: StateFlow<String> = _initStatus.asStateFlow()
+
+    fun updateInitStatus(status: String) {
+        _initStatus.value = status
+    }
+
+    fun setInitialized() {
+        _isInitialized.value = true
+    }
+
+    // --- EVENT BUS FOR SNACKBARS ---
     private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 10)
     val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
 
@@ -81,6 +92,27 @@ object ForgeSettingsManager {
     private val _showGalleryMetadata = MutableStateFlow(false)
     val showGalleryMetadata: StateFlow<Boolean> = _showGalleryMetadata.asStateFlow()
 
+    // --- Pinned Images ---
+    private val _pinnedImages = MutableStateFlow<Set<String>>(emptySet())
+    val pinnedImages: StateFlow<Set<String>> = _pinnedImages.asStateFlow()
+
+    fun togglePinnedImage(path: String) {
+        val current = _pinnedImages.value.toMutableSet()
+        if (current.contains(path)) {
+            current.remove(path)
+        } else {
+            current.add(path)
+            // Limit to 500 images max. Remove oldest (first in iteration) if over limit.
+            while (current.size > 500) {
+                current.remove(current.first())
+            }
+        }
+        _pinnedImages.value = current
+        settingsScope.launch(Dispatchers.IO) {
+            db.appSettingDao().putSetting(AppSettingEntity(PINNED_IMAGES_KEY, gson.toJson(current)))
+        }
+    }
+
     /**
      * Callback invoked when the API URL changes, so ForgeRepository can rebuild the ForgeApi.
      * Set by ForgeRepository during its init().
@@ -95,23 +127,37 @@ object ForgeSettingsManager {
 
     /**
      * Initialize ForgeSettingsManager. Must be called before any other method.
-     * Returns a Triple of (config, appState, promptHistory) loaded from DataStore.
+     * Returns a Triple of (config, appState, promptHistory) loaded from Room Database.
      */
-    suspend fun init(app: Application): Triple<AppConfig, AppState, List<PromptHistoryItem>> {
-        application = app
+    private lateinit var db: ForgeDatabase
 
-        val prefs = application.dataStore.data.first()
-        val loadedConfig = loadConfig(prefs)
-        val loadedState = loadState(prefs, loadedConfig)
-        val loadedHistory = loadPromptHistory(prefs)
-        val loadedShowMeta = prefs[SHOW_META_KEY] ?: false
+    suspend fun init(app: Application, database: ForgeDatabase): Triple<AppConfig, AppState, List<PromptHistoryItem>> {
+        application = app
+        db = database
+
+        val dao = db.appSettingDao()
+        val loadedConfig = loadConfig(dao.getSetting("config")?.value)
+        val loadedState = loadState(dao.getSetting("last_state")?.value, loadedConfig)
+        val loadedHistory = loadPromptHistory(dao.getSetting("prompt_history")?.value)
+        val loadedShowMeta = dao.getSetting("show_gallery_meta")?.value?.toBoolean() ?: false
+        
+        val pinnedJson = dao.getSetting("pinned_images")?.value
+        val loadedPinnedImages = if (!pinnedJson.isNullOrEmpty()) {
+            try {
+                val type = object : TypeToken<Set<String>>() {}.type
+                gson.fromJson<Set<String>>(pinnedJson, type)
+            } catch (e: Exception) { emptySet() }
+        } else {
+            emptySet()
+        }
 
         _config.value = loadedConfig
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
         _showGalleryMetadata.value = loadedShowMeta
+        _pinnedImages.value = loadedPinnedImages
 
-        client = createClient(loadedConfig.connectionTimeout)
+        client = createClient(loadedConfig.timeout)
 
         return Triple(loadedConfig, loadedState, loadedHistory)
     }
@@ -121,7 +167,7 @@ object ForgeSettingsManager {
         OkHttpClient
             .Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
@@ -133,7 +179,16 @@ object ForgeSettingsManager {
                 }
 
                 try {
-                    chain.proceed(requestBuilder.build())
+                    val response = chain.proceed(requestBuilder.build())
+                    if (!response.isSuccessful) {
+                        try {
+                            val bodyStr = response.peekBody(Long.MAX_VALUE).string()
+                            Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url}\nBody: $bodyStr")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url} (Could not read body)")
+                        }
+                    }
+                    response
                 } catch (e: Exception) {
                     Log.e(TAG, "API CALL FAILED: ${e.message}", e)
                     throw e
@@ -141,8 +196,7 @@ object ForgeSettingsManager {
             }.build()
 
     // --- Load/Save Config ---
-    fun loadConfig(prefs: Preferences): AppConfig {
-        val json = prefs[CONFIG_KEY]
+    fun loadConfig(json: String?): AppConfig {
         val parsed =
             if (json != null) {
                 try {
@@ -162,15 +216,13 @@ object ForgeSettingsManager {
                 false
             }
 
-        val finalPreviewMode = parsed?.previewMode ?: if (oldLivePreviewState) "Normal" else "Finished"
 
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             serverBasePath = parsed?.serverBasePath ?: "",
             galleryPath = parsed?.galleryPath ?: "",
             isDarkMode = parsed?.isDarkMode ?: false,
-            connectionTimeout = parsed?.connectionTimeout ?: 10,
-            checkpointTimeout = parsed?.checkpointTimeout ?: 45,
+            timeout = parsed?.timeout ?: 10,
             receiveGenerationNotification = parsed?.receiveGenerationNotification ?: true,
             notifQueueStatus = parsed?.notifQueueStatus ?: false,
             notificationMode = parsed?.notificationMode ?: "Simple",
@@ -179,7 +231,7 @@ object ForgeSettingsManager {
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
             bottomSheetExpandedByDefault = parsed?.bottomSheetExpandedByDefault ?: false,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
-            previewMode = finalPreviewMode,
+
             useNativeSecurity = parsed?.useNativeSecurity ?: false,
             useBiometricLock = parsed?.useBiometricLock ?: false,
             overnightMode = parsed?.overnightMode ?: false,
@@ -188,6 +240,10 @@ object ForgeSettingsManager {
             enableLogging = parsed?.enableLogging ?: false,
             defaultState = parsed?.defaultState ?: AppState(),
             presets = parsed?.presets ?: emptyList(),
+            autoSyncModels = parsed?.autoSyncModels ?: false,
+            mainPromptsExpanded = parsed?.mainPromptsExpanded ?: true,
+            mainSettingsExpanded = parsed?.mainSettingsExpanded ?: false,
+            mainLorasExpanded = parsed?.mainLorasExpanded ?: false,
         )
     }
 
@@ -204,13 +260,14 @@ object ForgeSettingsManager {
         _config.value = updatedConfig
 
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[CONFIG_KEY] = gson.toJson(updatedConfig) }
+            db.appSettingDao().putSetting(AppSettingEntity(CONFIG_KEY, gson.toJson(updatedConfig)))
         }
 
         client =
             client
                 .newBuilder()
-                .connectTimeout(updatedConfig.connectionTimeout.toLong(), TimeUnit.SECONDS)
+                .connectTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
+                .readTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
                 .build()
 
         if (updatedConfig.enablePersistentService != oldPersistent) {
@@ -219,15 +276,14 @@ object ForgeSettingsManager {
 
         if (cleanUrl != oldUrl) {
             onApiUrlChanged?.invoke(cleanUrl)
+        } else if (ForgeRepository.isConnected.value == false) {
+            // Reconnect if offline and user clicked save
+            onApiUrlChanged?.invoke(cleanUrl)
         }
     }
 
     // --- Load/Save State ---
-    fun loadState(
-        prefs: Preferences,
-        currentConfig: AppConfig? = null,
-    ): AppState {
-        val json = prefs[STATE_KEY]
+    fun loadState(json: String?, currentConfig: AppConfig? = null): AppState {
         val parsed =
             if (json != null) {
                 try {
@@ -247,7 +303,7 @@ object ForgeSettingsManager {
         val newState = update(_appState.value)
         _appState.value = newState
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[STATE_KEY] = gson.toJson(newState) }
+            db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(newState)))
         }
     }
 
@@ -262,14 +318,13 @@ object ForgeSettingsManager {
     fun resetToDefaults() {
         _appState.value = _config.value.defaultState.copy()
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
+            db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
         }
         showSnackbar("Reset to Defaults")
     }
 
     // --- Prompt history ---
-    fun loadPromptHistory(prefs: Preferences): List<PromptHistoryItem> {
-        val json = prefs[HISTORY_KEY]
+    fun loadPromptHistory(json: String?): List<PromptHistoryItem> {
         if (json.isNullOrEmpty()) return emptyList()
         return try {
             val type = object : TypeToken<List<PromptHistoryItem>>() {}.type
@@ -297,14 +352,14 @@ object ForgeSettingsManager {
         _promptHistory.value = trimmedList
 
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[HISTORY_KEY] = gson.toJson(trimmedList) }
+            db.appSettingDao().putSetting(AppSettingEntity(HISTORY_KEY, gson.toJson(trimmedList)))
         }
     }
 
     fun clearPromptHistory() {
         _promptHistory.value = emptyList()
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it.remove(HISTORY_KEY) }
+            db.appSettingDao().removeSetting(HISTORY_KEY)
         }
     }
 
@@ -324,7 +379,7 @@ object ForgeSettingsManager {
         if (preset != null) {
             _appState.value = preset.state.copy()
             settingsScope.launch(Dispatchers.IO) {
-                application.dataStore.edit { it[STATE_KEY] = gson.toJson(_appState.value) }
+                db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
             }
             showSnackbar("Loaded: $name")
         }
@@ -367,7 +422,7 @@ object ForgeSettingsManager {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
         settingsScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[SHOW_META_KEY] = newVal }
+            db.appSettingDao().putSetting(AppSettingEntity(SHOW_META_KEY, newVal.toString()))
         }
     }
 

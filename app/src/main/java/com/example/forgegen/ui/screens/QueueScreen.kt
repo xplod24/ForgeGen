@@ -1,4 +1,7 @@
-package com.example.forgegen
+package com.example.forgegen.ui.screens
+import com.example.forgegen.*
+import com.example.forgegen.ui.components.*
+import com.example.forgegen.*
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -14,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -30,7 +34,7 @@ import coil.compose.AsyncImage
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING & FRAMES)
- * Tworzy animowany gradient naśladujący ładowanie oraz ozdobne ramki
+ * Creates an animated gradient imitating loading and decorative frames
  * ============================================================================ */
 
 /* ============================================================================

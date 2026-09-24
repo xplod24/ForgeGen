@@ -10,6 +10,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -27,9 +29,12 @@ import kotlin.math.max
 import kotlin.math.sin
 
 @Composable
-fun WelcomeScreen(navController: NavHostController) {
+fun WelcomeScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val context = LocalContext.current
     val buildTextValue = remember { AppVersion.currentVersion }
+
+    val initStatus by ForgeSettingsManager.initStatus.collectAsState()
+    val isInitialized by ForgeSettingsManager.isInitialized.collectAsState()
 
     val animationProgress = remember { Animatable(0f) }
     val textMeasurer = rememberTextMeasurer()
@@ -37,14 +42,24 @@ fun WelcomeScreen(navController: NavHostController) {
     val onBackgroundColor = MaterialTheme.colorScheme.onBackground
 
     LaunchedEffect(Unit) {
+        // Kick off the initialization pipeline
+        viewModel.initializeApp()
+        
         // Smooth animation from 0.0 to 1.0 extended to 3 seconds to fit the heartbeat effect
         animationProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
         )
-        // Navigate clearing the stack so the user cannot navigate back to the Welcome Screen
-        navController.navigate("main") {
-            popUpTo("welcome") { inclusive = true }
+    }
+
+    LaunchedEffect(isInitialized, animationProgress.value) {
+        // Wait for initialization to actually finish AND animation to complete
+        if (isInitialized && animationProgress.value == 1f) {
+            if (navController.currentDestination?.route == "welcome") {
+                navController.navigate("main") {
+                    popUpTo("welcome") { inclusive = true }
+                }
+            }
         }
     }
 
@@ -173,6 +188,24 @@ fun WelcomeScreen(navController: NavHostController) {
                     Offset(
                         x = center.x - (buildLayoutResult.size.width / 2f),
                         y = startY + titleLayoutResult.size.height + 4f,
+                    ),
+            )
+
+            // Draw initialization status text
+            val statusStyle =
+                TextStyle(
+                    color = primaryColor.copy(alpha = textProgress * 0.7f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            val statusLayoutResult = textMeasurer.measure(text = initStatus, style = statusStyle)
+
+            drawText(
+                textLayoutResult = statusLayoutResult,
+                topLeft =
+                    Offset(
+                        x = center.x - (statusLayoutResult.size.width / 2f),
+                        y = startY + titleLayoutResult.size.height + buildLayoutResult.size.height + 12f,
                     ),
             )
         }

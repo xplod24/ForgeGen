@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION")
-
 package com.example.forgegen
 
 import android.annotation.SuppressLint

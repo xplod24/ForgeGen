@@ -1,7 +1,6 @@
-@file:Suppress("unused", "MemberVisibilityCanBePrivate", "UNNECESSARY_SAFE_CALL")
-
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.*
 import android.annotation.SuppressLint
 import android.app.Application
 import android.app.NotificationManager
@@ -14,11 +13,9 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,14 +55,12 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /* ============================================================================
- * JETPACK DATASTORE (ASYNC PREFERENCES)
+ * ASYNC PREFERENCES (VIA ROOM DAO)
  * ============================================================================ */
-val Context.dataStore by preferencesDataStore(name = "forge_settings")
-
 /* ============================================================================
  * IDIOMATIC COROUTINES EXTENSIONS
- * Rozszerzenie pozostawione wyłącznie dla pobierania surowych bajtów obrazów
- * z pominięciem Retrofita.
+ * Extension left exclusively for downloading raw image bytes
+ * bypassing Retrofit.
  * ============================================================================ */
 
 suspend fun Call.awaitResponse(): Response =
@@ -119,7 +114,7 @@ object ForgeRepository {
     // RETROFIT APIS
     var forgeApi: ForgeApi? = null
 
-    // Klient z Interceptorem specjalnie pod Civitai (zabezpiecza Logcat przed śmieciami z A1111)
+    // Client with Interceptor specifically for Civitai (protects Logcat from A1111 garbage)
     private val civitaiApi: CivitaiApi by lazy {
         val loggingInterceptor =
             HttpLoggingInterceptor().apply {
@@ -129,8 +124,8 @@ object ForgeRepository {
             OkHttpClient
                 .Builder()
                 .addInterceptor(loggingInterceptor)
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
+                .connectTimeout(config.value.timeout.toLong(), TimeUnit.SECONDS)
+                .readTimeout(config.value.timeout.toLong(), TimeUnit.SECONDS)
                 .build()
 
         Retrofit
@@ -142,24 +137,30 @@ object ForgeRepository {
             .create(CivitaiApi::class.java)
     }
 
-    private val QUEUE_KEY = stringPreferencesKey("saved_queue")
-    private val STATS_KEY = stringPreferencesKey("saved_server_stats")
+
+
+    private val QUEUE_KEY = "saved_queue"
+    private val STATS_KEY = "saved_server_stats"
 
     val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
-    val snackbarMessage: kotlinx.coroutines.flow.SharedFlow<String> get() = ForgeSettingsManager.snackbarMessage
 
     fun showSnackbar(message: String) = ForgeSettingsManager.showSnackbar(message)
 
     fun showToast(message: String) = ForgeSettingsManager.showToast(message)
 
+    // --- DELEGATED SETTINGS / STATE FROM ForgeSettingsManager ---
     val config: StateFlow<AppConfig> get() = ForgeSettingsManager.config
-    val client: okhttp3.OkHttpClient get() = ForgeSettingsManager.client
     val appState: StateFlow<AppState> get() = ForgeSettingsManager.appState
-
     val promptHistory: StateFlow<List<PromptHistoryItem>> get() = ForgeSettingsManager.promptHistory
+    val showGalleryMetadata: StateFlow<Boolean> get() = ForgeSettingsManager.showGalleryMetadata
+    val pinnedImages: StateFlow<Set<String>> get() = ForgeSettingsManager.pinnedImages
 
-    @Suppress("RedundantCollectionOperation")
+    val isInitialized: StateFlow<Boolean> get() = ForgeSettingsManager.isInitialized
+    val initStatus: StateFlow<String> get() = ForgeSettingsManager.initStatus
+
+    val client: OkHttpClient get() = ForgeSettingsManager.client
+    val snackbarMessage: SharedFlow<String> get() = ForgeSettingsManager.snackbarMessage
+
     val activeLoras: StateFlow<List<ActiveLora>> =
         ForgeSettingsManager.appState
             .map { state ->
@@ -252,7 +253,7 @@ object ForgeRepository {
     private val _tagSuggestions = MutableStateFlow<List<String>>(emptyList())
     val tagSuggestions: StateFlow<List<String>> = _tagSuggestions.asStateFlow()
 
-    // Używamy nowego, graficznego enuma dla animacji z MainComponents.kt
+    // We use a new graphical enum for animations from MainComponents.kt
     private val _isRestoringPrompt = MutableStateFlow(IndicatorState.IDLE)
     val isRestoringPrompt: StateFlow<IndicatorState> = _isRestoringPrompt.asStateFlow()
 
@@ -275,7 +276,6 @@ object ForgeRepository {
     private val _galleryError = MutableStateFlow<String?>(null)
     val galleryError: StateFlow<String?> = _galleryError.asStateFlow()
 
-    val showGalleryMetadata: StateFlow<Boolean> get() = ForgeSettingsManager.showGalleryMetadata
 
     private val _currentImageMetadata = MutableStateFlow<String?>(null)
     val currentImageMetadata: StateFlow<String?> = _currentImageMetadata.asStateFlow()
@@ -304,8 +304,6 @@ object ForgeRepository {
     val civitaiSyncProgress: StateFlow<Pair<Int, Int>> get() = ForgeModelManager.civitaiSyncProgress
     val civitaiSyncLastResult: StateFlow<String?> get() = ForgeModelManager.civitaiSyncLastResult
 
-    private var isInitialized = false
-
     private fun rebuildForgeApi(url: String) {
         var cleanUrl = url.trimEnd('/')
         if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
@@ -327,32 +325,47 @@ object ForgeRepository {
         }
     }
 
-    fun init(app: Application) {
-        if (isInitialized) return
+    val MIGRATION_9_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
+        }
+    }
+
+    suspend fun initializeDatabaseAndSettings(app: Application) {
+        if (isInitialized.value) return
         application = app
 
+        ForgeSettingsManager.updateInitStatus("Initializing Database...")
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
+                .addMigrations(MIGRATION_9_10)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 
-        repositoryScope.launch(Dispatchers.IO) {
-            ForgeSettingsManager.init(app)
+        ForgeSettingsManager.updateInitStatus("Loading Settings...")
+        ForgeSettingsManager.init(app, db)
+    }
 
-            rebuildForgeApi(config.value.apiUrl)
+    suspend fun initializeApiClientAndData() {
+        ForgeSettingsManager.updateInitStatus("Connecting to Server...")
+        rebuildForgeApi(config.value.apiUrl)
 
-            loadFavoritePaths()
-
-            loadServerStats()
-            manageServiceState(config.value.enablePersistentService)
-
-            startBackgroundPing()
-            startStatsMaintenance()
-            fetchApiData()
-
-            isInitialized = true
+        ForgeSettingsManager.onApiUrlChanged = { newUrl ->
+            rebuildForgeApi(newUrl)
+            repositoryScope.launch(Dispatchers.IO) {
+                fetchApiData()
+            }
         }
+
+        ForgeSettingsManager.updateInitStatus("Loading App Data...")
+        loadFavoritePaths()
+        loadServerStats()
+        manageServiceState(config.value.enablePersistentService)
+
+        startBackgroundPing()
+        startStatsMaintenance()
+        fetchApiData()
     }
 
     private fun loadFavoritePaths() {
@@ -442,10 +455,9 @@ object ForgeRepository {
         }
     }
 
-    private fun loadServerStats(prefs: Preferences? = null) {
+    private fun loadServerStats() {
         repositoryScope.launch(Dispatchers.IO) {
-            val p = prefs ?: application.dataStore.data.first()
-            val json = p[STATS_KEY]
+            val json = db.appSettingDao().getSetting("saved_stats")?.value
             if (!json.isNullOrEmpty()) {
                 try {
                     val type = object : TypeToken<List<ServerStatRecord>>() {}.type
@@ -461,7 +473,7 @@ object ForgeRepository {
     private fun saveServerStats() {
         try {
             repositoryScope.launch(Dispatchers.IO) {
-                application.dataStore.edit { it[STATS_KEY] = ForgeSettingsManager.gson.toJson(_serverStats.value) }
+                db.appSettingDao().putSetting(AppSettingEntity("saved_stats", ForgeSettingsManager.gson.toJson(_serverStats.value)))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save stats", e)
@@ -480,10 +492,9 @@ object ForgeRepository {
         }
     }
 
-    private fun loadQueueState(prefs: Preferences? = null) {
+    private fun loadQueueState() {
         repositoryScope.launch(Dispatchers.IO) {
-            val p = prefs ?: application.dataStore.data.first()
-            val json = p[QUEUE_KEY]
+            val json = db.appSettingDao().getSetting("saved_queue")?.value
             if (!json.isNullOrEmpty()) {
                 try {
                     val type = object : TypeToken<List<QueuedGeneration>>() {}.type
@@ -515,7 +526,7 @@ object ForgeRepository {
         OkHttpClient
             .Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-            .readTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
@@ -654,16 +665,22 @@ object ForgeRepository {
             }
         }
 
+
+    private var pingJob: kotlinx.coroutines.Job? = null
+
+    fun resetPingJob() {
+        startBackgroundPing()
+    }
+
     private fun startBackgroundPing() {
-        repositoryScope.launch(Dispatchers.IO) {
+        pingJob?.cancel()
+        pingJob = repositoryScope.launch(Dispatchers.IO) {
             var failCount = 0
             while (isActive) {
                 try {
                     if (forgeApi != null) {
                         val start = System.currentTimeMillis()
-                        val skipImage = config.value.previewMode != "Normal"
-
-                        val response = forgeApi?.getProgress(skipImage)
+                        val response = forgeApi?.getProgress(false)
 
                         if (response?.isSuccessful == true) {
                             _pingMs.value = System.currentTimeMillis() - start
@@ -676,7 +693,7 @@ object ForgeRepository {
                             val jobCount = progressData.state?.jobCount ?: 0
 
                             val currentImageStr = progressData.currentImage ?: ""
-                            if (currentImageStr.isNotEmpty() && !skipImage) {
+                            if (currentImageStr.isNotEmpty()) {
                                 _livePreviewImage.value = currentImageStr
                             } else {
                                 if (!isGenerating.value) _livePreviewImage.value = null
@@ -767,7 +784,7 @@ object ForgeRepository {
                     _currentEta.value = 0.0
                     _vramUsage.value = null
                     failCount++
-                    if (failCount >= config.value.connectionTimeout && !ForgeQueueManager.isGenerating.value) {
+                    if (failCount >= config.value.timeout && !ForgeQueueManager.isGenerating.value) {
                         ForgeQueueManager.updateStatusText("Connection Lost (Timeout)")
                     }
                 }
@@ -817,7 +834,7 @@ object ForgeRepository {
                     return@launch
                 }
 
-                // Zachowane pobieranie czystych bajtów OkHttp dla bezproblemowej ekstrakcji chunków PNG
+                // Kept raw OkHttp byte downloading for seamless PNG chunk extraction
                 val imgReq = Request.Builder().url(imageUrl).build()
                 var imgBytes: ByteArray? = null
                 client.newCall(imgReq).awaitResponse().use { res ->
@@ -911,7 +928,7 @@ object ForgeRepository {
 
         suspend fun fetchFiles(folder: String): List<GalleryItem> {
             try {
-                val response = forgeApi?.getGalleryFiles(folderPath = if (folder.isNotEmpty() && folder != "Root") folder else null)
+                val response = forgeApi?.getGalleryFiles(folderPath = if (folder.isNotEmpty() && folder != "Root") folder else "")
                 if (response?.isSuccessful == true) {
                     val responseBody = response.body()?.string() ?: ""
                     return parseGalleryItems(responseBody)
@@ -1051,7 +1068,7 @@ object ForgeRepository {
                     return@launch
                 }
 
-                // Zachowane pobieranie surowych bajtów OkHttp dla wydajności przy plikach binarnych
+                // Kept raw OkHttp byte downloading for performance with binary files
                 val imgReq = Request.Builder().url(imageUrl).build()
                 var imgBytes: ByteArray? = null
 
@@ -1144,14 +1161,14 @@ object ForgeRepository {
 
     /* ============================================================================
      * DATA SYNCHRONIZATION (CUSTOM API / A1111)
-     * Pobiera tylko hasze/nazwy lokalnie, nie wykonuje długich operacji sieciowych na zewnątrz.
+     * Fetches only hashes/names locally, does not perform long external network operations.
      * ============================================================================ */
 
     fun fetchApiData() {
         repositoryScope.launch(Dispatchers.IO) {
             if (forgeApi == null) return@launch
 
-            // Pobranie sd_cwd w tle
+            // Fetch sd_cwd in the background
             launch {
                 try {
                     val response = forgeApi?.getGlobalSettings()
@@ -1225,8 +1242,8 @@ object ForgeRepository {
                                         if (sha256.isEmpty()) continue
                                         parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
 
-                                        // Dodajemy tylko szczątkowe informacje by model był widoczny.
-                                        // Prawdziwe dane z Civitai zostaną dociągnięte ręcznie w syncCivitaiModelsManual()
+                                        // We only add residual information so the model is visible.
+                                        // Real data from Civitai will be fetched manually in syncCivitaiModelsManual()
                                         if (!localDbModels.containsKey(sha256)) {
                                             newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
                                         }
@@ -1324,8 +1341,8 @@ object ForgeRepository {
 
     /* ============================================================================
      * MANUAL CIVITAI SYNCHRONIZATION
-     * Ręczne, dedykowane pobieranie metadanych z Civitai z wbudowanym pop-upem
-     * oraz weryfikacją postępu. Zabezpieczone 5-sekundowym interwałem.
+     * Manual, dedicated metadata downloading from Civitai with built-in pop-up
+     * and progress verification. Secured by a 5-second interval.
      * ============================================================================ */
 
     fun syncCivitaiModelsManual() {
@@ -1333,7 +1350,7 @@ object ForgeRepository {
 
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                println("[CivitaiSync] --- ROZPOCZĘCIE SYNCHRONIZACJI Z CIVITAI ---")
+                println("[CivitaiSync] --- STARTING CIVITAI SYNCHRONIZATION ---")
                 ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.LOADING)
                 ForgeModelManager.updateCivitaiSyncState(lastResult = null)
 
@@ -1360,8 +1377,8 @@ object ForgeRepository {
                             .setAutoCancel(true)
                         notifManager.notify(notifId, builder.build())
                     }
-                    ForgeModelManager.updateCivitaiSyncState(lastResult = "Błąd: Brak Custom API na serwerze Forge.")
-                    println("[CivitaiSync] Błąd: Serwer nie posiada odpowiedniego Custom API (HTTP ${customRes?.code()})")
+                    ForgeModelManager.updateCivitaiSyncState(lastResult = "Error: Missing Custom API on Forge server.")
+                    println("[CivitaiSync] Error: Server does not have the appropriate Custom API (HTTP ${customRes?.code()})")
                     ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.ERROR)
                     delay(3000)
                     ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
@@ -1371,9 +1388,9 @@ object ForgeRepository {
                 val modelsList = customRes.body()?.models ?: emptyList()
                 val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
-                println("[CivitaiSync] Odczytano ${modelsList.size} modeli z serwera Forge.")
+                println("[CivitaiSync] Read ${modelsList.size} models from Forge server.")
 
-                // Szukamy modeli, które zostały dodane lokalnie, ale nie mają obrazka i słów kluczowych (czyli wymagają ściągnięcia z Civitai)
+                // We look for models that were added locally but have no image and keywords (thus require downloading from Civitai)
                 val missingOrIncomplete =
                     modelsList.filter { item ->
                         val sha = item.sha256 ?: return@filter false
@@ -1382,15 +1399,15 @@ object ForgeRepository {
                     }
 
                 if (missingOrIncomplete.isEmpty()) {
-                    ForgeModelManager.updateCivitaiSyncState(lastResult = "Wszystkie modele są już zsynchronizowane!")
-                    println("[CivitaiSync] Zakończono: Wszystkie modele posiadają już zapisane metadane.")
+                    ForgeModelManager.updateCivitaiSyncState(lastResult = "All models are already synchronized!")
+                    println("[CivitaiSync] Finished: All models already have saved metadata.")
                     ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.SUCCESS)
                     delay(2000)
                     ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
                     return@launch
                 }
 
-                println("[CivitaiSync] Znaleziono ${missingOrIncomplete.size} modeli oczekujących na pobranie metadanych.")
+                println("[CivitaiSync] Found ${missingOrIncomplete.size} models waiting for metadata download.")
                 ForgeModelManager.updateCivitaiSyncState(progress = 0 to missingOrIncomplete.size)
 
                 if (ForgeSettingsManager.config.value.notifCivitaiSync) {
@@ -1419,10 +1436,10 @@ object ForgeRepository {
                         notifManager.notify(notifId, builder.build())
                     }
 
-                    // Ochrona przed banem IP od Civitai. Zawsze 5 sekund odstępu między żądaniami.
+                    // Protection against Civitai IP ban. Always 5 seconds gap between requests.
                     if (index > 0) delay(5000) else delay(500)
 
-                    println("[CivitaiSync] [$index/${missingOrIncomplete.size}] Pobieranie dla haszu: $sha256 ($civName)")
+                    println("[CivitaiSync] [$index/${missingOrIncomplete.size}] Downloading for hash: $sha256 ($civName)")
 
                     try {
                         val civRes = civitaiApi.getModelByHash(sha256)
@@ -1440,36 +1457,36 @@ object ForgeRepository {
                                         ?.url
                                         ?.replace("original=true", "original=false")
                             }
-                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Pobrano pomyślnie")
+                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Downloaded successfully")
 
-                            println("[CivitaiSync] SUKCES dla $sha256:")
-                            println("[CivitaiSync]  - Parsowana Nazwa: $civName")
-                            println("[CivitaiSync]  - Parsowane Tagi: $trainedWords")
-                            println("[CivitaiSync]  - Parsowane URL Zdjęcia: $previewImage")
+                            println("[CivitaiSync] SUCCESS for $sha256:")
+                            println("[CivitaiSync]  - Parsed Name: $civName")
+                            println("[CivitaiSync]  - Parsed Tags: $trainedWords")
+                            println("[CivitaiSync]  - Parsed Image URL: $previewImage")
 
                             Log.d(TAG, "Civitai Success for $sha256")
                         } else {
-                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Błąd: HTTP ${civRes.code()}")
-                            println("[CivitaiSync] BŁĄD HTTP: ${civRes.code()} dla haszu $sha256")
-                            Log.w(TAG, "Civitai API zwróciło błąd ${civRes.code()} dla haszu $sha256")
+                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Error: HTTP ${civRes.code()}")
+                            println("[CivitaiSync] HTTP ERROR: ${civRes.code()} for hash $sha256")
+                            Log.w(TAG, "Civitai API returned error ${civRes.code()} for hash $sha256")
                             hasError = true
                         }
                     } catch (e: Exception) {
-                        ForgeModelManager.updateCivitaiSyncState(lastResult = "Błąd sieci")
-                        println("[CivitaiSync] WYJĄTEK podczas pobierania dla $sha256: ${e.message}")
+                        ForgeModelManager.updateCivitaiSyncState(lastResult = "Network error")
+                        println("[CivitaiSync] EXCEPTION during download for $sha256: ${e.message}")
                         Log.e(TAG, "Civitai API fetch error for $sha256", e)
                         hasError = true
                     }
 
-                    // Nadpisanie encji w bazie nowymi danymi z Civitai (albo pozostawienie samej nazwy, jeśli pobieranie się nie powiodło)
+                    // Overwriting entity in DB with new data from Civitai (or keeping just the name if download failed)
                     val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
                     db.civitaiModelDao().insertModels(listOf(updatedEntity))
 
                     ForgeModelManager.updateCivitaiSyncState(progress = (index + 1) to missingOrIncomplete.size)
                 }
 
-                ForgeModelManager.updateCivitaiSyncState(lastResult = "Synchronizacja pomyślnie zakończona")
-                println("[CivitaiSync] --- ZAKOŃCZONO SYNCHRONIZACJĘ ---")
+                ForgeModelManager.updateCivitaiSyncState(lastResult = "Synchronization completed successfully")
+                println("[CivitaiSync] --- SYNCHRONIZATION FINISHED ---")
 
                 if (ForgeSettingsManager.config.value.notifCivitaiSync) {
                     if (ForgeSettingsManager.config.value.autoDismissCivitaiNotif) {
@@ -1491,8 +1508,8 @@ object ForgeRepository {
                 ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
             } catch (e: Exception) {
                 Log.e(TAG, "Sync error", e)
-                println("[CivitaiSync] KRYTYCZNY BŁĄD PĘTLI SYNCHRONIZACJI: ${e.message}")
-                ForgeModelManager.updateCivitaiSyncState(lastResult = "Wystąpił krytyczny błąd")
+                println("[CivitaiSync] CRITICAL SYNCHRONIZATION LOOP ERROR: ${e.message}")
+                ForgeModelManager.updateCivitaiSyncState(lastResult = "A critical error occurred")
                 ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.ERROR)
                 delay(3000)
                 ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
@@ -1524,7 +1541,7 @@ object ForgeRepository {
                     return@launch
                 }
 
-                val targetFolder = if (path.isNotEmpty() && path != "Root") path else null
+                val targetFolder = if (path.isNotEmpty() && path != "Root") path else ""
                 val response = forgeApi?.getGalleryFiles(folderPath = targetFolder)
 
                 if (response?.isSuccessful == true) {

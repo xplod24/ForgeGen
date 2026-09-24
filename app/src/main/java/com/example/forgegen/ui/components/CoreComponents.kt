@@ -1,4 +1,6 @@
-package com.example.forgegen
+package com.example.forgegen.ui.components
+import com.example.forgegen.*
+import com.example.forgegen.*
 
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.core.*
@@ -59,7 +61,7 @@ fun AnimatedStatusIndicator(
     val circleSweep by transition.animateFloat(
         transitionSpec = {
             if (targetState == IndicatorState.SUCCESS || targetState == IndicatorState.ERROR) {
-                tween(durationMillis = 400, easing = FastOutSlowInEasing)
+                tween(durationMillis = 200, easing = FastOutSlowInEasing)
             } else {
                 snap()
             }
@@ -76,7 +78,7 @@ fun AnimatedStatusIndicator(
     val tickProgress by transition.animateFloat(
         transitionSpec = {
             if (targetState == IndicatorState.SUCCESS) {
-                tween(durationMillis = 300, easing = FastOutSlowInEasing, delayMillis = 400)
+                tween(durationMillis = 200, easing = FastOutSlowInEasing, delayMillis = 200)
             } else {
                 snap()
             }
@@ -87,7 +89,7 @@ fun AnimatedStatusIndicator(
     val crossProgress by transition.animateFloat(
         transitionSpec = {
             if (targetState == IndicatorState.ERROR) {
-                tween(durationMillis = 300, easing = FastOutSlowInEasing, delayMillis = 400)
+                tween(durationMillis = 200, easing = FastOutSlowInEasing, delayMillis = 200)
             } else {
                 snap()
             }
@@ -99,11 +101,11 @@ fun AnimatedStatusIndicator(
         transitionSpec = {
             if (targetState == IndicatorState.SUCCESS || targetState == IndicatorState.ERROR) {
                 keyframes {
-                    durationMillis = 500
-                    delayMillis = 700
+                    durationMillis = 200
+                    delayMillis = 200
                     1f at 0
-                    1.25f at 200 using FastOutSlowInEasing
-                    1f at 500 using LinearOutSlowInEasing
+                    1.25f at 100 using FastOutSlowInEasing
+                    1f at 200 using LinearOutSlowInEasing
                 }
             } else {
                 snap()
@@ -117,7 +119,7 @@ fun AnimatedStatusIndicator(
     }
 
     val color by transition.animateColor(
-        transitionSpec = { tween(durationMillis = 400) },
+        transitionSpec = { tween(durationMillis = 200) },
         label = "indicator_color",
     ) { target ->
         when (target) {

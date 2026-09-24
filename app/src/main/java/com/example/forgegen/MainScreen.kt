@@ -1,10 +1,19 @@
 package com.example.forgegen
 
+import com.example.forgegen.ui.screens.*
+import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -20,6 +29,7 @@ import androidx.navigation.NavHostController
 import coil.imageLoader
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import com.example.forgegen.ui.components.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -125,7 +135,8 @@ fun MainScreen(
             navController.navigate("gallery")
         }
 
-    val onSettingsClick = rememberDebounced { navController.navigate("setup") }
+    var showSettingsOverlay by remember { mutableStateOf(false) }
+    val onSettingsClick = rememberDebounced { showSettingsOverlay = !showSettingsOverlay }
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
     val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
@@ -155,7 +166,7 @@ fun MainScreen(
         val basePixels = state.width * state.height
         val finalPixels = if (state.hiresFix) basePixels * (state.hiresScale * state.hiresScale) else basePixels.toFloat()
 
-        // Estymata: Powyżej 2.5 miliona pikseli przy Hires zaczyna być niebezpiecznie dla standardowych kart 8GB.
+        // Estimate: Above 2.5 million pixels with Hires it starts to be dangerous for standard 8GB cards.
         if (finalPixels > 2500000) {
             viewModel.showToast("High VRAM usage warning. Risk of server OOM.")
         }
@@ -168,7 +179,7 @@ fun MainScreen(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
-                        // Gdy użytkownik kliknie gdziekolwiek indziej, zdejmij focus i schowaj klawiaturę
+                        // When the user clicks anywhere else, remove focus and hide the keyboard
                         focusManager.clearFocus()
                     })
                 },
@@ -212,7 +223,7 @@ fun MainScreen(
 
                     PreviewSection(
                         isGenerating = isGenerating,
-                        previewMode = config.previewMode,
+
                         livePreviewBase64 = livePreviewBase64,
                         isShowingGridPreview = isShowingGridPreview,
                         sessionImages = sessionImages,
@@ -251,12 +262,14 @@ fun MainScreen(
                         samplers = samplers,
                         schedulers = schedulers,
                         upscalers = upscalers,
+                        config = config,
                     )
 
                     LorasSection(
                         viewModel = viewModel,
                         availableLoras = availableLoras,
                         activeLoras = activeLoras,
+                        config = config,
                         onPendingLora = { pendingLora = it },
                         onOpenTagsPopup = { hash, name ->
                             tagsPopupHash = hash
@@ -266,6 +279,21 @@ fun MainScreen(
 
                     // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
                     Spacer(modifier = Modifier.height(24.dp))
+                }
+                
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = showSettingsOverlay,
+                    enter = androidx.compose.animation.expandVertically(expandFrom = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.LinearOutSlowInEasing)),
+                    exit = androidx.compose.animation.shrinkVertically(shrinkTowards = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)),
+                    modifier = Modifier.zIndex(100f)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                        SetupScreen(
+                            viewModel = viewModel,
+                            navController = navController,
+                            onDismiss = { showSettingsOverlay = false }
+                        )
+                    }
                 }
             }
         }

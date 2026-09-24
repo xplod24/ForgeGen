@@ -1,0 +1,20 @@
+
+- Completely migrated app settings, state, and queue persistence from Jetpack DataStore to Room Database for more robust local storage.
+- Refactored settings architecture into a dedicated manager.
+- Fixed a bug where UI section expanded/collapsed states (Prompts, Settings, LoRAs) were forcefully reverting to their defaults upon app restart.
+- Replaced the old settings title bar with new collapsible inline sections for Prompts, Settings, and LoRAs.
+- Made the Prompts section collapsible like other sections.
+- UI elements (Prompts, Settings, LoRAs) now reliably save their expanded/collapsed state to Room DB automatically.
+- Removed redundant Settings title and back arrow from the Settings overlay.
+- Settings sections are now collapsed by default and their expanded/collapsed state is persisted across app launches.
+- Overhauled the Gallery filtering system. It now includes advanced metadata tracking using a hyper-fast, memory-intersected local cache.
+- Replaced the simple Model `FilterChip` UI with a collapsible checkbox list.
+- Added comprehensive filtering capabilities for LoRAs (collapsible checkbox list).
+- Introduced "AND" / "OR" matching toggles for both Models and LoRAs filters, allowing granular multi-tag queries.
+- Added textual filter inputs for File Name and Prompt Tags (Positive and Negative).
+- Filtering logic is now explicitly applied via a "Confirm" button rather than updating dynamically to prevent stuttering while typing.
+- Added robust sorting options: Newest First, Oldest First, A-Z (Alphabetical), and Z-A (Reverse Alphabetical).
+- Added Background and Cancel actions to the Gallery Sync process. These options appear 1 second after sync begins.
+- Backgrounding the sync removes the blocking UI overlay and displays a silent progress notification in the Android status bar.
+- Silenced logcat output for already-indexed images to reduce noise.
+- Translated all source code comments from Polish to English.

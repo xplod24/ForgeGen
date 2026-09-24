@@ -1,5 +1,9 @@
-package com.example.forgegen
+package com.example.forgegen.ui.screens
+import com.example.forgegen.*
+import com.example.forgegen.ui.components.*
+import com.example.forgegen.*
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -8,6 +12,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +32,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -41,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -49,7 +57,7 @@ import java.util.Locale
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING & FRAMES)
- * Tworzy animowany gradient naśladujący ładowanie oraz ozdobne ramki
+ * Creates an animated gradient imitating loading and decorative frames
  * ============================================================================ */
 
 @Composable
@@ -77,6 +85,8 @@ fun coloredShimmerBrush(baseColor: Color): Brush {
         end = Offset(x = translateAnim, y = translateAnim),
     )
 }
+
+enum class ActiveMenu { NONE, FILTER, SORT, SETTINGS }
 
 @Composable
 fun shimmerBrush(): Brush = coloredShimmerBrush(MaterialTheme.colorScheme.surfaceVariant)
@@ -106,15 +116,35 @@ fun GalleryScreen(
     viewModel: ForgeViewModel,
     navController: NavHostController,
 ) {
-    val galleryFiles by viewModel.galleryFiles.collectAsStateWithLifecycle()
+    var activeMenu by remember { mutableStateOf(ActiveMenu.NONE) }
+    val galleryFilters by viewModel.galleryFilters.collectAsStateWithLifecycle()
+    val availableModels by viewModel.availableModels.collectAsStateWithLifecycle()
+    val availableLoras by viewModel.galleryAvailableLoras.collectAsStateWithLifecycle()
+
+    var tempFilters by remember { mutableStateOf(galleryFilters) }
+    var showBasePathDialog by remember { mutableStateOf(false) }
+    var showPathDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeMenu, galleryFilters) {
+        if (activeMenu != ActiveMenu.NONE) {
+            tempFilters = galleryFilters
+        }
+    }
+
+    val displayedFiles by viewModel.displayedFiles.collectAsStateWithLifecycle()
     val currentPath by viewModel.currentGalleryPath.collectAsStateWithLifecycle()
     val isLoading by viewModel.isGalleryLoading.collectAsStateWithLifecycle()
     val error by viewModel.galleryError.collectAsStateWithLifecycle()
     val galleryMode by viewModel.galleryMode.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
 
-    // Subskrypcja listy ulubionych ścieżek
+    val isGallerySyncing by viewModel.isGallerySyncing.collectAsStateWithLifecycle()
+    val gallerySyncCurrentFile by viewModel.gallerySyncCurrentFile.collectAsStateWithLifecycle()
+    val gallerySyncProgress by viewModel.gallerySyncProgress.collectAsStateWithLifecycle()
+
+    // Subscription to the list of favorite paths
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
+    val pinnedImages by viewModel.pinnedImages.collectAsStateWithLifecycle()
 
     var fullscreenIndex by remember { mutableIntStateOf(-1) }
 
@@ -163,43 +193,334 @@ fun GalleryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            if (galleryMode ==
-                                GalleryMode.PROMPT_PICKER
-                            ) {
-                                "Select Image"
-                            } else {
-                                "Gallery"
-                            },
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = if (currentPath == "virtual://favorites") "⭐ Favorites" else currentPath.ifEmpty { "Root" },
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                },
+                title = { Text(if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                     }
                 },
                 actions = {
+                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SETTINGS) ActiveMenu.NONE else ActiveMenu.SETTINGS }) {
+                        Icon(Icons.Default.Settings, "Settings")
+                    }
+                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SORT) ActiveMenu.NONE else ActiveMenu.SORT }) {
+                        Icon(Icons.Default.Sort, "Sort")
+                    }
+                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.FILTER) ActiveMenu.NONE else ActiveMenu.FILTER }) {
+                        Icon(Icons.Default.FilterList, "Filter")
+                    }
+                    IconButton(onClick = { viewModel.triggerManualGallerySync() }) {
+                        Icon(Icons.Default.Sync, "Sync Database")
+                    }
                     IconButton(onClick = { viewModel.fetchGalleryFolder(currentPath) }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                }
             )
         },
     ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-            if (isLoading) {
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // BREADCRUMB NAVIGATION
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (currentPath == "virtual://favorites") {
+                    Text("⭐ Favorites", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                } else if (currentPath == "virtual://pinned") {
+                    Text("📌 Pinned", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+                } else {
+                    val pathSegments = if (currentPath.isEmpty()) listOf("Root") else listOf("Root") + currentPath.split(Regex("[/\\\\]")).filter { it.isNotEmpty() }
+                    pathSegments.forEachIndexed { index, segment ->
+                        val isLast = index == pathSegments.size - 1
+                        Text(
+                            text = segment,
+                            fontSize = 14.sp,
+                            fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isLast) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable(enabled = !isLast) {
+                                    if (index == 0) {
+                                        viewModel.fetchGalleryFolder(if (config.galleryPath.isEmpty()) "Root" else config.galleryPath)
+                                    } else {
+                                        // Reconstruct path up to this segment
+                                        val subPath = pathSegments.drop(1).take(index).joinToString("/")
+                                        viewModel.fetchGalleryFolder(subPath)
+                                    }
+                                }
+                                .padding(vertical = 4.dp)
+                        )
+                        if (!isLast) {
+                            Icon(
+                                Icons.Default.KeyboardArrowRight,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp).padding(horizontal = 4.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+            
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // SLIDE-DOWN MENUS
+            androidx.compose.animation.AnimatedVisibility(
+                visible = activeMenu != ActiveMenu.NONE,
+                enter = androidx.compose.animation.expandVertically(animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.LinearOutSlowInEasing)),
+                exit = androidx.compose.animation.shrinkVertically(animationSpec = androidx.compose.animation.core.tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)),
+                modifier = Modifier.align(Alignment.TopCenter).zIndex(100f)
+            ) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth().zIndex(100f),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                    tonalElevation = 8.dp,
+                    shadowElevation = 8.dp
+                ) {
+                    if (activeMenu == ActiveMenu.SORT) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Sort By", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Button(onClick = { viewModel.applyGalleryFilters(tempFilters); activeMenu = ActiveMenu.NONE }) { Text("Confirm") }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            
+                            val sortOptions = listOf(
+                                ForgeGalleryManager.SortOrder.NEWEST to "Newest First",
+                                ForgeGalleryManager.SortOrder.OLDEST to "Oldest First",
+                                ForgeGalleryManager.SortOrder.NAME_ASC to "A-Z (Alphabetical)",
+                                ForgeGalleryManager.SortOrder.NAME_DESC to "Z-A (Reverse Alphabetical)"
+                            )
+
+                            sortOptions.forEach { (order, label) ->
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { tempFilters = tempFilters.copy(sortOrder = order) }.padding(vertical = 4.dp)) {
+                                    RadioButton(selected = tempFilters.sortOrder == order, onClick = { tempFilters = tempFilters.copy(sortOrder = order) })
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(label)
+                                }
+                            }
+                        }
+                    } else if (activeMenu == ActiveMenu.FILTER) {
+                        Column(modifier = Modifier.padding(16.dp).heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Filter Gallery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                Row {
+                                    TextButton(onClick = { 
+                                        viewModel.clearGalleryFilters()
+                                        activeMenu = ActiveMenu.NONE
+                                    }) { Text("Clear All") }
+                                    Spacer(Modifier.width(8.dp))
+                                    Button(onClick = { 
+                                        viewModel.applyGalleryFilters(tempFilters)
+                                        activeMenu = ActiveMenu.NONE
+                                    }) { Text("Confirm") }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+
+                            OutlinedTextField(
+                                value = tempFilters.name,
+                                onValueChange = { tempFilters = tempFilters.copy(name = it) },
+                                label = { Text("File Name") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+
+                            OutlinedTextField(
+                                value = tempFilters.prompt,
+                                onValueChange = { tempFilters = tempFilters.copy(prompt = it) },
+                                label = { Text("Prompt Tag (Pos/Neg)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(16.dp))
+
+                            // Models section
+                            var modelsExpanded by remember { mutableStateOf(false) }
+                            Row(modifier = Modifier.fillMaxWidth().clickable { modelsExpanded = !modelsExpanded }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Models (${tempFilters.models.size} selected)", fontWeight = FontWeight.Bold)
+                                Text(if (modelsExpanded) "▲" else "▼")
+                            }
+                            if (modelsExpanded) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                    Text("Match:", style = MaterialTheme.typography.bodySmall)
+                                    Spacer(Modifier.width(8.dp))
+                                    FilterChip(selected = !tempFilters.modelsIsAnd, onClick = { tempFilters = tempFilters.copy(modelsIsAnd = false) }, label = { Text("OR") })
+                                    Spacer(Modifier.width(8.dp))
+                                    FilterChip(selected = tempFilters.modelsIsAnd, onClick = { tempFilters = tempFilters.copy(modelsIsAnd = true) }, label = { Text("AND") })
+                                }
+                                if (availableModels.isEmpty()) {
+                                    Text("No models indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+                                } else {
+                                    availableModels.forEach { model ->
+                                        val isChecked = tempFilters.models.contains(model)
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
+                                            val newModels = tempFilters.models.toMutableSet()
+                                            if (isChecked) newModels.remove(model) else newModels.add(model)
+                                            tempFilters = tempFilters.copy(models = newModels)
+                                        }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)) {
+                                            Checkbox(checked = isChecked, onCheckedChange = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+
+                            // Loras section
+                            var lorasExpanded by remember { mutableStateOf(false) }
+                            Row(modifier = Modifier.fillMaxWidth().clickable { lorasExpanded = !lorasExpanded }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("LoRAs (${tempFilters.loras.size} selected)", fontWeight = FontWeight.Bold)
+                                Text(if (lorasExpanded) "▲" else "▼")
+                            }
+                            if (lorasExpanded) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                                    Text("Match:", style = MaterialTheme.typography.bodySmall)
+                                    Spacer(Modifier.width(8.dp))
+                                    FilterChip(selected = !tempFilters.lorasIsAnd, onClick = { tempFilters = tempFilters.copy(lorasIsAnd = false) }, label = { Text("OR") })
+                                    Spacer(Modifier.width(8.dp))
+                                    FilterChip(selected = tempFilters.lorasIsAnd, onClick = { tempFilters = tempFilters.copy(lorasIsAnd = true) }, label = { Text("AND") })
+                                }
+                                if (availableLoras.isEmpty()) {
+                                    Text("No LoRAs indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+                                } else {
+                                    availableLoras.forEach { lora ->
+                                        val isChecked = tempFilters.loras.contains(lora)
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
+                                            val newLoras = tempFilters.loras.toMutableSet()
+                                            if (isChecked) newLoras.remove(lora) else newLoras.add(lora)
+                                            tempFilters = tempFilters.copy(loras = newLoras)
+                                        }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)) {
+                                            Checkbox(checked = isChecked, onCheckedChange = null)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(lora, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if (activeMenu == ActiveMenu.SETTINGS) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Gallery Settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                IconButton(onClick = { activeMenu = ActiveMenu.NONE }) {
+                                    Icon(Icons.Default.Close, "Close")
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        viewModel.showToast("Requesting paths from server...")
+                                        viewModel.fetchAutoConfig()
+                                    }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Auto-Config Gallery Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(
+                                        text = "Tap to auto-detect base and gallery folders from server",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        lineHeight = 18.sp,
+                                    )
+                                }
+                            }
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showBasePathDialog = true }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Server Base Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(
+                                        text = config.serverBasePath.ifEmpty { "Not set" },
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showPathDialog = true }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Gallery Server Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(
+                                        text = config.galleryPath.ifEmpty { "Not set" },
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.saveConfig(config.copy(swipeToBrowseGallery = !config.swipeToBrowseGallery)) }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Swipe to Browse Images", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(
+                                        text = "Use horizontal swiping in fullscreen preview",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        lineHeight = 18.sp,
+                                    )
+                                }
+                                Switch(
+                                    checked = config.swipeToBrowseGallery,
+                                    onCheckedChange = null,
+                                )
+                            }
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { viewModel.saveConfig(config.copy(showGridAfterGeneration = !config.showGridAfterGeneration)) }
+                                    .padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Show Grid After Batch", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                                    Text(
+                                        text = "Temporarily show a grid of images when a batch generation finishes",
+                                        fontSize = 14.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                                        lineHeight = 18.sp,
+                                    )
+                                }
+                                Switch(
+                                    checked = config.showGridAfterGeneration,
+                                    onCheckedChange = null,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+
+                if (isLoading) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     modifier = Modifier.fillMaxSize(),
@@ -224,7 +545,7 @@ fun GalleryScreen(
                     Spacer(Modifier.height(16.dp))
                     Button(onClick = { viewModel.fetchGalleryFolder(currentPath) }) { Text("Retry") }
                 }
-            } else if (galleryFiles.isEmpty()) {
+            } else if (displayedFiles.isEmpty()) {
                 Text("No files found", modifier = Modifier.align(Alignment.Center), color = Color.Gray)
             } else {
                 LazyVerticalGrid(
@@ -232,7 +553,7 @@ fun GalleryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(4.dp),
                 ) {
-                    itemsIndexed(galleryFiles) { index, item ->
+                    itemsIndexed(displayedFiles) { index, item ->
                         if (item.isDir) {
                             val isFavoritesFolder = item.fullpath == "virtual://favorites"
                             Card(
@@ -244,11 +565,13 @@ fun GalleryScreen(
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                     verticalArrangement = Arrangement.Center,
                                 ) {
+                                    val folderIcon = if (item.fullpath == "virtual://pinned") Icons.Default.PushPin else if (isFavoritesFolder) Icons.Default.Star else Icons.Default.Folder
+                                    val folderColor = if (item.fullpath == "virtual://pinned") Color(0xFFFF9800) else if (isFavoritesFolder) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
                                     Icon(
-                                        imageVector = if (isFavoritesFolder) Icons.Default.Star else Icons.Default.Folder,
+                                        imageVector = folderIcon,
                                         contentDescription = null,
                                         modifier = Modifier.size(48.dp),
-                                        tint = if (isFavoritesFolder) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary,
+                                        tint = folderColor,
                                     )
                                     Spacer(Modifier.height(8.dp))
                                     Text(
@@ -261,11 +584,11 @@ fun GalleryScreen(
                                 }
                             }
                         } else {
-                            // Rozpoznajemy stan ulubionego na żywo z pobranej listy ścieżek
+                            // We recognize the favorite state live from the downloaded list of paths
                             val isFavorite = favoritePaths.contains(item.fullpath) || currentPath == "virtual://favorites"
                             val isForgeGen = item.name.contains("ForgeGen", ignoreCase = true)
 
-                            // Grubsza (6.dp) i bardzo dobrze widoczna ramka!
+                            // Thicker (6.dp) and highly visible frame!
                             val frameModifier =
                                 when {
                                     isFavorite -> Modifier.border(6.dp, coloredShimmerBrush(Color(0xFFFFD54F)), MaterialTheme.shapes.small)
@@ -305,6 +628,19 @@ fun GalleryScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop,
                                 )
+                                if (pinnedImages.contains(item.fullpath)) {
+                                    Icon(
+                                        imageVector = Icons.Default.PushPin,
+                                        contentDescription = "Pinned",
+                                        tint = Color(0xFFFF9800),
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(4.dp)
+                                            .size(20.dp)
+                                            .background(Color(0x88000000), CircleShape)
+                                            .padding(2.dp)
+                                    )
+                                }
                                 Box(
                                     modifier =
                                         Modifier
@@ -329,15 +665,16 @@ fun GalleryScreen(
                 }
             }
         }
+    }
 
-        // ZABEZPIECZENIE: IndexOutOfBoundsException Fail-Safe
+    // FAIL-SAFE: IndexOutOfBoundsException Fail-Safe
         if (fullscreenIndex >= 0) {
-            if (galleryFiles.isEmpty()) {
+            if (displayedFiles.isEmpty()) {
                 fullscreenIndex = -1
             } else {
-                val safeIndex = fullscreenIndex.coerceIn(0, galleryFiles.size - 1)
-                val imageFiles = galleryFiles.filter { !it.isDir }
-                val targetFile = galleryFiles[safeIndex]
+                val safeIndex = fullscreenIndex.coerceIn(0, displayedFiles.size - 1)
+                val imageFiles = displayedFiles.filter { !it.isDir }
+                val targetFile = displayedFiles[safeIndex]
                 val initialPage = imageFiles.indexOf(targetFile).coerceAtLeast(0)
 
                 FullscreenGalleryViewer(
@@ -347,6 +684,130 @@ fun GalleryScreen(
                     initialIndex = initialPage,
                     onDismiss = { fullscreenIndex = -1 },
                 )
+            }
+        }
+
+        if (showBasePathDialog) {
+            var tempPath by remember { mutableStateOf(config.serverBasePath) }
+            AlertDialog(
+                onDismissRequest = { showBasePathDialog = false },
+                title = { Text("Server Base Path") },
+                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.saveConfig(config.copy(serverBasePath = tempPath))
+                        showBasePathDialog = false
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { showBasePathDialog = false }) { Text("Cancel") } },
+            )
+        }
+
+        if (showPathDialog) {            var inputPath by remember { mutableStateOf(config.galleryPath) }
+            AlertDialog(
+                onDismissRequest = { showPathDialog = false },
+                title = { Text("Gallery Server Path") },
+                text = {
+                    Column {
+                        Text("Enter the remote path for IIB gallery.", fontSize = 14.sp)
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = inputPath,
+                            onValueChange = { inputPath = it },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.saveConfig(config.copy(galleryPath = inputPath))
+                        showPathDialog = false
+                    }) { Text("Save") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPathDialog = false }) { Text("Cancel") }
+                }
+            )
+        }
+
+        // GALLERY SYNC PROGRESS OVERLAY
+        if (isGallerySyncing != IndicatorState.IDLE) {
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.7f))
+                        .zIndex(150f)
+                        .clickable(enabled = false) {},
+                contentAlignment = Alignment.Center,
+            ) {
+                Card(
+                    modifier =
+                        Modifier
+                            .padding(32.dp)
+                            .fillMaxWidth(0.85f)
+                            .animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
+                    shape = MaterialTheme.shapes.large,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        AnimatedStatusIndicator(state = isGallerySyncing)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Gallery Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Indexing metadata for:", fontSize = 12.sp, color = Color.Gray)
+                        Text(
+                            text = gallerySyncCurrentFile.ifEmpty { "..." },
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            maxLines = 2,
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        val (current, total) = gallerySyncProgress
+                        LinearProgressIndicator(
+                            progress = { if (total > 0) current.toFloat() / total.toFloat() else 0f },
+                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = if (total > 0) "$current / $total" else "Calculating...",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        
+                        var showButtons by remember { androidx.compose.runtime.mutableStateOf(false) }
+                        LaunchedEffect(Unit) {
+                            kotlinx.coroutines.delay(1000)
+                            showButtons = true
+                        }
+                        
+                        if (showButtons) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                OutlinedButton(onClick = { viewModel.putSyncToBackground() }) {
+                                    Text("Background")
+                                }
+                                Button(
+                                    onClick = { viewModel.cancelManualGallerySync() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                ) {
+                                    Text("Cancel")
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -368,6 +829,7 @@ fun FullscreenGalleryViewer(
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val isFavorite by viewModel.isCurrentFavorite.collectAsStateWithLifecycle()
+    val pinnedImages by viewModel.pinnedImages.collectAsStateWithLifecycle()
 
     LaunchedEffect(pagerState.currentPage) {
         if (currentItem != null) {
@@ -405,6 +867,17 @@ fun FullscreenGalleryViewer(
                         imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = "Favorite",
                         tint = if (isFavorite) Color(0xFFFFD54F) else Color.White,
+                    )
+                }
+
+                IconButton(onClick = {
+                    currentItem?.let { viewModel.togglePinnedImage(it.fullpath) }
+                }) {
+                    val isPinned = currentItem?.fullpath?.let { pinnedImages.contains(it) } ?: false
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = "Pin to Top",
+                        tint = if (isPinned) Color(0xFFFF9800) else Color.White,
                     )
                 }
 

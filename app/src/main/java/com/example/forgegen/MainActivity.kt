@@ -1,5 +1,3 @@
-@file:Suppress("DEPRECATION")
-
 package com.example.forgegen
 
 import android.app.Activity
@@ -65,6 +63,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.forgegen.ui.components.*
+import com.example.forgegen.ui.screens.*
 import coil.ImageLoader
 import coil.compose.LocalImageLoader
 import coil.disk.DiskCache
@@ -190,15 +190,21 @@ fun AppNavigation(
     NavHost(
         navController = navController,
         startDestination = "welcome",
-        enterTransition = { fadeIn(animationSpec = tween(0)) },
-        exitTransition = { fadeOut(animationSpec = tween(0)) },
-        popEnterTransition = { fadeIn(animationSpec = tween(0)) },
-        popExitTransition = { fadeOut(animationSpec = tween(0)) },
+        enterTransition = { fadeIn(animationSpec = tween(200)) },
+        exitTransition = { fadeOut(animationSpec = tween(200)) },
+        popEnterTransition = { fadeIn(animationSpec = tween(200)) },
+        popExitTransition = { fadeOut(animationSpec = tween(200)) },
     ) {
-        composable("welcome") { WelcomeScreen(navController) }
-        composable("setup") { SetupScreen(viewModel, navController) }
+        composable("welcome") { WelcomeScreen(viewModel, navController) }
+        composable("setup") { SetupScreen(viewModel, navController, onDismiss = { navController.popBackStack() }) }
         composable("main") { MainScreen(viewModel, navController) }
-        composable("gallery") { GalleryScreen(viewModel, navController) }
+        composable(
+            "gallery",
+            enterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(200)) },
+            exitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) },
+            popEnterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(200)) },
+            popExitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) }
+        ) { GalleryScreen(viewModel, navController) }
         composable("queue") { QueueScreen(viewModel, navController) }
         composable("wildcards") { WildcardsScreen(viewModel, navController) }
         composable("presets") { PresetsScreen(viewModel, navController) }

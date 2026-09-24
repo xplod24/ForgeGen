@@ -1,5 +1,4 @@
-@file:Suppress("PropertyName", "unused")
-
+@file:Suppress("unused")
 package com.example.forgegen
 
 import androidx.room.Dao
@@ -15,7 +14,7 @@ import com.google.gson.annotations.SerializedName
 
 /* ============================================================================
  * 1. DOMAIN MODELS (UI & BUSINESS LOGIC)
- * Czyste modele biznesowe, odseparowane od szczegółów implementacyjnych API.
+ * Pure business models, separated from API implementation details.
  * ============================================================================ */
 
 data class ServerProfile(
@@ -29,19 +28,15 @@ data class GenerationPreset(
     val includePrompts: Boolean = true,
 )
 
-enum class GallerySyncMode {
-    MANUAL,
-    ON_ENTRY,
-    BACKGROUND,
-}
+
 
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var serverBasePath: String = "",
     var galleryPath: String = "",
     var isDarkMode: Boolean = false,
-    var connectionTimeout: Int = 10,
-    var checkpointTimeout: Int = 45,
+    var timeout: Int = 10,
+
     var receiveGenerationNotification: Boolean = true, // Legacy field (could remove, but keeping it to avoid breaking other things right now if it's used elsewhere like in Service)
     var notifOnBatchFinish: Boolean = false,
     var notifOnQueueFinish: Boolean = true,
@@ -54,7 +49,6 @@ data class AppConfig(
     var swipeToBrowseGallery: Boolean = true,
     var bottomSheetExpandedByDefault: Boolean = false,
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
-    var previewMode: String = "Finished",
     var useNativeSecurity: Boolean = false,
     var useBiometricLock: Boolean = false,
     var overnightMode: Boolean = false,
@@ -64,10 +58,14 @@ data class AppConfig(
     var lastUpdateCheckDate: String = "",
     var defaultState: AppState = AppState(),
     var presets: List<GenerationPreset> = emptyList(),
-    var gallerySyncMode: GallerySyncMode = GallerySyncMode.MANUAL,
+    var autoSyncModels: Boolean = false,
+    var mainPromptsExpanded: Boolean = true,
+    var mainSettingsExpanded: Boolean = false,
+    var mainLorasExpanded: Boolean = false,
 )
 
 data class AppState(
+    var setupExpandedSections: Set<String> = emptySet(),
     var positivePrompt: String = "",
     var negativePrompt: String = "",
     var cfgScale: Float = 7.0f,
@@ -138,8 +136,8 @@ data class PromptHistoryItem(
     val timestamp: Long,
 )
 
-// DTO zagnieżdżone celowo dla kompatybilności wstecznej w SharedPreferences (kolejka).
-// Zachowujemy strukturę Txt2ImgPayload jako część payloadu kolejki.
+// DTO purposely nested for backward compatibility in SharedPreferences (queue).
+// We keep the Txt2ImgPayload structure as part of the queue payload.
 data class QueuedGeneration(
     val id: String,
     val positivePrompt: String,
@@ -177,7 +175,7 @@ data class UpdateManifest(
     val sha256: String,
     val releaseDate: String? = null,
     val isCritical: Boolean = false,
-    val changelog: Map<String, List<String>>? = null,
+    val changelog: List<String>? = null,
 )
 
 enum class GalleryMode {
@@ -202,7 +200,7 @@ data class GalleryItem(
 
 /* ============================================================================
  * 2. ROOM DATABASE COMPONENTS (Entities & DAOs)
- * Reprezentacja danych w lokalnej bazie SQLite.
+ * Representation of data in the local SQLite database.
  * ============================================================================ */
 
 @Entity(tableName = "civitai_models")
@@ -296,11 +294,47 @@ interface GalleryImageDao {
 
     @Query("DELETE FROM gallery_images WHERE fullpath LIKE :folderPath || '%'")
     suspend fun clearFolder(folderPath: String)
+
+    @Query("DELETE FROM gallery_images")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM gallery_images")
+    suspend fun getCount(): Int
+
+    @Query("SELECT DISTINCT model FROM gallery_images WHERE model IS NOT NULL AND model != ''")
+    suspend fun getDistinctModels(): List<String>
+
+    @Query("SELECT * FROM gallery_images")
+    suspend fun getAllImages(): List<GalleryImageEntity>
+}
+
+@Entity(tableName = "app_settings")
+data class AppSettingEntity(
+    @PrimaryKey val key: String,
+    val value: String
+)
+
+@Dao
+interface AppSettingDao {
+    @Query("SELECT * FROM app_settings WHERE `key` = :key")
+    suspend fun getSetting(key: String): AppSettingEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putSetting(setting: AppSettingEntity)
+
+    @Query("DELETE FROM app_settings WHERE `key` = :key")
+    suspend fun removeSetting(key: String)
 }
 
 @Database(
-    entities = [CivitaiModelEntity::class, FavoriteImageEntity::class, WildcardEntity::class, GalleryImageEntity::class],
-    version = 9,
+    entities = [
+        CivitaiModelEntity::class, 
+        FavoriteImageEntity::class, 
+        WildcardEntity::class, 
+        GalleryImageEntity::class,
+        AppSettingEntity::class
+    ],
+    version = 10,
     exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
@@ -311,11 +345,13 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun wildcardDao(): WildcardDao
 
     abstract fun galleryImageDao(): GalleryImageDao
+
+    abstract fun appSettingDao(): AppSettingDao
 }
 
 /* ============================================================================
  * 3. DATA TRANSFER OBJECTS (DTOs)
- * Klasy mapujące odpowiedzi JSON z Retrofita (A1111, Forge, Civitai).
+ * Classes mapping JSON responses from Retrofit (A1111, Forge, Civitai).
  * ============================================================================ */
 
 data class OverrideSettingsDto(
@@ -400,7 +436,7 @@ data class UpdateManifestDto(
     val sha256: String?,
     val releaseDate: String? = null,
     val isCritical: Boolean = false,
-    val changelog: Map<String, List<String>>? = null,
+    val changelog: List<String>? = null,
 )
 
 data class GalleryFileListDto(
@@ -416,7 +452,7 @@ data class GalleryItemDto(
     val size: String? = null,
 )
 
-// Nowe DTO dla Custom API (zastępuje org.json.JSONObject)
+// New DTO for Custom API (replaces org.json.JSONObject)
 data class CustomApiModelsResponseDto(
     val models: List<CustomApiModelDto>? = emptyList(),
 )
@@ -428,7 +464,7 @@ data class CustomApiModelDto(
     val sha256: String?,
 )
 
-// Nowe DTO dla Civitai (zastępuje org.json.JSONObject)
+// New DTO for Civitai (replaces org.json.JSONObject)
 data class CivitaiVersionResponseDto(
     val model: CivitaiBaseModelDto?,
     val trainedWords: List<String>?,
@@ -443,7 +479,7 @@ data class CivitaiImageDto(
     val url: String?,
 )
 
-// Nowe DTO dla zapytań o pamięć i ustawienia globalne
+// New DTO for memory and global settings queries
 data class MemoryResponseDto(
     val ram: MemoryStatDto?,
     val cuda: CudaStatDto?,
@@ -469,7 +505,7 @@ data class GlobalSettingInnerDto(
 
 /* ============================================================================
  * 4. MAPPERS (Extension Functions)
- * Czyste konwersje pomiędzy warstwą sieciową (DTO) a Domeną.
+ * Pure conversions between the network layer (DTO) and the Domain.
  * ============================================================================ */
 
 fun UpdateManifestDto.toDomain() =
@@ -510,26 +546,26 @@ fun LoraItemDto.toDomain() =
         hash = this.metadata?.sshsModelHash?.takeIf { it.isNotEmpty() } ?: this.name,
     )
 
-@androidx.room.Entity(tableName = "wildcards")
+@Entity(tableName = "wildcards")
 data class WildcardEntity(
-    @androidx.room.PrimaryKey val name: String,
+    @PrimaryKey val name: String,
     val content: String,
 )
 
-@androidx.room.Dao
+@Dao
 interface WildcardDao {
-    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWildcard(wildcard: WildcardEntity)
 
-    @androidx.room.Delete
+    @Delete
     suspend fun deleteWildcard(wildcard: WildcardEntity)
 
-    @androidx.room.Query("SELECT * FROM wildcards ORDER BY name ASC")
+    @Query("SELECT * FROM wildcards ORDER BY name ASC")
     suspend fun getAllWildcards(): List<WildcardEntity>
 
-    @androidx.room.Query("SELECT COUNT(*) FROM wildcards")
+    @Query("SELECT COUNT(*) FROM wildcards")
     suspend fun count(): Int
 
-    @androidx.room.Query("DELETE FROM wildcards")
+    @Query("DELETE FROM wildcards")
     suspend fun clearAll()
 }

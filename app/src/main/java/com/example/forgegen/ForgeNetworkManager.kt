@@ -1,5 +1,6 @@
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.*
 import android.app.Application
 import android.util.Log
 import com.google.gson.Gson
@@ -27,7 +28,7 @@ import java.util.concurrent.TimeUnit
  * ============================================================================ */
 class ForgeNetworkManager(
     private val application: Application,
-    private val db: ForgeDatabase,
+    private val getDb: () -> ForgeDatabase,
     private val getConfig: () -> AppConfig,
     private val updateConfig: (AppConfig) -> Unit,
     private val showToast: (String) -> Unit,
@@ -43,18 +44,30 @@ class ForgeNetworkManager(
     var forgeApi: ForgeApi? = null
         private set
 
-    init {
+    private var hasFetchedInitialData = false
+
+    fun start() {
         managerScope.launch(Dispatchers.IO) {
             var currentUrl = ""
             var currentTimeout = -1
             ForgeRepository.config.collect { config ->
-                if (currentTimeout != config.connectionTimeout) {
-                    currentTimeout = config.connectionTimeout
+                if (currentTimeout != config.timeout) {
+                    currentTimeout = config.timeout
                     initClient(currentTimeout)
                 }
                 if (currentUrl != config.apiUrl) {
                     currentUrl = config.apiUrl
                     rebuildForgeApi(currentUrl)
+                    ForgeRepository.resetPingJob()
+                    hasFetchedInitialData = false
+                }
+            }
+        }
+
+        managerScope.launch(Dispatchers.IO) {
+            ForgeRepository.isConnected.collect { isConnected ->
+                if (isConnected && !hasFetchedInitialData) {
+                    hasFetchedInitialData = true
                     fetchApiData()
                 }
             }
@@ -78,8 +91,8 @@ class ForgeNetworkManager(
             OkHttpClient
                 .Builder()
                 .addInterceptor(conditionalCivitaiLogger)
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
+                .connectTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
+                .readTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
                 .build()
 
         Retrofit
@@ -153,7 +166,7 @@ class ForgeNetworkManager(
             OkHttpClient
                 .Builder()
                 .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .readTimeout(180, TimeUnit.SECONDS)
+                .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
                 .addInterceptor(conditionalLogger)
                 .addInterceptor { chain ->
                     val originalRequest = chain.request()
@@ -168,7 +181,21 @@ class ForgeNetworkManager(
                     if (isGalleryCall) {
                         requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
                     }
-                    chain.proceed(requestBuilder.build())
+                    try {
+                        val response = chain.proceed(requestBuilder.build())
+                        if (!response.isSuccessful) {
+                            try {
+                                val bodyStr = response.peekBody(Long.MAX_VALUE).string()
+                                Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url}\nBody: $bodyStr")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url} (Could not read body)")
+                            }
+                        }
+                        response
+                    } catch (e: Exception) {
+                        Log.e(TAG, "API CALL FAILED: ${e.message}", e)
+                        throw e
+                    }
                 }.build()
     }
 
@@ -188,7 +215,6 @@ class ForgeNetworkManager(
                     .addConverterFactory(GsonConverterFactory.create(gson))
                     .build()
             forgeApi = retrofitForge.create(ForgeApi::class.java)
-            ForgeRepository.forgeApi = forgeApi
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e(TAG, "Failed to initialize ForgeApi with URL: $cleanUrl. Exception: $e")
@@ -306,7 +332,7 @@ class ForgeNetworkManager(
                                     if (customRes?.isSuccessful == true) {
                                         val modelsList = customRes.body()?.models ?: emptyList()
 
-                                        val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                                        val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
                                         val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
                                         val parsedApiModels = mutableListOf<CustomApiModelDto>()
 
@@ -325,10 +351,10 @@ class ForgeNetworkManager(
                                         }
 
                                         if (newModelsToInsert.isNotEmpty()) {
-                                            db.civitaiModelDao().insertModels(newModelsToInsert)
+                                            getDb().civitaiModelDao().insertModels(newModelsToInsert)
                                         }
 
-                                        val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                                        val updatedDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
                                         val checkpoints =
                                             parsedApiModels
@@ -432,7 +458,7 @@ class ForgeNetworkManager(
                 }
 
                 val modelsList = customRes.body()?.models ?: emptyList()
-                val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
+                val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
                 val missingOrIncomplete =
                     modelsList.filter { item ->
@@ -490,7 +516,7 @@ class ForgeNetworkManager(
                     }
 
                     val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
-                    db.civitaiModelDao().insertModels(listOf(updatedEntity))
+                    getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
                     _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
                 }
 

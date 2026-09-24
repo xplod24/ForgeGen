@@ -25,11 +25,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 
 /* ============================================================================
-
- * POMOCNICZA KLASA DLA STANU ROBOCZEGO (DRAFT)
-
- * Używamy SnapshotStateList aby Compose wykrywało dodawanie/usuwanie pojedynczych słów
-
+ * DRAFT STATE WRAPPER CLASS
+ * We use SnapshotStateList so Compose detects individual word additions/removals
  * ============================================================================ */
 
 data class WildcardDraftWrapper(
@@ -39,9 +36,7 @@ data class WildcardDraftWrapper(
 )
 
 /* ============================================================================
-
- * EKRAN ZARZĄDZANIA WILDCARDAMI
-
+ * WILDCARD MANAGEMENT SCREEN
  * ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,13 +47,13 @@ fun WildcardsScreen(
 ) {
     val dbWildcards by viewModel.wildcards.collectAsStateWithLifecycle()
 
-    // Lista robocza - modyfikacje zachodzą tylko tutaj, aż do wciśnięcia "Zapisz"
+    // Draft list - modifications only happen here, until "Save" is pressed
 
     val draftList = remember { mutableStateListOf<WildcardDraftWrapper>() }
 
     var isInitialized by remember { mutableStateOf(false) }
 
-    // Wczytanie danych z bazy do stanu roboczego (tylko raz przy wejściu)
+    // Load data from database into draft state (only once on entry)
 
     LaunchedEffect(dbWildcards) {
         if (!isInitialized) {
@@ -86,7 +81,7 @@ fun WildcardsScreen(
     var newKeyName by remember { mutableStateOf("") }
 
     val onSave: () -> Unit = {
-        // 1. Wykryj usunięte kategorie i usuń je z bazy
+        // 1. Detect removed categories and remove them from DB
 
         val draftNames = draftList.map { it.name }.toSet()
 
@@ -97,7 +92,7 @@ fun WildcardsScreen(
             }
         }
 
-        // 2. Zapisz obecne kategorie
+        // 2. Save current categories
 
         draftList.forEach { draft ->
 
@@ -124,7 +119,7 @@ fun WildcardsScreen(
                 },
                 actions = {
                     IconButton(onClick = onSave) {
-                        // Ikona dyskietki (zapisz)
+                        // Save icon
 
                         Icon(Icons.Default.Save, "Save to disk")
                     }
@@ -135,7 +130,7 @@ fun WildcardsScreen(
     ) { padding ->
 
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
-            // Główny przycisk dodawania
+            // Main add button
 
             Button(
                 onClick = { showNewKeyDialog = true },
@@ -174,7 +169,7 @@ fun WildcardsScreen(
         }
     }
 
-    // Okno dialogowe dla nowej kategorii
+    // Dialog for new category
 
     if (showNewKeyDialog) {
         AlertDialog(
@@ -190,7 +185,7 @@ fun WildcardsScreen(
 
                     OutlinedTextField(
                         value = newKeyName,
-                        onValueChange = { newKeyName = it.replace(Regex("[^a-zA-Z0-9_\\-]"), "") }, // Zabezpieczenie przed spacjami
+                        onValueChange = { newKeyName = it.replace(Regex("[^a-zA-Z0-9_\\-]"), "") }, // Prevent spaces
                         label = { Text("Name, e.g. hair_color") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
@@ -234,9 +229,7 @@ fun WildcardsScreen(
 }
 
 /* ============================================================================
-
- * KOMPONENT KARTY DANEGO WILDCARDA
-
+ * WILDCARD ITEM CARD COMPONENT
  * ============================================================================ */
 
 @Composable
@@ -250,7 +243,7 @@ fun WildcardItemCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // Nagłówek akordeonu
+            // Accordion header
 
             Row(
                 modifier =
@@ -268,7 +261,7 @@ fun WildcardItemCard(
                     modifier = Modifier.weight(1f),
                 )
 
-                // Usunięcie całego klucza ("-")
+                // Remove entire key ("-")
 
                 IconButton(onClick = onRemoveKey, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Remove, "Delete Key", tint = MaterialTheme.colorScheme.error)
@@ -276,7 +269,7 @@ fun WildcardItemCard(
 
                 Spacer(Modifier.width(8.dp))
 
-                // Strzałka rozwijania
+                // Expand arrow
 
                 Icon(
                     imageVector = if (draft.isExpanded.value) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -285,7 +278,7 @@ fun WildcardItemCard(
                 )
             }
 
-            // Zawartość po rozwinięciu
+            // Expanded content
 
             AnimatedVisibility(visible = draft.isExpanded.value) {
                 Column(
@@ -295,7 +288,7 @@ fun WildcardItemCard(
                             .background(MaterialTheme.colorScheme.surface)
                             .padding(16.dp),
                 ) {
-                    // Lista istniejących słów
+                    // List of existing words
 
                     if (draft.words.isEmpty()) {
                         Text(
@@ -314,7 +307,7 @@ fun WildcardItemCard(
                                         .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                // Ozdobny punkt (bullet)
+                                // Decorative bullet
 
                                 Box(
                                     modifier =
@@ -329,7 +322,7 @@ fun WildcardItemCard(
 
                                 Text(text = word, fontSize = 14.sp, modifier = Modifier.weight(1f))
 
-                                // Usunięcie pojedynczego słowa ("-")
+                                // Remove single word ("-")
 
                                 IconButton(
                                     onClick = { draft.words.removeAt(index) },
@@ -352,7 +345,7 @@ fun WildcardItemCard(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Linia horyzontalna do dodawania nowego słowa
+                    // Horizontal line for adding a new word
 
                     var newWordValue by remember { mutableStateOf("") }
 
@@ -374,7 +367,7 @@ fun WildcardItemCard(
 
                         Spacer(modifier = Modifier.width(8.dp))
 
-                        // Przycisk dodawania słowa ("+")
+                        // Add word button ("+")
 
                         IconButton(
                             onClick = {

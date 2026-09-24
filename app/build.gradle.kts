@@ -125,8 +125,7 @@ dependencies{
 
     // ViewModel integration
     implementation(libs.lifecycle.viewmodel.compose)
-    // Jetpack DataStore (Preferences) - Wydajny, asynchroniczny zapis konfiguracji
-    implementation(libs.androidx.datastore.preferences)
+
 
 }
 
@@ -171,6 +170,26 @@ fun registerGenerateJsonTask(variant: String, channelName: String, urlSegment: S
                 val targetApkName = "forgegen-release.apk"
                 val serverPort = 7778
 
+                // Parse CHANGELOG.md
+                val changelogFile = rootProject.file("CHANGELOG.md")
+                var changelogJson = "[\"Changelog for build $calculatedVersionCode\"]"
+
+                if (changelogFile.exists()) {
+                    val lines = changelogFile.readLines()
+                    val changelogList = mutableListOf<String>()
+                    
+                    for (line in lines) {
+                        val trimmed = line.trim()
+                        if (trimmed.startsWith("## ")) continue
+                        
+                        if (trimmed.isNotBlank()) {
+                            val cleaned = trimmed.removePrefix("- ").removePrefix("* ").replace("\"", "\\\"")
+                            changelogList.add(cleaned)
+                        }
+                    }
+                    if (changelogList.isNotEmpty()) changelogJson = changelogList.joinToString(prefix = "[", postfix = "]") { "\"$it\"" }
+                }
+
                 val jsonContent = """
                 {
                   "versionCode": $calculatedVersionCode,
@@ -180,14 +199,7 @@ fun registerGenerateJsonTask(variant: String, channelName: String, urlSegment: S
                   "sha256": "$sha256",
                   "releaseDate": "$releaseDate",
                   "isCritical": false,
-                  "changelog": {
-                    "en": [
-                      "English changelog for build $calculatedVersionCode"
-                    ],
-                    "pl": [
-                      "Polskie tłumaczenie zmian dla buildu $calculatedVersionCode"
-                    ]
-                  }
+                  "changelog": $changelogJson
                 }
                 """.trimIndent()
 

@@ -1,5 +1,6 @@
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.*
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.ContentValues
@@ -9,8 +10,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
@@ -22,6 +21,11 @@ import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 
 /* ============================================================================
  * GALLERY MANAGER
@@ -34,10 +38,10 @@ object ForgeGalleryManager {
     private const val MAX_CHUNK_SIZE = 5 * 1024 * 1024 // 5MB Limit
 
     private lateinit var application: Application
-    private lateinit var db: ForgeDatabase
+    private lateinit var getDb: () -> ForgeDatabase
     private lateinit var networkManager: ForgeNetworkManager
     private val gson = Gson()
-    private val SHOW_META_KEY = booleanPreferencesKey("show_gallery_meta")
+    private const val SHOW_META_KEY = "show_gallery_meta"
     private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val _galleryFiles = MutableStateFlow<List<GalleryItem>>(emptyList())
@@ -67,6 +71,18 @@ object ForgeGalleryManager {
     private val _gallerySyncProgress = MutableStateFlow(0 to 0)
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = _gallerySyncProgress.asStateFlow()
 
+    private val _isGallerySyncing = MutableStateFlow(IndicatorState.IDLE)
+    val isGallerySyncing: StateFlow<IndicatorState> = _isGallerySyncing.asStateFlow()
+
+    private val _isGallerySyncBackgrounded = MutableStateFlow(false)
+    val isGallerySyncBackgrounded: StateFlow<Boolean> = _isGallerySyncBackgrounded.asStateFlow()
+
+    private val _gallerySyncCurrentFile = MutableStateFlow("")
+    val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
+
+    private val _galleryIndexCount = MutableStateFlow(0)
+    val galleryIndexCount: StateFlow<Int> = _galleryIndexCount.asStateFlow()
+
     private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
 
@@ -80,74 +96,121 @@ object ForgeGalleryManager {
     }
 
     // --- FILTERING STATE AND LOGIC (Offloaded from UI) ---
-    private val _favoritesSearchQuery = MutableStateFlow("")
-    val favoritesSearchQuery: StateFlow<String> = _favoritesSearchQuery.asStateFlow()
+    enum class SortOrder { NEWEST, OLDEST, NAME_ASC, NAME_DESC }
 
-    private val _favoritesSortOrder = MutableStateFlow("DESC") // DESC = Najnowsze, ASC = Najstarsze
-    val favoritesSortOrder: StateFlow<String> = _favoritesSortOrder.asStateFlow()
+    data class GalleryFilters(
+        val models: Set<String> = emptySet(),
+        val modelsIsAnd: Boolean = false, // false = OR, true = AND
+        val loras: Set<String> = emptySet(),
+        val lorasIsAnd: Boolean = false,
+        val name: String = "",
+        val prompt: String = "",
+        val sortOrder: SortOrder = SortOrder.NEWEST
+    )
 
-    private val _favoritesFilterModels = MutableStateFlow<Set<String>>(emptySet())
-    val favoritesFilterModels: StateFlow<Set<String>> = _favoritesFilterModels.asStateFlow()
+    // --- FILTERING STATE AND LOGIC (Offloaded from UI) ---
+    private val _galleryFilters = MutableStateFlow(GalleryFilters())
+    val galleryFilters: StateFlow<GalleryFilters> = _galleryFilters.asStateFlow()
+    
+    private val _availableModels = MutableStateFlow<List<String>>(emptyList())
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
+    private val _availableLoras = MutableStateFlow<List<String>>(emptyList())
+    val availableLoras: StateFlow<List<String>> = _availableLoras.asStateFlow()
+
+    private val _allImageMetadata = MutableStateFlow<List<GalleryImageEntity>>(emptyList())
 
     val displayedFiles: StateFlow<List<GalleryItem>> =
         combine(
             _galleryFiles,
             _currentGalleryPath,
-            _favoritesSearchQuery,
-            _favoritesSortOrder,
-            _favoritesFilterModels,
-        ) { files, path, query, sortOrder, filters ->
+            _galleryFilters,
+            _allImageMetadata
+        ) { files, path, filters, metadata ->
             var result = files.toList()
+            val metadataMap = metadata.associateBy { it.fullpath }
 
-            val isSearchActive = query.isNotBlank() || filters.isNotEmpty()
+            val isSearchActive = filters.name.isNotBlank() || filters.prompt.isNotBlank() || filters.models.isNotEmpty() || filters.loras.isNotEmpty()
 
             if (isSearchActive) {
                 // Remove directories from search results
                 result = result.filter { !it.isDir }
 
-                if (::db.isInitialized) {
-                    val dbMatches =
-                        if (query.isNotBlank()) {
-                            db
-                                .galleryImageDao()
-                                .searchImages(query)
-                                .map { it.fullpath }
-                                .toSet()
+                result = result.filter { item ->
+                    val meta = metadataMap[item.fullpath]
+                    if (meta == null) {
+                        // If no metadata is found but filters are active, and we are filtering by name, check name
+                        // Otherwise it fails advanced metadata filters
+                        if (filters.models.isNotEmpty() || filters.loras.isNotEmpty() || filters.prompt.isNotBlank()) {
+                            return@filter false
+                        }
+                        return@filter item.name.contains(filters.name, ignoreCase = true)
+                    }
+
+                    // Name check
+                    if (filters.name.isNotBlank() && !meta.name.contains(filters.name, ignoreCase = true)) {
+                        return@filter false
+                    }
+
+                    // Prompt check
+                    if (filters.prompt.isNotBlank()) {
+                        val promptTag = filters.prompt.lowercase()
+                        if (!meta.positivePrompt.lowercase().contains(promptTag) && !meta.negativePrompt.lowercase().contains(promptTag)) {
+                            return@filter false
+                        }
+                    }
+
+                    // Models check
+                    if (filters.models.isNotEmpty()) {
+                        if (filters.modelsIsAnd) {
+                            // AND logic for models: impossible since an image only has one model, but if enforced:
+                            if (!filters.models.contains(meta.model)) return@filter false
                         } else {
-                            null
+                            // OR logic
+                            if (!filters.models.contains(meta.model)) return@filter false
                         }
+                    }
 
-                    result =
-                        result.filter { item ->
-                            val matchesQuery = dbMatches?.contains(item.fullpath) ?: true
-                            val matchesFilters =
-                                if (filters.isNotEmpty()) {
-                                    filters.any { model -> item.name.contains(model, ignoreCase = true) }
-                                } else {
-                                    true
-                                }
-
-                            matchesQuery && matchesFilters
+                    // Loras check
+                    if (filters.loras.isNotEmpty()) {
+                        val imgLoras = meta.loras.split(",").map { it.trim() }
+                        if (filters.lorasIsAnd) {
+                            if (!filters.loras.all { it in imgLoras }) return@filter false
+                        } else {
+                            if (!filters.loras.any { it in imgLoras }) return@filter false
                         }
-                } else {
-                    if (query.isNotBlank()) {
-                        result = result.filter { it.name.contains(query, ignoreCase = true) }
                     }
-                    if (filters.isNotEmpty()) {
-                        result = result.filter { item -> filters.any { model -> item.name.contains(model, ignoreCase = true) } }
-                    }
+
+                    true
                 }
             }
 
-            if (sortOrder == "ASC") {
-                val dirs = result.filter { it.isDir }
-                val items = result.filter { !it.isDir }.reversed()
-                result = dirs + items
+            // Apply SortOrder
+            when (filters.sortOrder) {
+                SortOrder.NEWEST -> {
+                    val dirs = result.filter { it.isDir }.sortedByDescending { it.name }
+                    val items = result.filter { !it.isDir }.sortedByDescending { it.name }
+                    result = dirs + items
+                }
+                SortOrder.OLDEST -> {
+                    val dirs = result.filter { it.isDir }.sortedBy { it.name }
+                    val items = result.filter { !it.isDir }.sortedBy { it.name }
+                    result = dirs + items
+                }
+                SortOrder.NAME_ASC -> {
+                    val dirs = result.filter { it.isDir }.sortedBy { it.name.lowercase() }
+                    val items = result.filter { !it.isDir }.sortedBy { it.name.lowercase() }
+                    result = dirs + items
+                }
+                SortOrder.NAME_DESC -> {
+                    val dirs = result.filter { it.isDir }.sortedByDescending { it.name.lowercase() }
+                    val items = result.filter { !it.isDir }.sortedByDescending { it.name.lowercase() }
+                    result = dirs + items
+                }
             }
 
             result
-        }.flowOn(Dispatchers.IO)
-            .stateIn(
+        }.stateIn(
                 scope = managerScope,
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList(),
@@ -155,17 +218,25 @@ object ForgeGalleryManager {
 
     fun init(
         app: Application,
-        database: ForgeDatabase,
+        database: () -> ForgeDatabase,
         network: ForgeNetworkManager,
     ) {
         application = app
-        db = database
+        getDb = database
         networkManager = network
+    }
 
+    fun start() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            val prefs = application.dataStore.data.first()
-            _showGalleryMetadata.value = prefs[SHOW_META_KEY] ?: false
-            loadFavoritePaths()
+            if (!::getDb.isInitialized) {
+                android.util.Log.e(TAG, "ForgeGalleryManager start called but getDb is not initialized!")
+                return@launch
+            }
+            _showGalleryMetadata.value = getDb().appSettingDao().getSetting(SHOW_META_KEY)?.value?.toBoolean() ?: false
+            if (::getDb.isInitialized) {
+                updateGalleryIndexCount()
+                fetchAvailableModels()
+            }
         }
     }
 
@@ -173,31 +244,40 @@ object ForgeGalleryManager {
         _galleryMode.value = mode
     }
 
-    fun setFavoritesSearchQuery(query: String) {
-        _favoritesSearchQuery.value = query
+    // === WYSZUKIWANIE I FILTROWANIE ===
+
+    fun applyFilters(filters: GalleryFilters) {
+        _galleryFilters.value = filters
     }
 
-    fun setFavoritesSortOrder(order: String) {
-        _favoritesSortOrder.value = order
+    fun clearFilters() {
+        _galleryFilters.value = GalleryFilters()
     }
 
-    fun toggleFavoriteFilterModel(model: String) {
-        val current = _favoritesFilterModels.value.toMutableSet()
-        if (current.contains(model)) current.remove(model) else current.add(model)
-        _favoritesFilterModels.value = current
+    private suspend fun fetchAvailableModels() {
+        if (::getDb.isInitialized) {
+            try {
+                val allImgs = getDb().galleryImageDao().getAllImages()
+                _allImageMetadata.value = allImgs
+                
+                val models = allImgs.map { it.model }.filter { it.isNotBlank() }.distinct().sorted()
+                _availableModels.value = models
+                
+                val loras = allImgs.flatMap { it.loras.split(",") }.map { it.trim() }.filter { it.isNotBlank() }.distinct().sorted()
+                _availableLoras.value = loras
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to fetch available metadata", e)
+            }
+        }
     }
 
-    fun clearFavoriteFilters() {
-        _favoritesFilterModels.value = emptySet()
-        _favoritesSortOrder.value = "DESC"
-        _favoritesSearchQuery.value = ""
-    }
+
 
     fun toggleGalleryMetadata() {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            application.dataStore.edit { it[SHOW_META_KEY] = newVal }
+            getDb().appSettingDao().putSetting(AppSettingEntity("show_gallery_meta", newVal.toString()))
         }
     }
 
@@ -210,7 +290,7 @@ object ForgeGalleryManager {
     }
 
     private suspend fun loadFavoritePaths() {
-        val favs = db.favoriteImageDao().getAllFavorites()
+        val favs = getDb().favoriteImageDao().getAllFavorites()
         _favoritePaths.value = favs.map { it.fullpath }.toSet()
     }
 
@@ -220,13 +300,13 @@ object ForgeGalleryManager {
             return
         }
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            _isCurrentFavorite.value = db.favoriteImageDao().isFavorite(path)
+            _isCurrentFavorite.value = getDb().favoriteImageDao().isFavorite(path)
         }
     }
 
     fun toggleFavorite(item: GalleryItem) {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            val dao = db.favoriteImageDao()
+            val dao = getDb().favoriteImageDao()
             val isFav = dao.isFavorite(item.fullpath)
 
             if (isFav) {
@@ -244,8 +324,7 @@ object ForgeGalleryManager {
                     FavoriteImageEntity(
                         fullpath = item.fullpath,
                         name = item.name,
-                        date = item.date,
-                        savedAt = System.currentTimeMillis(),
+                        date = item.date ?: "",
                     ),
                 )
                 _isCurrentFavorite.value = true
@@ -254,8 +333,28 @@ object ForgeGalleryManager {
         }
     }
 
-    private fun encodeFolderPath(path: String?): String? {
-        if (path == null) return null
+    private fun updateGalleryIndexCount() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            if (::getDb.isInitialized) {
+                val count = getDb().galleryImageDao().getCount()
+                _galleryIndexCount.value = count
+                fetchAvailableModels()
+            }
+        }
+    }
+
+    fun clearDatabase() {
+        managerScope.launch(Dispatchers.IO) {
+            getDb().galleryImageDao().clearAll()
+            _galleryIndexCount.value = 0
+            withContext(Dispatchers.Main) {
+                ForgeRepository.showToast("Gallery Index Wiped")
+            }
+        }
+    }
+
+    private fun encodeFolderPath(path: String?): String {
+        if (path == null) return ""
         val normalizedPath = path.replace("\\", "/")
         return try {
             java.net.URLEncoder
@@ -274,7 +373,7 @@ object ForgeGalleryManager {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
                 if (path == "virtual://favorites") {
-                    val favorites = db.favoriteImageDao().getAllFavorites()
+                    val favorites = getDb().favoriteImageDao().getAllFavorites()
                     val items =
                         favorites.map {
                             GalleryItem(
@@ -291,7 +390,25 @@ object ForgeGalleryManager {
                     return@launch
                 }
 
-                val targetFolder = if (path.isNotEmpty() && path != "Root") encodeFolderPath(path) else null
+                if (path == "virtual://pinned") {
+                    val pinnedPaths = ForgeSettingsManager.pinnedImages.value
+                    val items = pinnedPaths.map { p ->
+                        val existing = getDb().galleryImageDao().getImageByPath(p)
+                        GalleryItem(
+                            name = existing?.name ?: p.substringAfterLast("/").substringAfterLast("\\"),
+                            fullpath = p,
+                            type = "file",
+                            date = existing?.date,
+                            createdTime = null,
+                            size = null,
+                        )
+                    }
+                    _galleryFiles.value = items
+                    _currentGalleryPath.value = path
+                    return@launch
+                }
+
+                val targetFolder = if (path.isNotEmpty() && path != "Root") encodeFolderPath(path) else ""
                 val prefix = networkManager.galleryApiPrefix.value
                 val response = networkManager.forgeApi?.getGalleryFilesDynamic(url = "$prefix/files", folderPath = targetFolder)
                 val configGalleryPath = ForgeRepository.config.value.galleryPath
@@ -302,14 +419,13 @@ object ForgeGalleryManager {
 
                     if (path == "Root" || path == configGalleryPath) {
                         allItems.add(0, GalleryItem(name = "⭐ Favorites", fullpath = "virtual://favorites", type = "dir"))
+                        if (ForgeSettingsManager.pinnedImages.value.isNotEmpty()) {
+                            allItems.add(1, GalleryItem(name = "📌 Pinned", fullpath = "virtual://pinned", type = "dir"))
+                        }
                     }
 
                     _galleryFiles.value = allItems
                     _currentGalleryPath.value = path
-
-                    if (ForgeRepository.config.value.gallerySyncMode == GallerySyncMode.ON_ENTRY) {
-                        syncGalleryDatabase(path, allItems)
-                    }
                 } else if (response?.code() == 400 && path.isNotEmpty() && path != "Root") {
                     fetchGalleryFolder("Root")
                 } else if (response?.code() == 401 || response?.code() == 403) {
@@ -329,91 +445,184 @@ object ForgeGalleryManager {
 
     fun triggerManualGallerySync() {
         if (_currentGalleryPath.value.isEmpty()) return
+        _isGallerySyncBackgrounded.value = false
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            val items = _galleryFiles.value.filter { !it.isDir }
-            syncGalleryDatabase(_currentGalleryPath.value, items)
-            withContext(Dispatchers.Main) {
-                ForgeRepository.showToast("Gallery Indexed Successfully")
+            syncGalleryDatabase(_currentGalleryPath.value)
+            syncJob?.join()
+            if (!_isGallerySyncBackgrounded.value) {
+                withContext(Dispatchers.Main) {
+                    ForgeRepository.showToast("Gallery Indexed Successfully")
+                }
             }
+            _isGallerySyncing.value = IndicatorState.IDLE
+            _isGallerySyncBackgrounded.value = false
         }
     }
 
-    fun syncGalleryDatabase(
-        folderPath: String,
-        items: List<GalleryItem>,
-    ) {
-        if (folderPath == "virtual://favorites" || folderPath == "Root") return
+    fun cancelManualGallerySync() {
+        syncJob?.cancel()
+        _isGallerySyncing.value = IndicatorState.IDLE
+        _isGallerySyncBackgrounded.value = false
+        val notificationManager = NotificationManagerCompat.from(application)
+        notificationManager.cancel(555)
+    }
+
+    fun putSyncToBackground() {
+        _isGallerySyncBackgrounded.value = true
+        _isGallerySyncing.value = IndicatorState.IDLE
+    }
+
+    private suspend fun scanDirectoryDeep(folderPath: String, currentDepth: Int, maxDepth: Int = 2): List<GalleryItem> {
+        val prefix = networkManager.galleryApiPrefix.value
+        val response = networkManager.forgeApi?.getGalleryFilesDynamic(url = "$prefix/files", folderPath = encodeFolderPath(folderPath))
+        if (response?.isSuccessful == true) {
+            val responseBody = response.body()?.string() ?: ""
+            val items = parseGalleryItems(responseBody)
+            val files = items.filter { !it.isDir }.toMutableList()
+            if (currentDepth < maxDepth) {
+                val dirs = items.filter { it.isDir && it.name != "Root" && !it.name.contains("favorites") }
+                for (dir in dirs) {
+                    files.addAll(scanDirectoryDeep(dir.fullpath, currentDepth + 1, maxDepth))
+                }
+            }
+            return files
+        }
+        return emptyList()
+    }
+
+    fun syncGalleryDatabase(folderPath: String) {
+        if (folderPath == "virtual://favorites" || folderPath == "virtual://pinned" || folderPath == "Root") return
         syncJob?.cancel()
         syncJob =
             managerScope.launch(Dispatchers.IO) {
-                val dao = db.galleryImageDao()
-                val files = items.filter { !it.isDir }
+                _isGallerySyncing.value = IndicatorState.LOADING
+                val dao = getDb().galleryImageDao()
+                
+                Log.d("GallerySync", "Scanning directory tree for files: '$folderPath'...")
+                val files = scanDirectoryDeep(folderPath, 0)
                 val total = files.size
                 _gallerySyncProgress.value = 0 to total
+                
+                Log.d("GallerySync", "Starting sync for $total files in '$folderPath'...")
 
-                for ((index, file) in files.withIndex()) {
-                    if (!isActive) break
-                    _gallerySyncProgress.value = index to total
+                if (total == 0) {
+                    Log.w("GallerySync", "No images found to sync. Is the folder empty?")
+                }
 
-                    val existing = dao.getImageByPath(file.fullpath)
-                    if (existing == null) {
-                        val prefix = networkManager.galleryApiPrefix.value
-                        val request = Request.Builder().url("$prefix/file?path=${encodeFolderPath(file.fullpath)}").build()
-                        try {
-                            val response = networkManager.client.newCall(request).execute()
-                            val stream = response.body.byteStream()
-                            val infoStr = extractPngParameters(stream)
+                val processedCount = java.util.concurrent.atomic.AtomicInteger(0)
+                val channel = kotlinx.coroutines.channels.Channel<GalleryItem>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+                files.forEach { channel.trySend(it) }
+                channel.close()
 
-                            var posPrompt = ""
-                            var negPrompt = ""
-                            var model = ""
-                            var sampler = ""
-                            var seed = ""
-                            var loras = ""
+                val workers = List(2) {
+                    launch(Dispatchers.IO) {
+                        for (file in channel) {
+                            if (!isActive) break
+                            _gallerySyncCurrentFile.value = file.name
 
-                            if (infoStr.isNotEmpty()) {
-                                val lines = infoStr.split("\n")
-                                if (lines.isNotEmpty()) {
-                                    posPrompt =
-                                        lines[0].takeIf { !it.startsWith("Negative prompt:") && !it.startsWith("Steps:") } ?: ""
-                                }
-                                val negIndex = lines.indexOfFirst { it.startsWith("Negative prompt:") }
-                                if (negIndex != -1) negPrompt = lines[negIndex].substringAfter("Negative prompt:").trim()
+                            val existing = dao.getImageByPath(file.fullpath)
+                            if (existing == null) {
+                                Log.d("GallerySync", "Fetching: ${file.name}...")
+                                val imageUrl = getGalleryImageUrl(file)
+                                val request = Request.Builder().url(imageUrl).build()
+                                try {
+                                    val response = networkManager.client.newCall(request).execute()
+                                    if (!response.isSuccessful) {
+                                        Log.e("GallerySync", "Error ${response.code} fetching ${file.name}")
+                                    }
+                                    
+                                    val stream = response.body.byteStream()
+                                    val infoStr = extractPngParameters(stream)
 
-                                val paramLine = lines.lastOrNull { it.contains("Steps:") } ?: ""
-                                val params =
-                                    paramLine.split(",").associate {
-                                        val parts = it.split(":")
-                                        if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
+                                    var posPrompt = ""
+                                    var negPrompt = ""
+                                    var model = ""
+                                    var sampler = ""
+                                    var seed = ""
+                                    var loras = ""
+
+                                    if (infoStr.isNotEmpty()) {
+                                        val lines = infoStr.split("\n")
+                                        if (lines.isNotEmpty()) {
+                                            posPrompt =
+                                                lines[0].takeIf { !it.startsWith("Negative prompt:") && !it.startsWith("Steps:") } ?: ""
+                                        }
+                                        val negIndex = lines.indexOfFirst { it.startsWith("Negative prompt:") }
+                                        if (negIndex != -1) negPrompt = lines[negIndex].substringAfter("Negative prompt:").trim()
+
+                                        val paramLine = lines.lastOrNull { it.contains("Steps:") } ?: ""
+                                        val params =
+                                            paramLine.split(",").associate {
+                                                val parts = it.split(":")
+                                                if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
+                                            }
+
+                                        model = params["Model"] ?: ""
+                                        sampler = params["Sampler"] ?: ""
+                                        seed = params["Seed"] ?: ""
+
+                                        val loraRegex = Regex("<lora:([^:]+):[^>]+>")
+                                        loras = loraRegex.findAll(posPrompt).map { it.groupValues[1] }.joinToString(",")
+                                        Log.d("GallerySync", "Parsed metadata for ${file.name}")
+                                    } else {
+                                        Log.w("GallerySync", "No metadata found in ${file.name}")
                                     }
 
-                                model = params["Model"] ?: ""
-                                sampler = params["Sampler"] ?: ""
-                                seed = params["Seed"] ?: ""
-
-                                val loraRegex = Regex("<lora:([^:]+):[^>]+>")
-                                loras = loraRegex.findAll(posPrompt).map { it.groupValues[1] }.joinToString(",")
+                                    val entity =
+                                        GalleryImageEntity(
+                                            fullpath = file.fullpath,
+                                            name = file.name,
+                                            date = file.date ?: "",
+                                            positivePrompt = posPrompt,
+                                            negativePrompt = negPrompt,
+                                            model = model,
+                                            sampler = sampler,
+                                            seed = seed,
+                                            loras = loras,
+                                            savedAt = System.currentTimeMillis(),
+                                        )
+                                    dao.insertImage(entity)
+                                    Log.d("GallerySync", "Indexed: ${file.name}")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Sync failed for ${file.fullpath}: ${e.message}")
+                                }
+                            } else {
+                                // Silent skip as requested
                             }
+                            
+                            val current = processedCount.incrementAndGet()
+                            _gallerySyncProgress.value = current to total
 
-                            val entity =
-                                GalleryImageEntity(
-                                    fullpath = file.fullpath,
-                                    name = file.name,
-                                    date = file.date ?: "",
-                                    positivePrompt = posPrompt,
-                                    negativePrompt = negPrompt,
-                                    model = model,
-                                    sampler = sampler,
-                                    seed = seed,
-                                    loras = loras,
-                                    savedAt = System.currentTimeMillis(),
-                                )
-                            dao.insertImage(entity)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Sync failed for ${file.fullpath}: ${e.message}")
+                            if (_isGallerySyncBackgrounded.value &&
+                                ContextCompat.checkSelfPermission(application, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                val notificationManager = NotificationManagerCompat.from(application)
+                                val notification = NotificationCompat.Builder(application, "forge_low")
+                                    .setSmallIcon(R.drawable.ic_launcher_foreground)
+                                    .setContentTitle("Indexing Gallery...")
+                                    .setContentText("$current / $total images")
+                                    .setProgress(total, current, false)
+                                    .setOngoing(true)
+                                    .setSilent(true)
+                                    .build()
+                                notificationManager.notify(555, notification)
+                            }
                         }
                     }
                 }
+                
+                workers.joinAll()
+                _isGallerySyncing.value = IndicatorState.SUCCESS
+                
+                // Remove notification if it exists
+                if (_isGallerySyncBackgrounded.value) {
+                    val notificationManager = NotificationManagerCompat.from(application)
+                    notificationManager.cancel(555)
+                }
+
+                updateGalleryIndexCount()
+                delay(1500)
+                _isGallerySyncing.value = IndicatorState.IDLE
                 _gallerySyncProgress.value = 0 to 0
             }
     }
@@ -661,7 +870,7 @@ object ForgeGalleryManager {
                             ) {
                                 encodeFolderPath(folder)
                             } else {
-                                null
+                                ""
                             },
                     )
                 if (response?.isSuccessful == true) {
@@ -695,10 +904,14 @@ object ForgeGalleryManager {
         }
         if (candidateImages.isEmpty()) candidateImages.addAll(rootItems.filter { !it.isDir })
 
-        val targetFile =
-            candidateImages.maxByOrNull { item ->
+        val targetFile = candidateImages.maxWithOrNull(
+            compareBy<GalleryItem> { item ->
+                val match = "^(\\d+)-".toRegex().find(item.name)
+                match?.groupValues?.get(1)?.toLongOrNull() ?: -1L
+            }.thenBy { item ->
                 item.createdTime?.toDoubleOrNull() ?: item.date?.toDoubleOrNull() ?: 0.0
             }
+        )
         if (targetFile != null) {
             val imageUrl = getGalleryImageUrl(targetFile)
             if (imageUrl.isNotEmpty()) {
@@ -734,21 +947,7 @@ object ForgeGalleryManager {
 
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
-                // 1. Check local cache
-                val localInfoStr = ForgeSettingsManager.loadLastGeneratedInfo()
-                val localImgFile = java.io.File(application.cacheDir, "last_generated_image.png")
-
-                if (localInfoStr != null && localImgFile.exists()) {
-                    val bytes = localImgFile.readBytes()
-                    ForgeQueueManager.saveRecoveredImageToCache(bytes)
-                    val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    ForgeQueueManager.setLivePreviewImage(base64Str)
-                    withContext(Dispatchers.Main) { parseAndApplyPngInfo(localInfoStr) }
-                    _isRestoringPrompt.value = IndicatorState.SUCCESS
-                    return@launch
-                }
-
-                // 2. Fetch from server gallery
+                // 1. Fetch from server gallery
                 val galleryInfoStr = fetchLastGeneratedImageInfo()
                 if (galleryInfoStr != null) {
                     val tempFile = java.io.File(application.cacheDir, "last_generated_image.png") // fetchLastGeneratedImageInfo might not save here but we can use the latest session image
@@ -759,6 +958,20 @@ object ForgeGalleryManager {
                         ForgeQueueManager.setLivePreviewImage(base64Str)
                     }
                     withContext(Dispatchers.Main) { parseAndApplyPngInfo(galleryInfoStr) }
+                    _isRestoringPrompt.value = IndicatorState.SUCCESS
+                    return@launch
+                }
+
+                // 2. Check local cache (Fallback)
+                val localInfoStr = ForgeSettingsManager.loadLastGeneratedInfo()
+                val localImgFile = java.io.File(application.cacheDir, "last_generated_image.png")
+
+                if (localInfoStr != null && localImgFile.exists()) {
+                    val bytes = localImgFile.readBytes()
+                    ForgeQueueManager.saveRecoveredImageToCache(bytes)
+                    val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    ForgeQueueManager.setLivePreviewImage(base64Str)
+                    withContext(Dispatchers.Main) { parseAndApplyPngInfo(localInfoStr) }
                     _isRestoringPrompt.value = IndicatorState.SUCCESS
                     return@launch
                 }

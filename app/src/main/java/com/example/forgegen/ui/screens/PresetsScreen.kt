@@ -1,5 +1,8 @@
 
-package com.example.forgegen
+package com.example.forgegen.ui.screens
+import com.example.forgegen.*
+import com.example.forgegen.ui.components.*
+import com.example.forgegen.*
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -12,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color

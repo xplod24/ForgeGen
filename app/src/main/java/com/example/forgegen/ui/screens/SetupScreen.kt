@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import com.example.forgegen.ui.screens.PreferenceCategory
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -35,11 +36,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import retrofit2.awaitResponse
@@ -125,9 +123,11 @@ fun TextPreference(
 fun SetupScreen(
     viewModel: ForgeViewModel,
     navController: NavHostController,
+    onDismiss: () -> Unit = {},
 ) {
     // --- STATE OBSERVATION ---
     val config by viewModel.config.collectAsStateWithLifecycle()
+    val appState by viewModel.appState.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
     val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
     val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
@@ -135,12 +135,10 @@ fun SetupScreen(
 
     // --- DIALOG VISIBILITY STATES ---
     var showUrlDialog by remember { mutableStateOf(false) }
-    var showBasePathDialog by remember { mutableStateOf(false) }
-    var showPathDialog by remember { mutableStateOf(false) }
+
     var showTimeoutDialog by remember { mutableStateOf(false) }
-    var showCheckpointTimeoutDialog by remember { mutableStateOf(false) }
+
     var showProfilesDialog by remember { mutableStateOf(false) }
-    var showPreviewModeDialog by remember { mutableStateOf(false) }
 
     var showNotificationModeDialog by remember { mutableStateOf(false) }
     var showUpdateChannelDialog by remember { mutableStateOf(false) }
@@ -186,120 +184,119 @@ fun SetupScreen(
         }
 
     // --- UI STRUCTURE ---
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-            )
-        },
-    ) { padding ->
+    Scaffold() { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
             /* ==========================================================
              * CATEGORY: SERVER CONNECTION
+             * ========================================================== */            /* ==========================================================
+             * TOP ACTION CHIPS
              * ========================================================== */
-            item { PreferenceCategory("Server Connection") }
             item {
-                TextPreference(title = "API URL", value = config.apiUrl) { showUrlDialog = true }
-            }
-            item {
-                TextPreference(title = "Server Profiles", subtitle = "${config.serverProfiles.size} saved profiles", value = "") {
-                    showProfilesDialog =
-                        true
-                }
-            }
-            item {
-                TextPreference(title = "Connection Timeout", subtitle = "${config.connectionTimeout} seconds", value = "") {
-                    showTimeoutDialog =
-                        true
-                }
-            }
-            item {
-                TextPreference(title = "Checkpoint Load Timeout", subtitle = "${config.checkpointTimeout} seconds", value = "") {
-                    showCheckpointTimeoutDialog =
-                        true
-                }
-            }
-            item {
-                TextPreference(title = "Test Connection", subtitle = "Run API diagnostics", value = "") {
-                    isTestingConnection = true
-                    testStatus = "Running diagnostics..."
-                    testResults = emptyList()
+                @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 0.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier.weight(1f).padding(top = 8.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        ElevatedFilterChip(
+                            selected = false,
+                            onClick = { showUrlDialog = true },
+                            label = { Text("API: ${config.apiUrl}") }
+                        )
+                        ElevatedFilterChip(
+                            selected = false,
+                            onClick = { showProfilesDialog = true },
+                            label = { Text("Profiles: ${config.serverProfiles.size}") }
+                        )
+                        ElevatedFilterChip(
+                            selected = false,
+                            onClick = { showTimeoutDialog = true },
+                            label = { Text("Timeout: ${config.timeout}s") }
+                        )
 
-                    scope.launch(Dispatchers.IO) {
-                        val testClientBuilder =
-                            OkHttpClient
-                                .Builder()
-                                .connectTimeout(1, TimeUnit.SECONDS)
-                                .readTimeout(1, TimeUnit.SECONDS)
-                        testClientBuilder.addInterceptor { chain ->
-                            val reqBuilder = chain.request().newBuilder()
-                            reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                            chain.proceed(reqBuilder.build())
-                        }
-                        val testClient = testClientBuilder.build()
-                        val endpoints = listOf("progress", "memory", "options", "samplers", "schedulers", "sd-models", "loras")
-                        val resultsMap = java.util.concurrent.ConcurrentHashMap<String, String>()
+                        ElevatedFilterChip(
+                            selected = false,
+                            onClick = {
+                                isTestingConnection = true
+                                testStatus = "Running diagnostics..."
+                                testResults = emptyList()
 
-                        kotlinx.coroutines.coroutineScope {
-                            val deferreds =
-                                endpoints.map { ep ->
-                                    async {
-                                        val start = System.currentTimeMillis()
-                                        try {
-                                            var cleanUrl = config.apiUrl.trimEnd('/')
-                                            if (cleanUrl.isNotEmpty() &&
-                                                !cleanUrl.startsWith("http://") &&
-                                                !cleanUrl.startsWith("https://")
-                                            ) {
-                                                cleanUrl = "http://$cleanUrl"
-                                            }
+                                scope.launch(Dispatchers.IO) {
+                                    val testClientBuilder =
+                                        okhttp3.OkHttpClient
+                                            .Builder()
+                                            .connectTimeout(1, java.util.concurrent.TimeUnit.SECONDS)
+                                            .readTimeout(1, java.util.concurrent.TimeUnit.SECONDS)
+                                    testClientBuilder.addInterceptor { chain ->
+                                        val reqBuilder = chain.request().newBuilder()
+                                        reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
+                                        chain.proceed(reqBuilder.build())
+                                    }
+                                    val testClient = testClientBuilder.build()
+                                    val endpoints = listOf("progress", "memory", "options", "samplers", "schedulers", "sd-models", "loras")
+                                    val resultsMap = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-                                            val req = Request.Builder().url("$cleanUrl/sdapi/v1/$ep").build()
-                                            testClient.newCall(req).awaitResponse().use { res ->
-                                                val time = System.currentTimeMillis() - start
-                                                if (res.isSuccessful) {
-                                                    resultsMap[ep] = "${time}ms \u2714"
-                                                } else if (res.code == 401 || res.code == 403) {
-                                                    resultsMap[ep] = "Auth Needed \u2718"
-                                                } else {
-                                                    resultsMap[ep] = "Err ${res.code} \u2718"
+                                    coroutineScope {
+                                        val deferreds =
+                                            endpoints.map { ep ->
+                                                async {
+                                                    val start = System.currentTimeMillis()
+                                                    try {
+                                                        var cleanUrl = config.apiUrl.trimEnd('/')
+                                                        if (cleanUrl.isNotEmpty() &&
+                                                            !cleanUrl.startsWith("http://") &&
+                                                            !cleanUrl.startsWith("https://")
+                                                        ) {
+                                                            cleanUrl = "http://$cleanUrl"
+                                                        }
+
+                                                        val req = okhttp3.Request.Builder().url("$cleanUrl/sdapi/v1/$ep").build()
+                                                        testClient.newCall(req).execute().use { res ->
+                                                            val time = System.currentTimeMillis() - start
+                                                            if (res.isSuccessful) {
+                                                                resultsMap[ep] = "${time}ms ✔"
+                                                            } else if (res.code == 401 || res.code == 403) {
+                                                                resultsMap[ep] = "Auth Needed ✘"
+                                                            } else {
+                                                                resultsMap[ep] = "Err ${res.code} ✘"
+                                                            }
+                                                        }
+                                                    } catch (_: Exception) {
+                                                        resultsMap[ep] = "Failed ✘"
+                                                    }
                                                 }
                                             }
-                                        } catch (_: Exception) {
-                                            resultsMap[ep] = "Failed \u2718"
+                                        deferreds.awaitAll()
+                                    }
+
+                                    val finalResults = endpoints.map { it to (resultsMap[it] ?: "Timeout ✘") }
+                                    val allSuccess = finalResults.all { it.second.contains("✔") }
+
+                                    withContext(Dispatchers.Main) {
+                                        testResults = finalResults
+                                        testStatus = if (allSuccess) "All Systems Operational!" else "Some APIs Failed."
+                                        if (!allSuccess) {
+                                            val failedEps = finalResults.filter { !it.second.contains("✔") }.map { it.first }
+                                            viewModel.showToast("Unresponsive: ${failedEps.joinToString(", ")}")
                                         }
                                     }
                                 }
-                            deferreds.awaitAll()
-                        }
-
-                        val finalResults = endpoints.map { it to (resultsMap[it] ?: "Timeout \u2718") }
-                        val allSuccess = finalResults.all { it.second.contains("\u2714") }
-
-                        withContext(Dispatchers.Main) {
-                            testResults = finalResults
-                            testStatus = if (allSuccess) "All Systems Operational!" else "Some APIs Failed."
-                            if (!allSuccess) {
-                                val failedEps = finalResults.filter { !it.second.contains("\u2714") }.map { it.first }
-                                viewModel.showToast("Unresponsive: ${failedEps.joinToString(", ")}")
-                            }
-                        }
+                            },
+                            label = { Text("Diagnostics") }
+                        )
                     }
                 }
             }
 
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
-            /* ==========================================================
-             * CATEGORY: METADATA & CIVITAI
-             * ========================================================== */
-            item { PreferenceCategory("Metadata & Civitai") }
+
+            item { ExpandableCategoryHeader("Metadata & Civitai", appState, viewModel) }
+            if ("Metadata & Civitai" in appState.setupExpandedSections) {
+
             item {
                 TextPreference(
                     title = "Sync Models Now",
@@ -314,8 +311,11 @@ fun SetupScreen(
 
             /* ==========================================================
              * CATEGORY: SECURITY
-             * ========================================================== */
-            item { PreferenceCategory("Security") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Security", appState, viewModel) }
+            if ("Security" in appState.setupExpandedSections) {
+
             if (!isDeviceSecure) {
                 item {
                     Text(
@@ -353,105 +353,14 @@ fun SetupScreen(
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
-            /* ==========================================================
-             * CATEGORY: PATHS & MEDIA
-             * ========================================================== */
-            item { PreferenceCategory("Paths & Media") }
-            item {
-                TextPreference(
-                    title = "Auto-Configure Server Paths",
-                    subtitle = "Tap to auto-detect base and gallery folders from server",
-                    value = "",
-                ) {
-                    viewModel.showToast("Requesting paths from server...")
-                    viewModel.fetchAutoConfig()
-                }
-            }
-            item {
-                TextPreference(
-                    title = "Server Base Path",
-                    value = config.serverBasePath.ifEmpty { "Not set" },
-                ) { showBasePathDialog = true }
-            }
-            item {
-                TextPreference(title = "Gallery Server Path", value = config.galleryPath.ifEmpty { "Not set" }) { showPathDialog = true }
-            }
-            item {
-                SwitchPreference(
-                    title = "Swipe to Browse Images",
-                    subtitle = "Use horizontal swiping in fullscreen preview",
-                    checked = config.swipeToBrowseGallery,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(swipeToBrowseGallery = it)) },
-                )
-            }
-            item {
-                SwitchPreference(
-                    title = "Show Grid After Batch",
-                    subtitle = "Temporarily show a grid of images when a batch generation finishes",
-                    checked = config.showGridAfterGeneration,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) },
-                )
-            }
-
-            item {
-                TextPreference(
-                    title = "Index Gallery Now",
-                    subtitle = "Recursively fetch metadata and index all images in the database",
-                    value = "",
-                ) {
-                    viewModel.showToast("Indexing Gallery...")
-                    viewModel.triggerManualGallerySync()
-                }
-            }
-            item {
-                var showGallerySyncModeDialog by remember { mutableStateOf(false) }
-
-                TextPreference(
-                    title = "Gallery Sync Mode",
-                    subtitle = "When to index gallery metadata: ${if (config.gallerySyncMode == GallerySyncMode.ON_ENTRY) "On Entry" else "Manual"}",
-                    value = "",
-                ) {
-                    showGallerySyncModeDialog = true
-                }
-
-                if (showGallerySyncModeDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showGallerySyncModeDialog = false },
-                        title = { Text("Gallery Sync Mode") },
-                        text = {
-                            Column {
-                                listOf(GallerySyncMode.MANUAL, GallerySyncMode.ON_ENTRY).forEach { mode ->
-                                    val label = if (mode == GallerySyncMode.ON_ENTRY) "On Entry" else "Manual"
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier =
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    viewModel.saveConfig(config.copy(gallerySyncMode = mode))
-                                                    showGallerySyncModeDialog = false
-                                                }.padding(vertical = 8.dp),
-                                    ) {
-                                        RadioButton(selected = config.gallerySyncMode == mode, onClick = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(label)
-                                    }
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = { showGallerySyncModeDialog = false }) { Text("Close") }
-                        },
-                    )
-                }
-            }
-
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
             /* ==========================================================
              * CATEGORY: APPEARANCE & UI
-             * ========================================================== */
-            item { PreferenceCategory("Appearance & UI") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Appearance & UI", appState, viewModel) }
+            if ("Appearance & UI" in appState.setupExpandedSections) {
+
             item {
                 SwitchPreference(
                     title = "Enable Dark Mode",
@@ -467,20 +376,7 @@ fun SetupScreen(
                     onCheckedChange = { viewModel.saveConfig(config.copy(bottomSheetExpandedByDefault = it)) },
                 )
             }
-            item {
-                val currentModeDisplay =
-                    when (config.previewMode) {
-                        "None" -> "Loading circle"
-                        "Finished" -> "Only last finished batch"
-                        "Normal" -> "Normal preview"
-                        else -> "Normal preview"
-                    }
-                TextPreference(
-                    title = "Preview Mode",
-                    value = currentModeDisplay,
-                    subtitle = "Choose how images are displayed during generation",
-                ) { showPreviewModeDialog = true }
-            }
+
             item {
                 SwitchPreference(
                     title = "Show Active Tags UI",
@@ -502,8 +398,11 @@ fun SetupScreen(
 
             /* ==========================================================
              * CATEGORY: PUSH NOTIFICATIONS
-             * ========================================================== */
-            item { PreferenceCategory("Push Notifications") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Push Notifications", appState, viewModel) }
+            if ("Push Notifications" in appState.setupExpandedSections) {
+
             item {
                 SwitchPreference(
                     title = "Show Foreground Service Notification",
@@ -565,8 +464,11 @@ fun SetupScreen(
 
             /* ==========================================================
              * CATEGORY: BACKGROUND SERVICE & ADVANCED
-             * ========================================================== */
-            item { PreferenceCategory("Background Service & Advanced") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Background Service & Advanced", appState, viewModel) }
+            if ("Background Service & Advanced" in appState.setupExpandedSections) {
+
             item {
                 SwitchPreference(
                     title = "Run in Background",
@@ -601,14 +503,18 @@ fun SetupScreen(
 
             /* ==========================================================
              * CATEGORY: APP UPDATES
-             * ========================================================== */
-            item { PreferenceCategory("App Updates") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("App Updates", appState, viewModel) }
+            if ("App Updates" in appState.setupExpandedSections) {
+
             item {
                 TextPreference(
                     title = "Check for Updates",
                     subtitle = "Look for new versions on the server",
                     value = "",
                 ) {
+                    dismissedUpdateVersion = -1
                     viewModel.checkForUpdates(manual = true)
                 }
             }
@@ -626,8 +532,7 @@ fun SetupScreen(
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text("Update Available: ${manifest.versionName}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                             Spacer(Modifier.height(4.dp))
-                            val lang = androidx.compose.ui.text.intl.Locale.current.language
-                            val changelogText = manifest.changelog?.get(lang) ?: manifest.changelog?.get("en") ?: emptyList()
+                            val changelogText = manifest.changelog ?: emptyList()
                             if (changelogText.isNotEmpty()) {
                                 Text("What's new:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                                 changelogText.take(3).forEach { Text("• $it", fontSize = 12.sp) }
@@ -653,8 +558,11 @@ fun SetupScreen(
 
             /* ==========================================================
              * CATEGORY: DANGER ZONE
-             * ========================================================== */
-            item { PreferenceCategory("Danger Zone") }
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Danger Zone", appState, viewModel) }
+            if ("Danger Zone" in appState.setupExpandedSections) {
+
             item {
                 TextPreference(
                     title = "Wipe Application Data",
@@ -666,6 +574,7 @@ fun SetupScreen(
             }
 
             item { Spacer(Modifier.height(32.dp)) }
+            }
         }
 
         /* ==========================================================
@@ -678,6 +587,7 @@ fun SetupScreen(
             var wipeProfiles by remember { mutableStateOf(false) }
             var wipeHistory by remember { mutableStateOf(false) }
             var wipeWildcards by remember { mutableStateOf(false) }
+            var wipeImages by remember { mutableStateOf(false) }
 
             val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
             val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
@@ -709,6 +619,10 @@ fun SetupScreen(
                             Checkbox(checked = wipeWildcards, onCheckedChange = { wipeWildcards = it })
                             Text("Wildcards (${wildcards.size} items)", fontSize = 14.sp)
                         }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = wipeImages, onCheckedChange = { wipeImages = it })
+                            Text("Images Index (Re-fetch later)", fontSize = 14.sp)
+                        }
                     }
                 },
                 confirmButton = {
@@ -718,7 +632,8 @@ fun SetupScreen(
                         if (wipeProfiles) viewModel.wipeServerProfiles()
                         if (wipeHistory) viewModel.wipePromptHistory()
                         if (wipeWildcards) viewModel.wipeWildcards()
-                        if (!wipeSettings && !wipePresets && !wipeProfiles && !wipeHistory && !wipeWildcards) {
+                        if (wipeImages) viewModel.wipeGalleryIndex()
+                        if (!wipeSettings && !wipePresets && !wipeProfiles && !wipeHistory && !wipeWildcards && !wipeImages) {
                             viewModel.wipeAllData()
                         }
                         viewModel.showToast("Selected data wiped")
@@ -794,35 +709,7 @@ fun SetupScreen(
             )
         }
 
-        if (showPreviewModeDialog) {
-            AlertDialog(
-                onDismissRequest = { showPreviewModeDialog = false },
-                title = { Text("Preview Mode") },
-                text = {
-                    Column {
-                        val modes = listOf("Loading circle", "Only last finished batch", "Normal preview")
-                        val internalModes = listOf("None", "Finished", "Normal")
-                        modes.forEachIndexed { index, display ->
-                            Row(
-                                modifier =
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            viewModel.saveConfig(config.copy(previewMode = internalModes[index]))
-                                            showPreviewModeDialog = false
-                                        }.padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(selected = config.previewMode == internalModes[index], onClick = null)
-                                Spacer(Modifier.width(16.dp))
-                                Text(display, fontSize = 16.sp)
-                            }
-                        }
-                    }
-                },
-                confirmButton = { TextButton(onClick = { showPreviewModeDialog = false }) { Text("Close") } },
-            )
-        }
+
 
         if (showUrlDialog) {
             var tempUrl by remember { mutableStateOf(config.apiUrl) }
@@ -840,40 +727,9 @@ fun SetupScreen(
             )
         }
 
-        if (showBasePathDialog) {
-            var tempPath by remember { mutableStateOf(config.serverBasePath) }
-            AlertDialog(
-                onDismissRequest = { showBasePathDialog = false },
-                title = { Text("Server Base Path") },
-                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.saveConfig(config.copy(serverBasePath = tempPath))
-                        showBasePathDialog = false
-                    }) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showBasePathDialog = false }) { Text("Cancel") } },
-            )
-        }
-
-        if (showPathDialog) {
-            var tempPath by remember { mutableStateOf(config.galleryPath) }
-            AlertDialog(
-                onDismissRequest = { showPathDialog = false },
-                title = { Text("Gallery Server Path") },
-                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.saveConfig(config.copy(galleryPath = tempPath))
-                        showPathDialog = false
-                    }) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showPathDialog = false }) { Text("Cancel") } },
-            )
-        }
 
         if (showTimeoutDialog) {
-            var tempTimeout by remember { mutableStateOf(config.connectionTimeout.toString()) }
+            var tempTimeout by remember { mutableStateOf(config.timeout.toString()) }
             AlertDialog(
                 onDismissRequest = { showTimeoutDialog = false },
                 title = { Text("Connection Timeout (sec)") },
@@ -888,7 +744,7 @@ fun SetupScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         val t = tempTimeout.toIntOrNull() ?: 10
-                        viewModel.saveConfig(config.copy(connectionTimeout = t))
+                        viewModel.saveConfig(config.copy(timeout = t))
                         showTimeoutDialog = false
                     }) { Text("Save") }
                 },
@@ -896,29 +752,7 @@ fun SetupScreen(
             )
         }
 
-        if (showCheckpointTimeoutDialog) {
-            var tempTimeout by remember { mutableStateOf(config.checkpointTimeout.toString()) }
-            AlertDialog(
-                onDismissRequest = { showCheckpointTimeoutDialog = false },
-                title = { Text("Timeout for switching large models") },
-                text = {
-                    OutlinedTextField(
-                        value = tempTimeout,
-                        onValueChange = { tempTimeout = it },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val t = tempTimeout.toIntOrNull() ?: 45
-                        viewModel.saveConfig(config.copy(checkpointTimeout = t))
-                        showCheckpointTimeoutDialog = false
-                    }) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showCheckpointTimeoutDialog = false }) { Text("Cancel") } },
-            )
-        }
+
 
         if (showProfilesDialog) {
             var newProfileName by remember { mutableStateOf("") }
@@ -1162,5 +996,37 @@ fun MetadataAlertDialog(
                 }
             }
         }
+    }
+}
+
+
+@Composable
+fun ExpandableCategoryHeader(title: String, appState: AppState, viewModel: ForgeViewModel) {
+    val isExpanded = title in appState.setupExpandedSections
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable {
+            viewModel.updateState { state ->
+                state.copy(
+                    setupExpandedSections = if (isExpanded) state.setupExpandedSections - title else state.setupExpandedSections + title
+                )
+            }
+        }.padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f))
+        Text(
+            title,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Icon(
+            if (isExpanded) androidx.compose.material.icons.Icons.Default.KeyboardArrowUp else androidx.compose.material.icons.Icons.Default.KeyboardArrowDown,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp)
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f))
     }
 }

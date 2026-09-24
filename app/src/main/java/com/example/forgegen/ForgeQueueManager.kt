@@ -13,8 +13,6 @@ import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.stringPreferencesKey
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
@@ -34,7 +32,7 @@ object ForgeQueueManager {
     private const val TAG = "ForgeQueueManager"
     private lateinit var application: Application
     private val gson = Gson()
-    private val QUEUE_KEY = stringPreferencesKey("saved_queue")
+    private const val QUEUE_KEY = "saved_queue"
 
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
@@ -85,6 +83,9 @@ object ForgeQueueManager {
 
     fun init(app: Application) {
         application = app
+    }
+
+    fun start() {
         loadQueueState()
         startQueueLoop()
         cleanupRecoveredImages()
@@ -110,8 +111,7 @@ object ForgeQueueManager {
 
     private fun loadQueueState() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            val prefs = application.dataStore.data.first()
-            val json = prefs[QUEUE_KEY]
+            val json = ForgeRepository.db.appSettingDao().getSetting("saved_queue")?.value
             if (!json.isNullOrEmpty()) {
                 try {
                     val type = object : TypeToken<List<QueuedGeneration>>() {}.type
@@ -131,7 +131,7 @@ object ForgeQueueManager {
     private fun saveQueueState() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
-                application.dataStore.edit { it[QUEUE_KEY] = gson.toJson(_generationQueue.value) }
+                ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity("saved_queue", gson.toJson(_generationQueue.value)))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save queue", e)
             }

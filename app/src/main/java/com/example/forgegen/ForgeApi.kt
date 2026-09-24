@@ -98,7 +98,7 @@ interface ForgeApi {
     @GET("infinite_image_browsing/files")
     suspend fun getGalleryFiles(
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query(value = "folder_path", encoded = true) folderPath: String? = null,
+        @Query(value = "folder_path", encoded = true) folderPath: String = "",
     ): Response<ResponseBody>
 
     @GET
@@ -110,7 +110,7 @@ interface ForgeApi {
     suspend fun getGalleryFilesDynamic(
         @Url url: String,
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query(value = "folder_path", encoded = true) folderPath: String? = null,
+        @Query(value = "folder_path", encoded = true) folderPath: String = "",
     ): Response<ResponseBody>
 
     @GET("app/metadata")
