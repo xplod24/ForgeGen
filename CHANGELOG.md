@@ -1,3 +1,6 @@
+- New package name (io.github.xplod24.forgegen), so this build installs next to older ForgeGen builds instead of failing with a package conflict. It starts with fresh settings; the old app keeps its data until you uninstall it.
+- The launcher label is now "ForgeGen", to tell it apart from the old "ForgeGen (Beta)".
+
 - App updates now come from the latest GitHub release (Settings → App Updates → Check for Updates); the Forge server is no longer involved.
 - Every build is signed with the same key, so a new release installs over the previous one without losing data.
 - Favourite images show their star right after the app starts, not only after something is toggled.

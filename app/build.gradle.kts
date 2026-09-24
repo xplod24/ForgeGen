@@ -55,7 +55,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.forgegen"
+        // Changed from com.example.forgegen: the GitHub builds are signed with the repository key, so they are
+        // a separate app and install next to builds signed with an Android Studio key instead of clashing.
+        applicationId = "io.github.xplod24.forgegen"
         minSdk = 31
         targetSdk = 37
         versionCode = appVersionCode
@@ -77,7 +79,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
-            resValue("string", "app_name", "ForgeGen (Beta)")
+            resValue("string", "app_name", "ForgeGen")
         }
     }
     compileOptions {
