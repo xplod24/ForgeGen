@@ -1,10 +1,16 @@
 name: CI
 
-# Pull requests only run the tests and build the APK; publishing happens in release.yml.
+# Pull requests and pushes to work branches only run the tests and build an unsigned release APK, so a change is
+# known to compile before it reaches master. Publishing happens in release.yml and must never happen here.
 on:
   pull_request:
     branches:
       - master
+  push:
+    branches-ignore:
+      - master
+    paths-ignore:
+      - '**.md'
 
 jobs:
   build:
@@ -25,7 +31,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest
+        run: ./gradlew testReleaseUnitTest
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Build release APK (unsigned)
+        run: ./gradlew assembleRelease

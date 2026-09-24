@@ -40,20 +40,40 @@ android {
     }
 
     signingConfigs {
-        // The keystore is committed on purpose: Android Studio and the release workflow must sign with the
-        // same key, otherwise the phone refuses to install a GitHub release over the installed app.
-        // To keep an installation built with your own key, replace this file with ~/.android/debug.keystore.
+        // Local debug builds only; GitHub releases are release builds signed with the release key below.
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        // The release key is never committed. The release workflow decodes it from the RELEASE_KEYSTORE_BASE64
+        // secret; for a local release build set RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment
+        // or ~/.gradle/gradle.properties). Without them the release APK is built unsigned and cannot be installed.
+        // Every release must be signed with this same key, or phones refuse to update the installed app.
+        val releaseKeystore =
+            providers
+                .environmentVariable("RELEASE_KEYSTORE_FILE")
+                .orElse(providers.gradleProperty("RELEASE_KEYSTORE_FILE"))
+                .orNull
+        val releasePassword =
+            providers
+                .environmentVariable("RELEASE_KEYSTORE_PASSWORD")
+                .orElse(providers.gradleProperty("RELEASE_KEYSTORE_PASSWORD"))
+                .orNull
+        if (!releaseKeystore.isNullOrBlank() && !releasePassword.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = releasePassword
+                keyAlias = "forgegen"
+                keyPassword = releasePassword
+            }
+        }
     }
 
     defaultConfig {
-        // Changed from com.example.forgegen: the GitHub builds are signed with the repository key, so they are
-        // a separate app and install next to builds signed with an Android Studio key instead of clashing.
+        // Releases (from 1.1.0) are this package, signed with the release key. Debug builds add ".debug" and are
+        // a separate app; up to 1.0.2 the GitHub releases were such debug builds.
         applicationId = "io.github.xplod24.forgegen"
         minSdk = 31
         targetSdk = 37
@@ -66,6 +86,7 @@ android {
 
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

@@ -2,8 +2,13 @@ name: Release
 
 # Publishes a release when the version in gradle.properties has not been tagged yet:
 # raise VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH, add a "## <version>" section to CHANGELOG.md
-# and push to master. The workflow tags the commit "v<major>.<minor>.<patch>" and attaches app-debug.apk,
-# which the app's updater then offers. Any other push to master only runs the tests and the build.
+# and push to master. The workflow tags the commit "v<major>.<minor>.<patch>" and attaches the release APK
+# signed with the release key, which the app's updater then offers. Any other push to master only runs the
+# tests and the build.
+#
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   RELEASE_KEYSTORE_BASE64    the release keystore (PKCS12, alias "forgegen"), base64-encoded
+#   RELEASE_KEYSTORE_PASSWORD  its password (also the key password)
 on:
   push:
     branches:
@@ -75,11 +80,43 @@ jobs:
           printf '\nBuilt from %s.\n' "$GITHUB_SHA" >> release-notes.md
           cat release-notes.md
 
-      - name: Run unit tests
-        run: ./gradlew testDebugUnitTest
+      - name: Release key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" ]]; then
+            if [[ "${{ steps.version.outputs.publish }}" == "true" ]]; then
+              echo "::error::Add the RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD secrets; a release must be signed with the release key"
+              exit 1
+            fi
+            echo "No release key; building an unsigned APK only to check the build."
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.p12"
+          echo "RELEASE_KEYSTORE_FILE=$RUNNER_TEMP/release.p12" >> "$GITHUB_ENV"
+          echo "RELEASE_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug
+      - name: Run unit tests
+        run: ./gradlew testReleaseUnitTest
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+
+      - name: Check the signature
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          # Phones only update the app from an APK signed with the same key, so never publish another one.
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n 1)
+          "$APKSIGNER" verify --print-certs "$APK" | tee signature.txt
+          if ! grep -qi "certificate SHA-256 digest: $RELEASE_CERT_SHA256" signature.txt; then
+            echo "::error::$APK is not signed with the ForgeGen release key"
+            exit 1
+          fi
+          cp "$APK" "ForgeGen-${{ steps.version.outputs.tag }}.apk"
+        env:
+          RELEASE_CERT_SHA256: 22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d
 
       - name: Publish release
         if: steps.version.outputs.publish == 'true'
@@ -89,5 +126,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.tag }}
           body_path: release-notes.md
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: ForgeGen-${{ steps.version.outputs.tag }}.apk
           make_latest: true
