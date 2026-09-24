@@ -1,7 +1,6 @@
 package com.example.forgegen.ui.screens
 import com.example.forgegen.*
 import com.example.forgegen.ui.components.*
-import com.example.forgegen.*
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.activity.compose.BackHandler
@@ -50,7 +49,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.SubcomposeAsyncImage
 import java.util.Locale
@@ -90,21 +88,6 @@ enum class ActiveMenu { NONE, FILTER, SORT, SETTINGS }
 
 @Composable
 fun shimmerBrush(): Brush = coloredShimmerBrush(MaterialTheme.colorScheme.surfaceVariant)
-
-/* ============================================================================
- * REUSABLE UI COMPONENTS FOR SETTINGS
- * ============================================================================ */
-
-@Composable
-fun PreferenceCategory(title: String) {
-    Text(
-        text = title.uppercase(androidx.compose.ui.platform.LocalConfiguration.current.locales[0]),
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.Bold,
-        fontSize = 12.sp,
-        modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 8.dp, end = 16.dp),
-    )
-}
 
 /* ============================================================================
  * GALLERY SCREEN COMPOSABLE
@@ -247,8 +230,9 @@ fun GalleryScreen(
                                     if (index == 0) {
                                         viewModel.fetchGalleryFolder(if (config.galleryPath.isEmpty()) "Root" else config.galleryPath)
                                     } else {
-                                        // Reconstruct path up to this segment
-                                        val subPath = pathSegments.drop(1).take(index).joinToString("/")
+                                        // Reconstruct path up to this segment; split() dropped the leading "/" of a Linux path.
+                                        val root = if (currentPath.startsWith("/")) "/" else ""
+                                        val subPath = root + pathSegments.drop(1).take(index).joinToString("/")
                                         viewModel.fetchGalleryFolder(subPath)
                                     }
                                 }
@@ -975,7 +959,7 @@ fun FullscreenGalleryViewer(
                             }
                         }
 
-                    MetadataAlertDialog(
+                    AppMetadataAlertDialog(
                         metadata = currentMetadata,
                         fileInfo = fileInfo,
                         onDismiss = { viewModel.toggleGalleryMetadata() },

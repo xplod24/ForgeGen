@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.Application
 import android.util.Log
 import com.google.gson.Gson
-import kotlinx.coroutines.runBlocking
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,8 +47,11 @@ object ForgeSettingsManager {
     const val CONFIG_KEY = "config"
     const val STATE_KEY = "last_state"
     const val HISTORY_KEY = "prompt_history"
-    const val SHOW_META_KEY = "show_gallery_meta"
     const val PINNED_IMAGES_KEY = "pinned_images"
+
+    // 0 would mean "no timeout" in OkHttp and a negative value throws, so user input is clamped.
+    private const val MIN_TIMEOUT_SECONDS = 1
+    private const val MAX_TIMEOUT_SECONDS = 600
 
     // --- INITIALIZATION STATE ---
     private val _isInitialized = MutableStateFlow(false)
@@ -93,10 +95,6 @@ object ForgeSettingsManager {
     // --- Prompt history ---
     private val _promptHistory = MutableStateFlow<List<PromptHistoryItem>>(emptyList())
     val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
-
-    // --- Gallery metadata toggle ---
-    private val _showGalleryMetadata = MutableStateFlow(false)
-    val showGalleryMetadata: StateFlow<Boolean> = _showGalleryMetadata.asStateFlow()
 
     // --- Pinned Images ---
     private val _pinnedImages = MutableStateFlow<Set<String>>(emptySet())
@@ -145,7 +143,6 @@ object ForgeSettingsManager {
         val loadedConfig = loadConfig(dao.getSetting("config")?.value)
         val loadedState = loadState(dao.getSetting("last_state")?.value, loadedConfig)
         val loadedHistory = loadPromptHistory(dao.getSetting("prompt_history")?.value)
-        val loadedShowMeta = dao.getSetting("show_gallery_meta")?.value?.toBoolean() ?: false
         
         val pinnedJson = dao.getSetting("pinned_images")?.value
         val loadedPinnedImages = if (!pinnedJson.isNullOrEmpty()) {
@@ -160,7 +157,6 @@ object ForgeSettingsManager {
         _config.value = loadedConfig
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
-        _showGalleryMetadata.value = loadedShowMeta
         _pinnedImages.value = loadedPinnedImages
 
         client = createClient(loadedConfig.timeout)
@@ -232,8 +228,7 @@ object ForgeSettingsManager {
             serverBasePath = parsed?.serverBasePath ?: "",
             galleryPath = parsed?.galleryPath ?: "",
             isDarkMode = parsed?.isDarkMode ?: false,
-            timeout = parsed?.timeout ?: 10,
-            receiveGenerationNotification = parsed?.receiveGenerationNotification ?: true,
+            timeout = (parsed?.timeout ?: 10).coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS),
             notifOnBatchFinish = parsed?.notifOnBatchFinish ?: false,
             notifOnQueueFinish = parsed?.notifOnQueueFinish ?: true,
             notifCivitaiSync = parsed?.notifCivitaiSync ?: true,
@@ -271,7 +266,11 @@ object ForgeSettingsManager {
         val oldPersistent = _config.value.enablePersistentService
         val oldUrl = _config.value.apiUrl
         val oldTimeout = _config.value.timeout
-        val updatedConfig = newConfig.copy(apiUrl = cleanUrl)
+        val updatedConfig =
+            newConfig.copy(
+                apiUrl = cleanUrl,
+                timeout = newConfig.timeout.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS),
+            )
 
         _config.value = updatedConfig
 
@@ -329,6 +328,21 @@ object ForgeSettingsManager {
         val newState = currentConfig.copy(defaultState = _appState.value.copy())
         saveConfig(newState)
         showSnackbar("Set Current as Default")
+    }
+
+    /** Restores every option to its default, keeping only the server connection, presets and profiles. */
+    fun resetSettings() {
+        val current = _config.value
+        saveConfig(
+            AppConfig(
+                apiUrl = current.apiUrl,
+                serverBasePath = current.serverBasePath,
+                galleryPath = current.galleryPath,
+                serverProfiles = current.serverProfiles,
+                presets = current.presets,
+            ),
+        )
+        resetToDefaults()
     }
 
     fun resetToDefaults() {
@@ -418,7 +432,12 @@ object ForgeSettingsManager {
         preset: GenerationPreset,
     ) {
         val current = _config.value
-        val newPresets = current.presets.map { if (it.name == oldName) preset else it }
+        // A blank or duplicate name would make presets impossible to tell apart (and to load by name),
+        // so such a rename keeps the old name while the other edits are still saved.
+        val newName = preset.name.trim()
+        val nameTaken = current.presets.any { it.name == newName && it.name != oldName }
+        val safePreset = if (newName.isEmpty() || nameTaken) preset.copy(name = oldName) else preset.copy(name = newName)
+        val newPresets = current.presets.map { if (it.name == oldName) safePreset else it }
         saveConfig(current.copy(presets = newPresets))
     }
 
@@ -437,27 +456,6 @@ object ForgeSettingsManager {
         val currentProfiles = _config.value.serverProfiles.toMutableList()
         currentProfiles.removeAll { it.name == name }
         saveConfig(_config.value.copy(serverProfiles = currentProfiles))
-    }
-
-    // --- Gallery metadata toggle ---
-    fun toggleGalleryMetadata() {
-        val newVal = !_showGalleryMetadata.value
-        _showGalleryMetadata.value = newVal
-        settingsScope.launch(dbWriteDispatcher) {
-            db.appSettingDao().putSetting(AppSettingEntity(SHOW_META_KEY, newVal.toString()))
-        }
-    }
-
-    suspend fun getPngInfoFromServer(base64: String): String? {
-        try {
-            val response = ForgeRepository.forgeApi?.getPngInfo(PngInfoPayloadDto(base64))
-            if (response?.isSuccessful == true) {
-                return response.body()?.info
-            }
-        } catch (e: Exception) {
-            Log.e("ForgeSettingsManager", "Error getting png info", e)
-        }
-        return null
     }
 
     /** Infotext of the last image generated by this app (cached as last_generated_image.png by ForgeQueueManager). */

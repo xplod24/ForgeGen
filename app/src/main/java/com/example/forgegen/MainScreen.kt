@@ -4,15 +4,12 @@ import com.example.forgegen.ui.screens.*
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -25,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.navigation.NavHostController
 import coil.imageLoader
 import coil.request.CachePolicy
@@ -53,7 +51,6 @@ fun MainScreen(
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val vram by viewModel.vramUsage.collectAsStateWithLifecycle()
-    val ram by viewModel.ramUsage.collectAsStateWithLifecycle()
 
     val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
     val generationQueue by viewModel.generationQueue.collectAsStateWithLifecycle()
@@ -161,15 +158,19 @@ fun MainScreen(
 
     var showUnloadDialog by remember { mutableStateOf(false) }
 
-    // Estimate image pixel dimensions dynamically and warn the user about potential CUDA VRAM out-of-memory errors
+    // Estimate image pixel dimensions dynamically and warn the user about potential CUDA VRAM out-of-memory errors.
+    // Only crossing the limit warns; otherwise every slider step above it (and every return to this screen) showed a toast.
+    var wasOverVramLimit by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(state.width, state.height, state.hiresFix, state.hiresScale) {
         val basePixels = state.width * state.height
         val finalPixels = if (state.hiresFix) basePixels * (state.hiresScale * state.hiresScale) else basePixels.toFloat()
 
         // Estimate: Above 2.5 million pixels with Hires it starts to be dangerous for standard 8GB cards.
-        if (finalPixels > 2500000) {
+        val overLimit = finalPixels > 2500000
+        if (overLimit && !wasOverVramLimit) {
             viewModel.showToast("High VRAM usage warning. Risk of server OOM.")
         }
+        wasOverVramLimit = overLimit
     }
 
     // Root screen layout container configured with tap gestures to dismiss the virtual keyboard
@@ -194,7 +195,6 @@ fun MainScreen(
                 ForgeTopAppBar(
                     isConnected = isConnected,
                     pingMs = pingMs,
-                    ram = ram,
                     vram = vram,
                     isActivelyGenerating = isActivelyGenerating,
                     onUnloadClick = { showUnloadDialog = true },
@@ -249,7 +249,6 @@ fun MainScreen(
                         state = state,
                         config = config,
                         promptHistory = promptHistory,
-                        navController = navController,
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -290,7 +289,6 @@ fun MainScreen(
                     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                         SetupScreen(
                             viewModel = viewModel,
-                            navController = navController,
                             onDismiss = { showSettingsOverlay = false }
                         )
                     }
@@ -321,7 +319,9 @@ fun MainScreen(
 
         if (tagsPopupHash != null) {
             LaunchedEffect(tagsPopupHash) {
-                availableTagsForPopup = viewModel.getTagsForLora(tagsPopupHash!!)
+                val hash = tagsPopupHash ?: return@LaunchedEffect
+                availableTagsForPopup = emptyList() // don't flash the previous LoRA's tags while loading
+                availableTagsForPopup = viewModel.getTagsForLora(hash)
             }
 
             AlertDialog(

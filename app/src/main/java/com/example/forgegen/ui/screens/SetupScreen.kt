@@ -5,20 +5,17 @@ import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import com.example.forgegen.ui.screens.PreferenceCategory
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -29,19 +26,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavHostController
 import kotlinx.coroutines.*
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import retrofit2.awaitResponse
-import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /* ============================================================================
@@ -122,16 +114,13 @@ fun TextPreference(
 @Composable
 fun SetupScreen(
     viewModel: ForgeViewModel,
-    navController: NavHostController,
-    onDismiss: () -> Unit = {},
+    onDismiss: () -> Unit,
 ) {
     // --- STATE OBSERVATION ---
     val config by viewModel.config.collectAsStateWithLifecycle()
     val appState by viewModel.appState.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
     val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
-    val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
-    val updateDownloadStats by viewModel.updateDownloadStats.collectAsStateWithLifecycle()
 
     // --- DIALOG VISIBILITY STATES ---
     var showUrlDialog by remember { mutableStateOf(false) }
@@ -141,8 +130,6 @@ fun SetupScreen(
     var showProfilesDialog by remember { mutableStateOf(false) }
 
     var showNotificationModeDialog by remember { mutableStateOf(false) }
-    var showUpdateChannelDialog by remember { mutableStateOf(false) }
-    var showBetaTokenDialog by remember { mutableStateOf(false) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
@@ -173,15 +160,8 @@ fun SetupScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val onBackClick =
-        remember {
-            {
-                if (navController.currentDestination?.route == "setup") {
-                    navController.popBackStack()
-                }
-                Unit
-            }
-        }
+    // System back closes the screen both as a nav destination and as the overlay on MainScreen.
+    BackHandler { onDismiss() }
 
     // --- UI STRUCTURE ---
     Scaffold() { padding ->
@@ -405,14 +385,6 @@ fun SetupScreen(
 
             item {
                 SwitchPreference(
-                    title = "Show Foreground Service Notification",
-                    subtitle = "Required for keeping generation alive in the background",
-                    checked = config.receiveGenerationNotification,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(receiveGenerationNotification = it)) },
-                )
-            }
-            item {
-                SwitchPreference(
                     title = "Notify on Batch Finish",
                     subtitle = "Get alerted when a generation batch is fully completed",
                     checked = config.notifOnBatchFinish,
@@ -545,7 +517,7 @@ fun SetupScreen(
                                     }
                                 }
                                 Spacer(Modifier.width(8.dp))
-                                Button(onClick = { viewModel.updateManager.downloadUpdate() }) {
+                                Button(onClick = { viewModel.downloadUpdate() }) {
                                     Text("Install Update")
                                 }
                             }
@@ -626,20 +598,28 @@ fun SetupScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = {
-                        if (wipeSettings) viewModel.wipeSettings()
-                        if (wipePresets) viewModel.wipePresets()
-                        if (wipeProfiles) viewModel.wipeServerProfiles()
-                        if (wipeHistory) viewModel.wipePromptHistory()
-                        if (wipeWildcards) viewModel.wipeWildcards()
-                        if (wipeImages) viewModel.wipeGalleryIndex()
-                        if (!wipeSettings && !wipePresets && !wipeProfiles && !wipeHistory && !wipeWildcards && !wipeImages) {
-                            viewModel.wipeAllData()
-                        }
-                        viewModel.showToast("Selected data wiped")
-                        showWipeDataDialog = false
-                    }) {
-                        Text("Wipe Selected", color = MaterialTheme.colorScheme.error)
+                    // With nothing ticked the button used to silently wipe settings and history anyway.
+                    val anySelected = wipeSettings || wipePresets || wipeProfiles || wipeHistory || wipeWildcards || wipeImages
+                    TextButton(
+                        enabled = anySelected,
+                        onClick = {
+                            if (wipeSettings) viewModel.wipeSettings()
+                            if (wipePresets) viewModel.wipePresets()
+                            if (wipeProfiles) viewModel.wipeServerProfiles()
+                            if (wipeHistory) viewModel.wipePromptHistory()
+                            if (wipeWildcards) viewModel.wipeWildcards()
+                            if (wipeImages) viewModel.wipeGalleryIndex()
+                            viewModel.showToast("Selected data wiped")
+                            showWipeDataDialog = false
+                        },
+                    ) {
+                        val labelColor =
+                            if (anySelected) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            }
+                        Text("Wipe Selected", color = labelColor)
                     }
                 },
                 dismissButton = {
@@ -650,27 +630,7 @@ fun SetupScreen(
             )
         }
 
-        if (isUpdateDownloading) {
-            AlertDialog(
-                onDismissRequest = { },
-                properties =
-                    androidx.compose.ui.window
-                        .DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
-                title = { Text("Downloading Update") },
-                text = {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                        LinearProgressIndicator(
-                            progress = { updateDownloadProgress },
-                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        )
-                        val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
-                        val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
-                        Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
-                    }
-                },
-                confirmButton = { },
-            )
-        }
+        // The download progress dialog is shown globally by MainActivity.
 
         if (showNotificationModeDialog) {
             AlertDialog(
@@ -852,152 +812,6 @@ fun SetupScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun MetadataAlertDialog(
-    metadata: String?,
-    fileInfo: String? = null,
-    onDismiss: () -> Unit,
-    onApplyPrompt: (String, String) -> Unit,
-    onApplyModel: (String) -> Unit,
-    onApplyLoras: (List<String>) -> Unit,
-    onApplyAll: (() -> Unit)? = null,
-) {
-    var posPrompt = ""
-    var negPrompt = ""
-    var modelName = ""
-    val loras = mutableListOf<String>()
-
-    if (metadata != null &&
-        !metadata.startsWith("Loading") &&
-        !metadata.startsWith("Failed") &&
-        !metadata.startsWith("Invalid") &&
-        !metadata.startsWith("Server")
-    ) {
-        val lines = metadata.split("\n")
-        var currentMode = 0
-        for (line in lines) {
-            if (line.startsWith("Negative prompt:")) {
-                currentMode = 1
-                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
-            } else if (line.startsWith("Steps:")) {
-                currentMode = 2
-                val params = line.split(",")
-                params.forEach { p ->
-                    val kv = p.split(":")
-                    if (kv.size >= 2 && kv[0].trim() == "Model") {
-                        modelName = kv[1].trim()
-                    }
-                }
-            } else {
-                if (currentMode == 0) {
-                    posPrompt += line + "\n"
-                } else if (currentMode == 1) {
-                    negPrompt += line + "\n"
-                }
-            }
-        }
-        posPrompt = posPrompt.trim()
-        negPrompt = negPrompt.trim()
-
-        PromptParser.LORA.findAll(posPrompt).forEach { match ->
-            loras.add(match.value)
-        }
-    }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "Generation Data",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    modifier =
-                        Modifier.padding(
-                            bottom =
-                                if (fileInfo !=
-                                    null
-                                ) {
-                                    4.dp
-                                } else {
-                                    8.dp
-                                },
-                        ),
-                )
-
-                if (fileInfo != null) {
-                    Text(fileInfo, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(bottom = 8.dp))
-                }
-
-                Box(
-                    modifier =
-                        Modifier
-                            .weight(
-                                1f,
-                                fill = false,
-                            ).background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                            .padding(8.dp),
-                ) {
-                    Text(
-                        text = metadata ?: "Loading...",
-                        fontSize = 11.sp,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
-                    )
-                }
-
-                if (metadata != null && posPrompt.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Apply to current session:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (onApplyAll != null) {
-                            Button(
-                                onClick = onApplyAll,
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                modifier = Modifier.height(32.dp),
-                            ) {
-                                Text("Apply All", fontSize = 12.sp)
-                            }
-                        }
-
-                        OutlinedButton(onClick = {
-                            onApplyPrompt(posPrompt, negPrompt)
-                        }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                            Text("Prompt", fontSize = 12.sp)
-                        }
-
-                        if (modelName.isNotEmpty()) {
-                            OutlinedButton(onClick = {
-                                onApplyModel(modelName)
-                            }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("Model", fontSize = 12.sp)
-                            }
-                        }
-
-                        if (loras.isNotEmpty()) {
-                            OutlinedButton(onClick = {
-                                onApplyLoras(loras)
-                            }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp), modifier = Modifier.height(32.dp)) {
-                                Text("LoRAs (${loras.size})", fontSize = 12.sp)
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Close")
-                }
-            }
-        }
-    }
-}
 
 
 @Composable

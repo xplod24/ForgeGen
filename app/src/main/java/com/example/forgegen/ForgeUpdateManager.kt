@@ -46,8 +46,6 @@ class ForgeUpdateManager(
     private val _updateDownloadStats = MutableStateFlow(0L to 0L)
     val updateDownloadStats: StateFlow<Pair<Long, Long>> = _updateDownloadStats.asStateFlow()
 
-    private var currentDownloadId: Long = -1L
-
     /**
      * Checks for available updates. When 'manual' is false, it verifies if a check has
      * already occurred today to prevent redundant background network traffic.
@@ -259,7 +257,7 @@ class ForgeUpdateManager(
     /**
      * Triggers the Android Package Installer using a system Intent.
      */
-    fun installUpdate() {
+    private fun installUpdate() {
         try {
             val file = File(application.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "ForgeGen_Update.apk")
             if (!file.exists()) {
@@ -281,11 +279,5 @@ class ForgeUpdateManager(
             Log.e(TAG, "Failed to launch installer", e)
             showToast("Launch failed: ${e.message}")
         }
-    }
-
-    fun dismissUpdate() {
-        _isUpdateDownloading.value = false
-        // Silently dismiss update without resetting.
-        // Future improvements could persist manifest.versionCode as 'ignored'.
     }
 }

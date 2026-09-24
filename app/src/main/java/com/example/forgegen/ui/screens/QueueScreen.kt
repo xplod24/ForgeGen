@@ -1,7 +1,6 @@
 package com.example.forgegen.ui.screens
 import com.example.forgegen.*
 import com.example.forgegen.ui.components.*
-import com.example.forgegen.*
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -28,14 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
-
-/* ============================================================================
- * SHIMMER EFFECT (SKELETON LOADING & FRAMES)
- * Creates an animated gradient imitating loading and decorative frames
- * ============================================================================ */
 
 /* ============================================================================
  * QUEUE SCREEN COMPOSABLE
@@ -121,7 +114,8 @@ fun QueueScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(queue) { item ->
+                    // The key keeps per-card state (e.g. "expanded") with its job when jobs are moved or removed.
+                    items(queue, key = { it.id }) { item ->
                         val isFirst = queue.firstOrNull()?.id == item.id
                         val isActive = isFirst && isGenerating
                         var isExpanded by remember { mutableStateOf(false) }
@@ -195,15 +189,7 @@ fun QueueScreen(
                                 }
 
                                 // LORAS
-                                val lorasInPrompt =
-                                    remember(item.positivePrompt) {
-                                        val regex = Regex("<lora:([^:]+):([0-9.]+)>")
-                                        regex
-                                            .findAll(item.positivePrompt)
-                                            .map { match ->
-                                                ActiveLora(match.groupValues[1], match.groupValues[2].toFloatOrNull() ?: 1f)
-                                            }.toList()
-                                    }
+                                val lorasInPrompt = remember(item.positivePrompt) { parseActiveLoras(item.positivePrompt) }
 
                                 if (lorasInPrompt.isNotEmpty()) {
                                     LazyRow(

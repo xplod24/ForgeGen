@@ -65,10 +65,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
-import com.example.forgegen.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -80,14 +78,6 @@ import kotlin.math.roundToInt
 /* ============================================================================
  * STATIC REGEX PARSER & TOKENIZER (Performance Optimization & Couple Tags)
  * ============================================================================ */
-
-object PromptParser {
-    val LORA = Regex("<lora:[^>]+>")
-    val WEIGHT_PAREN = Regex("\\([^)]+\\)")
-    val WEIGHT_BRACKET = Regex("\\[[^]]+]")
-    val TAG_STRENGTH = Regex("^\\((.*):([0-9.]+)\\)$")
-    val SEPARATOR = Regex("[,\\s]+")
-}
 
 @Composable
 fun UndoRedoTextField(
@@ -255,17 +245,7 @@ fun HybridPromptEditor(
                                     Modifier.zIndex(1f)
                                 }
 
-                            val match = PromptParser.TAG_STRENGTH.find(tag)
-                            val (baseName, weightStr) =
-                                if (match != null && match.groupValues.size >= 3) {
-                                    match.groupValues[1] to match.groupValues[2]
-                                } else {
-                                    if (tag.startsWith("(") && tag.endsWith(")")) {
-                                        tag.drop(1).dropLast(1) to "1.1"
-                                    } else {
-                                        tag to "1.0"
-                                    }
-                                }
+                            val (baseName, weightStr) = splitTagWeight(tag)
 
                             Box {
                                 // GHOST - Empty space where the tag will land (rendered only in the original slot)
@@ -420,8 +400,7 @@ fun HybridPromptEditor(
                         }
 
                         disabledTags.forEach { tag ->
-                            val match = PromptParser.TAG_STRENGTH.find(tag)
-                            val baseName = if (match != null && match.groupValues.size >= 3) match.groupValues[1] else tag
+                            val baseName = splitTagWeight(tag).base
 
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -452,17 +431,7 @@ fun HybridPromptEditor(
 
                     if (editingTagWeight != null) {
                         val currentEditingTag = editingTagWeight!!
-                        val match = PromptParser.TAG_STRENGTH.find(currentEditingTag)
-                        val (baseName, weightStr) =
-                            if (match != null && match.groupValues.size >= 3) {
-                                match.groupValues[1] to match.groupValues[2]
-                            } else {
-                                if (currentEditingTag.startsWith("(") && currentEditingTag.endsWith(")")) {
-                                    currentEditingTag.drop(1).dropLast(1) to "1.1"
-                                } else {
-                                    currentEditingTag to "1.0"
-                                }
-                            }
+                        val (baseName, weightStr) = splitTagWeight(currentEditingTag)
 
                         var sliderValue by remember(currentEditingTag) { mutableFloatStateOf(weightStr.toFloatOrNull() ?: 1.0f) }
 
@@ -482,14 +451,8 @@ fun HybridPromptEditor(
                                         value = sliderValue,
                                         onValueChange = { sliderValue = it },
                                         onValueChangeFinished = {
-                                            val newTag =
-                                                if (sliderValue ==
-                                                    1.0f
-                                                ) {
-                                                    baseName
-                                                } else {
-                                                    "($baseName:${String.format(java.util.Locale.US, "%.1f", sliderValue)})"
-                                                }
+                                            // The slider yields values like 0.99999994, so an exact == 1.0f check almost never matched.
+                                            val newTag = withTagWeight(baseName, sliderValue)
                                             val newTags = activeTags.toMutableList()
                                             val pos = newTags.indexOf(currentEditingTag)
                                             if (pos != -1) {
@@ -566,7 +529,6 @@ fun PromptHistoryCarousel(
 fun ForgeTopAppBar(
     isConnected: Boolean,
     pingMs: Long,
-    ram: String?,
     vram: String?,
     isActivelyGenerating: Boolean,
     onUnloadClick: () -> Unit,
@@ -597,49 +559,25 @@ fun ForgeTopAppBar(
                         fontWeight = FontWeight.Normal,
                     )
                 }
-                if (ram != null || vram != null) {
+                // The server memory line already contains both RAM and VRAM ("RAM: x/yGB | VRAM: x/yGB").
+                if (vram != null) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp),
                     ) {
-                        if (ram != null) {
-                            Icon(
-                                Icons.Default.Memory,
-                                contentDescription = "RAM",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                modifier = Modifier.size(10.dp),
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(
-                                text = ram,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            )
-                        }
-                        if (ram != null && vram != null) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            VerticalDivider(
-                                modifier = Modifier.height(8.dp),
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        if (vram != null) {
-                            Icon(
-                                Icons.Default.DeveloperBoard,
-                                contentDescription = "VRAM",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                modifier = Modifier.size(10.dp),
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Text(
-                                text = vram,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Normal,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            )
-                        }
+                        Icon(
+                            Icons.Default.DeveloperBoard,
+                            contentDescription = "Memory",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.size(10.dp),
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = vram,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        )
                     }
                 }
             }
@@ -895,7 +833,6 @@ fun PromptsSection(
     state: AppState,
     config: AppConfig,
     promptHistory: List<PromptHistoryItem>,
-    navController: NavHostController,
 ) {
     var disabledPosTags by remember { mutableStateOf(emptySet<String>()) }
     var disabledNegTags by remember { mutableStateOf(emptySet<String>()) }
@@ -1148,12 +1085,19 @@ fun GenerationSettingsSection(
         }
 
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            // The field keeps its own text: deriving it from state.seed turned an emptied field (or a lone "-")
+            // straight back into "-1", so a new seed could not be typed from scratch.
+            var seedText by remember { mutableStateOf(state.seed.toString()) }
+            LaunchedEffect(state.seed) {
+                // Follow outside changes (dice, recovered seed, preset) without fighting the user's typing.
+                if ((seedText.toLongOrNull() ?: -1L) != state.seed) seedText = state.seed.toString()
+            }
             OutlinedTextField(
-                value = if (state.seed == -1L) "-1" else state.seed.toString(),
+                value = seedText,
                 onValueChange = {
-                    val parsed = it.toLongOrNull()
-                    if (parsed != null || it == "-" || it.isEmpty()) {
-                        viewModel.updateState { s -> s.copy(seed = parsed ?: -1L) }
+                    if (it.isEmpty() || it == "-" || it.toLongOrNull() != null) {
+                        seedText = it
+                        viewModel.updateState { s -> s.copy(seed = it.toLongOrNull() ?: -1L) }
                     }
                 },
                 label = { Text("Seed", fontSize = 12.sp) },
@@ -1559,7 +1503,7 @@ fun LorasSection(
                                         if (hash != null) {
                                             onOpenTagsPopup(hash, lora.name)
                                         } else {
-                                            viewModel.showToast("Brak metadanych modelu. Odśwież API.")
+                                            viewModel.showToast("No model metadata. Refresh the model list.")
                                         }
                                     },
                                     modifier = Modifier.size(24.dp),

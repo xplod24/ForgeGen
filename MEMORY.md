@@ -4,7 +4,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 
 ## 1. Architectural Decisions & Code Structure
 - **State Management:** All settings and app state variables are consolidated in `ForgeModels.kt` (specifically `AppConfig` and `AppState` data classes).
-- **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, which handles DataStore read/writes.
+- **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, stored in the Room `app_settings` table.
 - **Queue & Notifications:** Managed by `ForgeQueueManager.kt`. 
 - **Foreground Service:** `GenerationService.kt` runs the persistent foreground notification.
 - **Updates:** `ForgeUpdateManager.kt` checks for updates and verifies SHA-256 hashes before installation. 
@@ -14,7 +14,11 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Timeouts:** the "Connection Timeout" setting applies to ordinary API calls only; `ForgeSettingsManager.createClient` gives `sdapi/v1/txt2img` a 120 min read timeout.
 - **Queue pauses:** use `ForgeQueueManager.pauseQueue(reason)`; the UI card in `OomAlertSection` shows the reason and a Resume button for any pause. A queue that becomes empty is unpaused automatically.
 - **PNG metadata:** always read through `PngMetadata.readParameters` (tEXt = Latin-1, iTXt = UTF-8, optionally zlib-compressed).
-- **Settings persistence:** `loadConfig` must list every `AppConfig` field (covered by `ForgeSettingsManagerConfigTest`); DB writes go through a single-threaded dispatcher to keep their order.
+- **Settings persistence:** `loadConfig` must list every `AppConfig` field (covered by `ForgeSettingsManagerConfigTest`); DB writes go through a single-threaded dispatcher to keep their order. `timeout` is clamped to 1–600 s on load and save.
+- **ForgeRepository** only owns the database, the Retrofit client, the ping loop (connection, RAM/VRAM, external jobs) and the service toggle. Queue, gallery, models and prompts live in their managers; don't add delegating copies back.
+- **Prompt tag helpers** (`parseTags`, `splitTagWeight`, `withTagWeight`, `adjustTagStrength`) live in the Compose-free `ui/components/PromptTags.kt` (tested by `PromptTagsTest`). LoRA tags are parsed only by `parseActiveLoras` in `ForgeRepository.kt`.
+- **Notification modes:** the strings in `GenerationService` must match the options in `SetupScreen` ("Simple", "Verbose", "Disabled").
+- **Dead code:** `ForgeModels.kt` has `@file:Suppress("unused")` (for Gson DTO fields), so the IDE won't flag unused classes or DAO methods there; check references by hand.
 
 ## 2. User Preferences & UI Principles
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates).
@@ -31,5 +35,5 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Build 277 fixes:** see CHANGELOG.md (generation timeout, checkpoint override, progress, settings persistence, lock on cold start, PNG metadata, queue pause UX). Unit tests: `PngMetadataTest`, `ForgeSettingsManagerConfigTest`; `ForgeUpdateManagerTest` fixed to the list-based changelog.
 
 ## 4. Current Outstanding Tasks
-- The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeRepository` and `ForgeSettingsManager`; it should become a setting.
-- `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git; consider untracking them.
+- The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
+- `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.

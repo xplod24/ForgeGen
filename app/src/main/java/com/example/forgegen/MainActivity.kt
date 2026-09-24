@@ -196,7 +196,7 @@ fun AppNavigation(
         popExitTransition = { fadeOut(animationSpec = tween(200)) },
     ) {
         composable("welcome") { WelcomeScreen(viewModel, navController) }
-        composable("setup") { SetupScreen(viewModel, navController, onDismiss = { navController.popBackStack() }) }
+        composable("setup") { SetupScreen(viewModel, onDismiss = { navController.popBackStack() }) }
         composable("main") { MainScreen(viewModel, navController) }
         composable(
             "gallery",

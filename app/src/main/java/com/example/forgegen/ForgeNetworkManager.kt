@@ -1,7 +1,6 @@
 package com.example.forgegen
 
 import com.example.forgegen.ui.components.*
-import android.app.Application
 import android.util.Log
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
@@ -27,11 +26,9 @@ import java.util.concurrent.TimeUnit
  * for server configurations (Models, Samplers, LoRAs, and Civitai updates).
  * ============================================================================ */
 class ForgeNetworkManager(
-    private val application: Application,
     private val getDb: () -> ForgeDatabase,
     private val getConfig: () -> AppConfig,
     private val updateConfig: (AppConfig) -> Unit,
-    private val showToast: (String) -> Unit,
     val managerScope: CoroutineScope,
 ) {
     private val TAG = "ForgeNetworkManager"

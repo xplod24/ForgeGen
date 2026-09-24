@@ -25,9 +25,6 @@ interface ForgeApi {
     @POST("sdapi/v1/interrupt")
     suspend fun interruptGeneration(): Response<Unit>
 
-    @POST("sdapi/v1/skip")
-    suspend fun skipGeneration(): Response<Unit>
-
     @POST("sdapi/v1/refresh-checkpoints")
     suspend fun refreshCheckpoints(): Response<Unit>
 
@@ -36,16 +33,6 @@ interface ForgeApi {
 
     @POST("sdapi/v1/unload-checkpoint")
     suspend fun unloadCheckpoint(): Response<Unit>
-
-    @POST("sdapi/v1/png-info")
-    suspend fun getPngInfo(
-        @Body payload: PngInfoPayloadDto,
-    ): Response<PngInfoResponseDto>
-
-    @POST("sdapi/v1/tokenize")
-    suspend fun tokenize(
-        @Body payload: TokenizePayloadDto,
-    ): Response<TokenizeResponseDto>
 
     @GET("sdapi/v1/progress")
     suspend fun getProgress(
@@ -93,19 +80,13 @@ interface ForgeApi {
     @GET("infinite_image_browsing/global_setting")
     suspend fun getGlobalSettings(): Response<GlobalSettingResponseDto>
 
-    // Using ResponseBody directly prevents serialization/parsing failures across vastly different versions
-    // of the Infinite Image Browsing (IIB) extension, allowing us to parse the raw JSON dynamically.
-    @GET("infinite_image_browsing/files")
-    suspend fun getGalleryFiles(
-        @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
-        @Query(value = "folder_path", encoded = true) folderPath: String = "",
-    ): Response<ResponseBody>
-
     @GET
     suspend fun getGlobalSettingsDynamic(
         @Url url: String,
     ): Response<GlobalSettingResponseDto>
 
+    // Using ResponseBody directly prevents serialization/parsing failures across vastly different versions
+    // of the Infinite Image Browsing (IIB) extension, allowing us to parse the raw JSON dynamically.
     @GET
     suspend fun getGalleryFilesDynamic(
         @Url url: String,

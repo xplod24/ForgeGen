@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
@@ -32,7 +31,6 @@ object ForgeQueueManager {
     private const val TAG = "ForgeQueueManager"
     private lateinit var application: Application
     private val gson = Gson()
-    private const val QUEUE_KEY = "saved_queue"
 
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
@@ -607,22 +605,6 @@ object ForgeQueueManager {
                 Log.e(TAG, "Failed to cache recovered image", e)
             }
         }
-    }
-
-    private fun calculateInSampleSize(options: BitmapFactory.Options): Int {
-        val reqHeight = 512
-        val reqWidth = 512
-        val height = options.outHeight
-        val width = options.outWidth
-        var inSampleSize = 1
-        if (height > reqHeight || width > reqWidth) {
-            val halfHeight = height / 2
-            val halfWidth = width / 2
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
-            }
-        }
-        return inSampleSize
     }
 
     private fun cleanupRecoveredImages() {

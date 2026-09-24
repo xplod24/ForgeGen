@@ -1,3 +1,20 @@
+- Favourite images show their star right after the app starts, not only after something is toggled.
+- Turning "background service" on or off in Settings now really starts or stops the persistent notification.
+- Notification mode "Disabled" really hides progress; "Simple" is no longer shown as a different mode.
+- "Wipe Application Data" can no longer wipe anything with no box ticked, and "App Settings" now resets the settings (server, presets and profiles are kept) instead of only the prompt.
+- A timeout outside 1–600 s is corrected instead of breaking every connection (a negative value used to crash the app).
+- Renaming a preset to an empty or already used name keeps the old name; typing a preset name no longer loses focus after every letter.
+- The Seed field can be cleared and a new seed typed from scratch (it used to jump back to -1).
+- Tag weight buttons treat "(tag)" as weight 1.1 instead of nesting brackets; setting the slider to 1.0 removes the weight.
+- The queue shows LoRAs with negative weights, and an expanded job card stays expanded when jobs are moved.
+- Gallery path breadcrumbs work for servers running on Linux.
+- The system Back button closes the Settings overlay.
+- The high-VRAM warning appears once when the image size crosses the limit, not on every change.
+- The LoRA tags popup no longer shows the previous LoRA's tags while loading.
+- No more double "preset loaded" / "defaults updated" messages or two update-download dialogs at once.
+- Removed the "Show Foreground Service Notification" switch, which did nothing.
+- The app shares only its update folder with the installer instead of the whole storage.
+- Removed about 1600 lines of unused code.
 
 - Fixed generations longer than the "Connection Timeout" setting (10 s by default) failing with a timeout and pausing the queue.
 - Fixed the checkpoint picked in the UI being ignored: jobs kept forcing the model that was active at app start.

@@ -28,7 +28,6 @@ class GenerationService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val notificationId = 1001
 
-    private var generationStartTime: Long = 0
     private var wasGenerating = false
 
     @Volatile private var isNotificationDismissed = false
@@ -85,7 +84,6 @@ class GenerationService : Service() {
                 val batchSize = queue.firstOrNull()?.payload?.batch_size ?: 1
 
                 if (isActivelyGenerating && !wasGenerating) {
-                    generationStartTime = System.currentTimeMillis()
                     wasGenerating = true
                     acquireWakeLock()
                 } else if (!isActivelyGenerating && wasGenerating) {
@@ -95,7 +93,8 @@ class GenerationService : Service() {
 
                 val shouldUpdate = (progInt != lastProgress) || (text != lastText) || (jobNo != lastJobNo) || isNotificationDismissed
 
-                if (shouldUpdate && isActivelyGenerating) {
+                // "Disabled" keeps the static notification the foreground service needs and never refreshes it.
+                if (shouldUpdate && isActivelyGenerating && mode != "Disabled") {
                     lastProgress = progInt
                     lastText = text
                     lastJobNo = jobNo
@@ -271,34 +270,26 @@ class GenerationService : Service() {
             builder.color = 0xFFFF0000.toInt()
         } else if (isActivelyGenerating) {
             builder.color = 0xFF005BFF.toInt()
-
-            val max = 100
             val progInt = (progress * 100).toInt()
-            builder.setProgress(max, progInt, progInt == 0)
 
+            // The values must match the options offered in SetupScreen: "Simple", "Verbose", "Disabled".
             when (notificationMode) {
                 "Verbose" -> {
+                    builder.setProgress(100, progInt, progInt == 0)
                     builder.setContentTitle("Batch Count: $jobCount | Batch Size: $batchSize")
                     builder.setContentText("Current image: ${jobNo + 1}/$jobCount | $progInt%")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Open App", pendingIntent)
-                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
-                "Normal" -> {
+                "Disabled" -> {
+                    builder.setContentTitle("Generating in background")
+                }
+                else -> { // "Simple"
+                    builder.setProgress(100, progInt, progInt == 0)
                     builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
                     builder.setContentText("Size: $batchSize | Progress: $progInt%")
-                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
-                }
-                "Minimal" -> {
-                    builder.setContentTitle("Generating...")
-                    builder.setContentText("Progress: $progInt%")
-                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
-                }
-                else -> { // Fallback to Normal
-                    builder.setContentTitle("Image ${jobNo + 1}/$jobCount")
-                    builder.setContentText("Size: $batchSize | Progress: $progInt%")
-                    builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
                 }
             }
+            builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
         } else {
             builder.setContentTitle("ForgeGen is Active")
             builder.setContentText("Ready for generation")

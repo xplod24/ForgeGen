@@ -7,10 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 object ForgePromptManager {
-    private const val TAG = "ForgePromptManager"
     private val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val _wildcards = MutableStateFlow<List<WildcardEntity>>(emptyList())
@@ -49,15 +47,4 @@ object ForgePromptManager {
             loadWildcards()
         }
     }
-
-    suspend fun getWildcardCount(): Int =
-        withContext(Dispatchers.IO) {
-            ForgeRepository.db.wildcardDao().count()
-        }
-
-    suspend fun clearWildcards() =
-        withContext(Dispatchers.IO) {
-            ForgeRepository.db.wildcardDao().clearAll()
-            _wildcards.value = emptyList()
-        }
 }

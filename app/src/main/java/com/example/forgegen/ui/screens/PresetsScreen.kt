@@ -2,7 +2,6 @@
 package com.example.forgegen.ui.screens
 import com.example.forgegen.*
 import com.example.forgegen.ui.components.*
-import com.example.forgegen.*
 
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -24,7 +23,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,7 +95,9 @@ fun PresetsScreen(
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(config.presets, key = { it.name }) { preset ->
+                    // No name-based key: the name is edited live, and a changing key recreated the card
+                    // on every keystroke (the field lost focus) and crashed on two presets with the same name.
+                    items(config.presets) { preset ->
                         var presetName by remember(preset.name) { mutableStateOf(preset.name) }
                         var positivePrompt by remember(preset.state.positivePrompt) { mutableStateOf(preset.state.positivePrompt) }
                         var negativePrompt by remember(preset.state.negativePrompt) { mutableStateOf(preset.state.negativePrompt) }
@@ -155,8 +155,7 @@ fun PresetsScreen(
                                     ) {
                                         Button(
                                             onClick = {
-                                                viewModel.loadPreset(preset.name)
-                                                Toast.makeText(context, "Loaded Preset: ${preset.name}", Toast.LENGTH_LONG).show()
+                                                viewModel.loadPreset(preset.name) // shows its own "Loaded" message
                                                 navController.popBackStack()
                                             },
                                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
@@ -401,9 +400,8 @@ fun PresetsScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.saveCurrentAsDefault()
+                    viewModel.saveCurrentAsDefault() // shows its own confirmation message
                     showDefaultConfirm = false
-                    Toast.makeText(context, "Startup defaults updated", Toast.LENGTH_LONG).show()
                 }) {
                     Text("Set Startup Default", fontWeight = FontWeight.Bold)
                 }

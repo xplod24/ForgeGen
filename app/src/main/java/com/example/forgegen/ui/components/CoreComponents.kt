@@ -1,16 +1,13 @@
 package com.example.forgegen.ui.components
 import com.example.forgegen.*
-import com.example.forgegen.*
 
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -28,13 +25,9 @@ import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.forgegen.ui.theme.*
-import java.util.Locale
-import kotlin.math.abs
 
 /* ============================================================================
- * STATIC REGEX PARSER & TOKENIZER (Performance Optimization & Couple Tags)
+ * ANIMATED STATUS INDICATOR (tag parsing lives in PromptTags.kt)
  * ============================================================================ */
 
 @Composable
@@ -207,55 +200,6 @@ fun AnimatedStatusIndicator(
     }
 }
 
-@Composable
-fun SectionHeader(title: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            title,
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-}
-
-fun parseTags(prompt: String): List<String> {
-    val result = mutableListOf<String>()
-    val currentTag = java.lang.StringBuilder()
-    var depth = 0
-
-    for (char in prompt) {
-        when (char) {
-            '(', '[', '{' -> {
-                depth++
-                currentTag.append(char)
-            }
-            ')', ']', '}' -> {
-                depth = maxOf(0, depth - 1)
-                currentTag.append(char)
-            }
-            ',' -> {
-                if (depth == 0) {
-                    if (currentTag.isNotBlank()) {
-                        result.add(currentTag.toString().trim())
-                    }
-                    currentTag.clear()
-                } else {
-                    currentTag.append(char)
-                }
-            }
-            else -> currentTag.append(char)
-        }
-    }
-    if (currentTag.isNotBlank()) {
-        result.add(currentTag.toString().trim())
-    }
-    return result
-}
-
 /* ============================================================================
  * HELPER CLASSES & FUNCTIONS
  * ============================================================================ */
@@ -282,38 +226,6 @@ class PromptVisualTransformation : VisualTransformation {
         }
 
         return TransformedText(AnnotatedString(str, spanStyles), OffsetMapping.Identity)
-    }
-}
-
-fun countTokens(text: String): Int {
-    if (text.isBlank()) return 0
-    val words = parseTags(text)
-    return words.size
-}
-
-fun getTagStrength(tag: String): String {
-    val trimmed = tag.trim()
-    val match = PromptParser.TAG_STRENGTH.find(trimmed)
-    return match?.groupValues?.getOrNull(2) ?: "1.0"
-}
-
-fun adjustTagStrength(
-    tag: String,
-    delta: Float,
-): String {
-    val trimmed = tag.trim()
-    val match = PromptParser.TAG_STRENGTH.find(trimmed)
-
-    if (match != null && match.groupValues.size >= 3) {
-        val base = match.groupValues[1]
-        val currentStrength = match.groupValues[2].toFloatOrNull() ?: 1.0f
-        val newStrength = (currentStrength + delta).coerceIn(0.1f, 3.0f)
-        if (abs(newStrength - 1.0f) < 0.05f) return base
-        return "($base:${String.format(Locale.US, "%.1f", newStrength)})"
-    } else {
-        val newStrength = (1.0f + delta).coerceIn(0.1f, 3.0f)
-        if (abs(newStrength - 1.0f) < 0.05f) return trimmed
-        return "($trimmed:${String.format(Locale.US, "%.1f", newStrength)})"
     }
 }
 

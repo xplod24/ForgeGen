@@ -13,7 +13,6 @@ class ForgeSettingsManagerConfigTest {
                 galleryPath = "/srv/out",
                 isDarkMode = true,
                 timeout = 33,
-                receiveGenerationNotification = false,
                 notifOnBatchFinish = true,
                 notifOnQueueFinish = false,
                 notifCivitaiSync = false,
@@ -49,5 +48,15 @@ class ForgeSettingsManagerConfigTest {
     fun `missing or broken config falls back to defaults`() {
         assertEquals(AppConfig(), ForgeSettingsManager.loadConfig(null))
         assertEquals(AppConfig(), ForgeSettingsManager.loadConfig("not json"))
+    }
+
+    @Test
+    fun `stored timeout outside the allowed range is clamped`() {
+        // OkHttp throws for a negative timeout, so such a value must never reach the client.
+        val negative = ForgeSettingsManager.gson.toJson(AppConfig(timeout = -5))
+        val huge = ForgeSettingsManager.gson.toJson(AppConfig(timeout = 100_000))
+
+        assertEquals(1, ForgeSettingsManager.loadConfig(negative).timeout)
+        assertEquals(600, ForgeSettingsManager.loadConfig(huge).timeout)
     }
 }

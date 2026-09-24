@@ -11,9 +11,6 @@ import java.nio.file.Files
 // ==========================================
 // 1. ODCZYT KONFIGURACJI I WERSJONOWANIE
 // ==========================================
-val versionMajor = project.findProperty("VERSION_MAJOR")?.toString()?.toIntOrNull() ?: 1
-val versionPatch = project.findProperty("VERSION_PATCH")?.toString()?.toIntOrNull() ?: 1
-
 val buildNumberFile = file("build_number.txt")
 var buildNumber = 1
 if (buildNumberFile.exists()) {
@@ -90,9 +87,6 @@ dependencies{
     ksp(libs.androidx.room.compiler)
     // optional - Kotlin Extensions and Coroutines support for Room
     implementation(libs.androidx.room.ktx)
-    // If this project only uses Java source, use the Java annotationProcessor
-    // No additional plugins are necessary
-    annotationProcessor(libs.androidx.room.compiler)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -145,7 +139,7 @@ tasks.register("incrementBuildNumber") {
 }
 
 // Funkcja rejestrująca taski generujące JSON w zależności od wariantu
-fun registerGenerateJsonTask(variant: String, channelName: String, urlSegment: String) {
+fun registerGenerateJsonTask(variant: String, channelName: String) {
     val taskName = "generateUpdateJson${variant.replaceFirstChar { it.uppercase() }}"
 
     tasks.register(taskName) {
@@ -215,8 +209,8 @@ fun registerGenerateJsonTask(variant: String, channelName: String, urlSegment: S
 }
 
 // Rejestrujemy task dla obu wariantów
-registerGenerateJsonTask("debug", "Release", "release")
-registerGenerateJsonTask("release", "Release", "release")
+registerGenerateJsonTask("debug", "Release")
+registerGenerateJsonTask("release", "Release")
 
 // Task kopiujący pliki na serwer aktualizacji
 tasks.register("copyAndPasteUpdateFileIntoServer") {

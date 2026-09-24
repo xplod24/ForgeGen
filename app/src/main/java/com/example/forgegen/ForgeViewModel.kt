@@ -2,7 +2,6 @@
 package com.example.forgegen
 
 import com.example.forgegen.ui.components.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
@@ -12,12 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
@@ -64,11 +60,9 @@ class ForgeViewModel(
         // Create managers but do NOT start them yet.
         networkManager =
             ForgeNetworkManager(
-                application = getApplication(),
                 getDb = { ForgeRepository.db },
                 getConfig = { ForgeRepository.config.value },
                 updateConfig = { ForgeSettingsManager.saveConfig(it) },
-                showToast = { showToast(it) },
                 managerScope = viewModelScope,
             )
 
@@ -100,14 +94,6 @@ class ForgeViewModel(
         ForgeRepository.initializeDatabaseAndSettings(getApplication())
         ForgePromptManager.init() // wildcards must be loaded before the first job expands __name__ tokens
 
-        // Load stats time range from database
-        val json = ForgeRepository.db.appSettingDao().getSetting(STATS_TIME_RANGE_KEY)?.value
-        if (json != null) {
-            try {
-                _statsTimeRangeMinutes.value = json.toInt()
-            } catch (e: Exception) {}
-        }
-
         // 2. Init API Clients
         ForgeRepository.initializeApiClientAndData()
 
@@ -137,17 +123,9 @@ class ForgeViewModel(
 
     val isConnected: StateFlow<Boolean> = ForgeRepository.isConnected
     val pingMs: StateFlow<Long> = ForgeRepository.pingMs
-    val serverStats: StateFlow<List<ServerStatRecord>> = ForgeRepository.serverStats
-
-    val currentJobNo: StateFlow<Int> = ForgeRepository.currentJobNo
-    val currentJobCount: StateFlow<Int> = ForgeRepository.currentJobCount
-    val currentSamplingStep: StateFlow<Int> = ForgeRepository.currentSamplingStep
-    val currentSamplingSteps: StateFlow<Int> = ForgeRepository.currentSamplingSteps
 
     val isServerBusy: StateFlow<Boolean> = ForgeRepository.isServerBusy
     val vramUsage: StateFlow<String?> = ForgeRepository.vramUsage
-    val ramUsage: StateFlow<String?> = kotlinx.coroutines.flow.MutableStateFlow(null)
-    val positivePromptTokens: StateFlow<Int?> = kotlinx.coroutines.flow.MutableStateFlow(null)
 
     // --- DELEGATION OF STATE FROM FORGE NETWORK MANAGER ---
     val selectedModel: StateFlow<String> = networkManager.selectedModel
@@ -163,14 +141,12 @@ class ForgeViewModel(
     val civitaiSyncLastResult: StateFlow<String?> = networkManager.civitaiSyncLastResult
 
     // --- DELEGATION OF STATE FROM FORGE GALLERY MANAGER ---
-    val galleryFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.galleryFiles
     val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NEW (optimized filtering)
     val currentGalleryPath: StateFlow<String> = ForgeGalleryManager.currentGalleryPath
     val isGalleryLoading: StateFlow<Boolean> = ForgeGalleryManager.isGalleryLoading
     val isGallerySyncing: StateFlow<IndicatorState> = ForgeGalleryManager.isGallerySyncing
     val gallerySyncCurrentFile: StateFlow<String> = ForgeGalleryManager.gallerySyncCurrentFile
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = ForgeGalleryManager.gallerySyncProgress
-    val galleryIndexCount: StateFlow<Int> = ForgeGalleryManager.galleryIndexCount
     val galleryError: StateFlow<String?> = ForgeGalleryManager.galleryError
     val showGalleryMetadata: StateFlow<Boolean> = ForgeGalleryManager.showGalleryMetadata
     val currentImageMetadata: StateFlow<String?> = ForgeGalleryManager.currentImageMetadata
@@ -184,7 +160,6 @@ class ForgeViewModel(
     val progress: StateFlow<Float> = ForgeQueueManager.progress
     val currentEta: StateFlow<Double> = ForgeQueueManager.currentEta
     val isGenerating: StateFlow<Boolean> = ForgeQueueManager.isGenerating
-    val statusText: StateFlow<String> = ForgeQueueManager.statusText
     val generationQueue: StateFlow<List<QueuedGeneration>> = ForgeQueueManager.generationQueue
     val isQueuePaused: StateFlow<Boolean> = ForgeQueueManager.isQueuePaused
     val oomAlert: StateFlow<Boolean> = ForgeQueueManager.oomAlert
@@ -207,21 +182,6 @@ class ForgeViewModel(
     // --- STATE FOR IMPORTED IMAGE (Share Intent) ---
     private val _importedImageMetadata = MutableStateFlow<String?>(null)
     val importedImageMetadata: StateFlow<String?> = _importedImageMetadata.asStateFlow()
-
-    // --- STATE FOR NEW FEATURES (Kiosk Mode, Server Stats Range) ---
-    private val _isKioskMode = MutableStateFlow(false)
-    val isKioskMode: StateFlow<Boolean> = _isKioskMode.asStateFlow()
-
-    private val STATS_TIME_RANGE_KEY = "stats_time_range"
-    private val _statsTimeRangeMinutes = MutableStateFlow(15)
-    val statsTimeRangeMinutes: StateFlow<Int> = _statsTimeRangeMinutes.asStateFlow()
-
-    fun setStatsTimeRange(minutes: Int) {
-        _statsTimeRangeMinutes.value = minutes
-        viewModelScope.launch(Dispatchers.IO) {
-            ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(STATS_TIME_RANGE_KEY, minutes.toString()))
-        }
-    }
 
     // Gallery Filters Delegation
     val galleryFilters: StateFlow<ForgeGalleryManager.GalleryFilters> = ForgeGalleryManager.galleryFilters
@@ -290,21 +250,13 @@ class ForgeViewModel(
         ForgeGalleryManager.putSyncToBackground()
     }
     
-    fun wipeAllData() {
-        viewModelScope.launch(Dispatchers.IO) {
-            ForgeSettingsManager.resetToDefaults()
-            ForgeSettingsManager.clearPromptHistory()
-            showToast("Data wiped")
-        }
-    }
-
-    fun wipeSettings() = ForgeSettingsManager.resetToDefaults()
+    fun wipeSettings() = ForgeSettingsManager.resetSettings()
 
     fun wipePresets() = ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(presets = emptyList()))
 
     fun wipeServerProfiles() =
         ForgeSettingsManager.saveConfig(
-            ForgeSettingsManager.config.value.copy(serverProfiles = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860"))),
+            ForgeSettingsManager.config.value.copy(serverProfiles = AppConfig().serverProfiles),
         )
 
     fun wipePromptHistory() = ForgeSettingsManager.clearPromptHistory()
@@ -349,10 +301,6 @@ class ForgeViewModel(
     fun checkForUpdates(manual: Boolean = false) = updateManager.checkForUpdates(manual)
 
     fun downloadUpdate() = updateManager.downloadUpdate()
-
-    fun installUpdate() = updateManager.installUpdate()
-
-    fun dismissUpdate() = updateManager.dismissUpdate()
 
     // --- REFRESH, VRAM & PNG INFO ACTIONS ---
     fun refreshCheckpoints() {
@@ -439,37 +387,6 @@ class ForgeViewModel(
                 }
             } catch (e: Exception) {
                 showToast("Error unloading model")
-            }
-        }
-    }
-
-    fun getPngInfoForGalleryItem(
-        item: GalleryItem,
-        onResult: (String?) -> Unit,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val imageUrl = getGalleryImageUrl(item)
-                val request =
-                    okhttp3.Request
-                        .Builder()
-                        .url(imageUrl)
-                        .build()
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        val bytes = response.body.bytes()
-                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                        val info = ForgeSettingsManager.getPngInfoFromServer(base64)
-                        onResult(info)
-                        return@launch
-                    }
-                }
-
-                onResult(null)
-            } catch (e: Exception) {
-                android.util.Log.e("ForgeViewModel", "Failed to fetch PNG info from server: $e")
-
-                onResult(null)
             }
         }
     }

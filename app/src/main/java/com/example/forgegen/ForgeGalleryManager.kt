@@ -72,14 +72,11 @@ object ForgeGalleryManager {
     private val _isGallerySyncing = MutableStateFlow(IndicatorState.IDLE)
     val isGallerySyncing: StateFlow<IndicatorState> = _isGallerySyncing.asStateFlow()
 
-    private val _isGallerySyncBackgrounded = MutableStateFlow(false)
-    val isGallerySyncBackgrounded: StateFlow<Boolean> = _isGallerySyncBackgrounded.asStateFlow()
+    // Set from the UI and read by the sync coroutine; nothing observes it, so a volatile flag is enough.
+    @Volatile private var isGallerySyncBackgrounded = false
 
     private val _gallerySyncCurrentFile = MutableStateFlow("")
     val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
-
-    private val _galleryIndexCount = MutableStateFlow(0)
-    val galleryIndexCount: StateFlow<Int> = _galleryIndexCount.asStateFlow()
 
     private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
@@ -234,10 +231,9 @@ object ForgeGalleryManager {
                 return@launch
             }
             _showGalleryMetadata.value = getDb().appSettingDao().getSetting(SHOW_META_KEY)?.value?.toBoolean() ?: false
-            if (::getDb.isInitialized) {
-                updateGalleryIndexCount()
-                fetchAvailableModels()
-            }
+            // Without this the stars in the gallery stay empty after a restart until something is toggled.
+            loadFavoritePaths()
+            fetchAvailableModels()
         }
     }
 
@@ -280,14 +276,6 @@ object ForgeGalleryManager {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             getDb().appSettingDao().putSetting(AppSettingEntity("show_gallery_meta", newVal.toString()))
         }
-    }
-
-    fun setShowGalleryMetadata(value: Boolean) {
-        _showGalleryMetadata.value = value
-    }
-
-    fun setCurrentImageMetadata(value: String?) {
-        _currentImageMetadata.value = value
     }
 
     private suspend fun loadFavoritePaths() {
@@ -334,20 +322,10 @@ object ForgeGalleryManager {
         }
     }
 
-    private fun updateGalleryIndexCount() {
-        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            if (::getDb.isInitialized) {
-                val count = getDb().galleryImageDao().getCount()
-                _galleryIndexCount.value = count
-                fetchAvailableModels()
-            }
-        }
-    }
-
     fun clearDatabase() {
         managerScope.launch(Dispatchers.IO) {
             getDb().galleryImageDao().clearAll()
-            _galleryIndexCount.value = 0
+            fetchAvailableModels() // empties the model/LoRA filter lists built from the index
             withContext(Dispatchers.Main) {
                 ForgeRepository.showToast("Gallery Index Wiped")
             }
@@ -446,30 +424,30 @@ object ForgeGalleryManager {
 
     fun triggerManualGallerySync() {
         if (_currentGalleryPath.value.isEmpty()) return
-        _isGallerySyncBackgrounded.value = false
+        isGallerySyncBackgrounded = false
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             syncGalleryDatabase(_currentGalleryPath.value)
             syncJob?.join()
-            if (!_isGallerySyncBackgrounded.value) {
+            if (!isGallerySyncBackgrounded) {
                 withContext(Dispatchers.Main) {
                     ForgeRepository.showToast("Gallery Indexed Successfully")
                 }
             }
             _isGallerySyncing.value = IndicatorState.IDLE
-            _isGallerySyncBackgrounded.value = false
+            isGallerySyncBackgrounded = false
         }
     }
 
     fun cancelManualGallerySync() {
         syncJob?.cancel()
         _isGallerySyncing.value = IndicatorState.IDLE
-        _isGallerySyncBackgrounded.value = false
+        isGallerySyncBackgrounded = false
         val notificationManager = NotificationManagerCompat.from(application)
         notificationManager.cancel(555)
     }
 
     fun putSyncToBackground() {
-        _isGallerySyncBackgrounded.value = true
+        isGallerySyncBackgrounded = true
         _isGallerySyncing.value = IndicatorState.IDLE
     }
 
@@ -602,7 +580,7 @@ object ForgeGalleryManager {
                             val current = processedCount.incrementAndGet()
                             _gallerySyncProgress.value = current to total
 
-                            if (_isGallerySyncBackgrounded.value &&
+                            if (isGallerySyncBackgrounded &&
                                 ContextCompat.checkSelfPermission(application, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
                             ) {
                                 val notificationManager = NotificationManagerCompat.from(application)
@@ -624,12 +602,12 @@ object ForgeGalleryManager {
                 _isGallerySyncing.value = IndicatorState.SUCCESS
                 
                 // Remove notification if it exists
-                if (_isGallerySyncBackgrounded.value) {
+                if (isGallerySyncBackgrounded) {
                     val notificationManager = NotificationManagerCompat.from(application)
                     notificationManager.cancel(555)
                 }
 
-                updateGalleryIndexCount()
+                fetchAvailableModels()
                 delay(1500)
                 _isGallerySyncing.value = IndicatorState.IDLE
                 _gallerySyncProgress.value = 0 to 0

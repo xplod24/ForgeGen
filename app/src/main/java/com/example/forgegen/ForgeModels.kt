@@ -28,16 +28,12 @@ data class GenerationPreset(
     val includePrompts: Boolean = true,
 )
 
-
-
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var serverBasePath: String = "",
     var galleryPath: String = "",
     var isDarkMode: Boolean = false,
     var timeout: Int = 10,
-
-    var receiveGenerationNotification: Boolean = true, // Legacy field (could remove, but keeping it to avoid breaking other things right now if it's used elsewhere like in Service)
     var notifOnBatchFinish: Boolean = false,
     var notifOnQueueFinish: Boolean = true,
     var notifCivitaiSync: Boolean = true,
@@ -87,47 +83,9 @@ data class AppState(
     var saveToDevice: Boolean = false,
 )
 
-data class PngInfoPayloadDto(
-    val image: String,
-)
-
-data class PngInfoResponseDto(
-    val info: String,
-    val items: Map<String, String>? = null,
-)
-
-data class TokenizePayloadDto(
-    val text: String,
-)
-
-data class TokenizeResponseDto(
-    val tokens: List<Int>? = null,
-)
-
 data class PhystonHistoryDto(
     val prompt: String,
     val tags: List<String>? = null,
-)
-
-data class Txt2ImgRequestDto(
-    val prompt: String,
-    val negative_prompt: String,
-    val steps: Int,
-    val cfg_scale: Float,
-    val width: Int,
-    val height: Int,
-    val n_iter: Int,
-    val batch_size: Int,
-    val seed: Long,
-    val sampler_name: String,
-    val scheduler: String,
-    val override_settings: OverrideSettingsDto,
-    val enable_hr: Boolean,
-    val hr_scale: Float,
-    val hr_upscaler: String,
-    val denoising_strength: Float,
-    val save_images: Boolean = true,
-    val send_images: Boolean = true,
 )
 
 data class PromptHistoryItem(
@@ -150,15 +108,6 @@ enum class GenerationStatus {
     GENERATING,
     SUSPENDED,
 }
-
-data class ServerStatRecord(
-    val timestamp: Long,
-    val pingMs: Long,
-    val ramUsed: Double,
-    val ramTotal: Double,
-    val vramUsed: Double,
-    val vramTotal: Double,
-)
 
 data class ApiResource(
     val title: String,
@@ -222,12 +171,6 @@ interface CivitaiModelDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertModels(models: List<CivitaiModelEntity>)
-
-    @Query("DELETE FROM civitai_models")
-    suspend fun clearAll()
-
-    @Query("SELECT COUNT(*) FROM civitai_models")
-    suspend fun count(): Int
 }
 
 @Entity(tableName = "favorite_images")
@@ -249,17 +192,8 @@ interface FavoriteImageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFavorite(favorite: FavoriteImageEntity)
 
-    @Delete
-    suspend fun deleteFavoriteEntity(favorite: FavoriteImageEntity)
-
     @Query("DELETE FROM favorite_images WHERE fullpath = :path")
     suspend fun deleteFavorite(path: String)
-
-    @Query("SELECT COUNT(*) FROM favorite_images")
-    suspend fun count(): Int
-
-    @Query("DELETE FROM favorite_images")
-    suspend fun clearAll()
 }
 
 @Entity(tableName = "gallery_images")
@@ -278,31 +212,14 @@ data class GalleryImageEntity(
 
 @Dao
 interface GalleryImageDao {
-    @Query(
-        "SELECT * FROM gallery_images WHERE positivePrompt LIKE '%' || :query || '%' OR name LIKE '%' || :query || '%' OR loras LIKE '%' || :query || '%'",
-    )
-    suspend fun searchImages(query: String): List<GalleryImageEntity>
-
     @Query("SELECT * FROM gallery_images WHERE fullpath = :path LIMIT 1")
     suspend fun getImageByPath(path: String): GalleryImageEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImage(image: GalleryImageEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(images: List<GalleryImageEntity>)
-
-    @Query("DELETE FROM gallery_images WHERE fullpath LIKE :folderPath || '%'")
-    suspend fun clearFolder(folderPath: String)
-
     @Query("DELETE FROM gallery_images")
     suspend fun clearAll()
-
-    @Query("SELECT COUNT(*) FROM gallery_images")
-    suspend fun getCount(): Int
-
-    @Query("SELECT DISTINCT model FROM gallery_images WHERE model IS NOT NULL AND model != ''")
-    suspend fun getDistinctModels(): List<String>
 
     @Query("SELECT * FROM gallery_images")
     suspend fun getAllImages(): List<GalleryImageEntity>
@@ -562,9 +479,6 @@ interface WildcardDao {
 
     @Query("SELECT * FROM wildcards ORDER BY name ASC")
     suspend fun getAllWildcards(): List<WildcardEntity>
-
-    @Query("SELECT COUNT(*) FROM wildcards")
-    suspend fun count(): Int
 
     @Query("DELETE FROM wildcards")
     suspend fun clearAll()
