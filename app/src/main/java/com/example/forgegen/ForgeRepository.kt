@@ -3,16 +3,13 @@ package com.example.forgegen
 import com.example.forgegen.ui.components.*
 import android.annotation.SuppressLint
 import android.app.Application
-import android.app.NotificationManager
 import android.content.ContentValues
-import android.content.Context
 import android.content.Intent
 import android.icu.text.SimpleDateFormat
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import androidx.room.Room
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -20,9 +17,6 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -43,11 +37,9 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.io.IOException
-import java.nio.ByteBuffer
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -114,31 +106,6 @@ object ForgeRepository {
     // RETROFIT APIS
     var forgeApi: ForgeApi? = null
 
-    // Client with Interceptor specifically for Civitai (protects Logcat from A1111 garbage)
-    private val civitaiApi: CivitaiApi by lazy {
-        val loggingInterceptor =
-            HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            }
-        val civitaiClient =
-            OkHttpClient
-                .Builder()
-                .addInterceptor(loggingInterceptor)
-                .connectTimeout(config.value.timeout.toLong(), TimeUnit.SECONDS)
-                .readTimeout(config.value.timeout.toLong(), TimeUnit.SECONDS)
-                .build()
-
-        Retrofit
-            .Builder()
-            .baseUrl("https://civitai.com/")
-            .client(civitaiClient)
-            .addConverterFactory(GsonConverterFactory.create(ForgeSettingsManager.gson))
-            .build()
-            .create(CivitaiApi::class.java)
-    }
-
-
-
     private val QUEUE_KEY = "saved_queue"
     private val STATS_KEY = "saved_server_stats"
 
@@ -164,7 +131,7 @@ object ForgeRepository {
     val activeLoras: StateFlow<List<ActiveLora>> =
         ForgeSettingsManager.appState
             .map { state ->
-                val regex = Regex("<lora:([^:]+):([0-9.]+)>")
+                val regex = Regex("<lora:([^:>]+):(-?[0-9.]+)>")
                 regex
                     .findAll(state.positivePrompt)
                     .map { match ->
@@ -187,17 +154,11 @@ object ForgeRepository {
     private val _serverStats = MutableStateFlow<List<ServerStatRecord>>(emptyList())
     val serverStats: StateFlow<List<ServerStatRecord>> = _serverStats.asStateFlow()
 
-    private val _progress = MutableStateFlow(0f)
-    val progress: StateFlow<Float> = _progress.asStateFlow()
-
-    private val _currentEta = MutableStateFlow(0.0)
-    val currentEta: StateFlow<Double> = _currentEta.asStateFlow()
-
-    private val _isGenerating = MutableStateFlow(false)
-    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
-
-    private val _statusText = MutableStateFlow("Ready")
-    val statusText: StateFlow<String> = _statusText.asStateFlow()
+    // Generation state is owned by ForgeQueueManager; these getters only keep the old API working.
+    val progress: StateFlow<Float> get() = ForgeQueueManager.progress
+    val currentEta: StateFlow<Double> get() = ForgeQueueManager.currentEta
+    val isGenerating: StateFlow<Boolean> get() = ForgeQueueManager.isGenerating
+    val statusText: StateFlow<String> get() = ForgeQueueManager.statusText
 
     private val _currentJobNo = MutableStateFlow(0)
     val currentJobNo: StateFlow<Int> = _currentJobNo.asStateFlow()
@@ -238,8 +199,7 @@ object ForgeRepository {
     private val _currentSessionIndex = MutableStateFlow(-1)
     val currentSessionIndex: StateFlow<Int> = _currentSessionIndex.asStateFlow()
 
-    private val _livePreviewImage = MutableStateFlow<String?>(null)
-    val livePreviewImage: StateFlow<String?> = _livePreviewImage.asStateFlow()
+    val livePreviewImage: StateFlow<String?> get() = ForgeQueueManager.livePreviewImage
 
     private val _isShowingGridPreview = MutableStateFlow(false)
     val isShowingGridPreview: StateFlow<Boolean> = _isShowingGridPreview.asStateFlow()
@@ -351,11 +311,10 @@ object ForgeRepository {
         ForgeSettingsManager.updateInitStatus("Connecting to Server...")
         rebuildForgeApi(config.value.apiUrl)
 
+        // Models, samplers and LoRAs are fetched by ForgeNetworkManager when the connection comes up
+        // or the URL changes; here only the Retrofit instance (URL / timeout) has to be rebuilt.
         ForgeSettingsManager.onApiUrlChanged = { newUrl ->
             rebuildForgeApi(newUrl)
-            repositoryScope.launch(Dispatchers.IO) {
-                fetchApiData()
-            }
         }
 
         ForgeSettingsManager.updateInitStatus("Loading App Data...")
@@ -365,7 +324,6 @@ object ForgeRepository {
 
         startBackgroundPing()
         startStatsMaintenance()
-        fetchApiData()
     }
 
     private fun loadFavoritePaths() {
@@ -622,32 +580,7 @@ object ForgeRepository {
         url: String,
     ) = ForgeSettingsManager.addServerProfile(name, url)
 
-    private fun extractPngParameters(bytes: ByteArray): String {
-        try {
-            if (bytes.size < 8) return ""
-            var offset = 8
-            while (offset < bytes.size - 8) {
-                val length = ByteBuffer.wrap(bytes, offset, 4).int
-                offset += 4
-                val chunkType = String(bytes, offset, 4)
-                offset += 4
-                if (chunkType == "tEXt" || chunkType == "iTXt") {
-                    val chunkData = bytes.copyOfRange(offset, offset + length)
-                    val nullIndex = chunkData.indexOf(0.toByte())
-                    if (nullIndex != -1) {
-                        val keyword = String(chunkData.copyOfRange(0, nullIndex), Charsets.ISO_8859_1)
-                        if (keyword == "parameters") {
-                            return String(chunkData.copyOfRange(nullIndex + 1, chunkData.size), Charsets.UTF_8)
-                        }
-                    }
-                }
-                offset += length + 4
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing PNG chunks", e)
-        }
-        return ""
-    }
+    private fun extractPngParameters(bytes: ByteArray): String = PngMetadata.readParameters(bytes)
 
     suspend fun extractMetadataFromUri(uri: Uri): String? =
         withContext(Dispatchers.IO) {
@@ -693,16 +626,10 @@ object ForgeRepository {
                             val jobCount = progressData.state?.jobCount ?: 0
 
                             val currentImageStr = progressData.currentImage ?: ""
-                            if (currentImageStr.isNotEmpty()) {
-                                _livePreviewImage.value = currentImageStr
-                            } else {
-                                if (!isGenerating.value) _livePreviewImage.value = null
-                            }
-
                             val busy = progressVal > 0.001f || jobCount > 0
                             _isServerBusy.value = busy
-                            _progress.value = progressVal
-                            _currentEta.value = etaVal
+                            ForgeQueueManager.updateExternalProgress(progressVal, etaVal, currentImageStr.ifEmpty { null })
+                            if (currentImageStr.isEmpty() && !isGenerating.value) ForgeQueueManager.setLivePreviewImage(null)
 
                             progressData.state?.let { stateObj ->
                                 _currentJobNo.value = stateObj.jobNo
@@ -723,7 +650,6 @@ object ForgeRepository {
                         } else if (response?.code() == 401 || response?.code() == 403) {
                             _isConnected.value = false
                             _isServerBusy.value = false
-                            _currentEta.value = 0.0
                             failCount = 0
                             ForgeQueueManager.updateStatusText("Authentication Required.")
                         } else {
@@ -781,7 +707,6 @@ object ForgeRepository {
                 } catch (_: Exception) {
                     _isConnected.value = false
                     _isServerBusy.value = false
-                    _currentEta.value = 0.0
                     _vramUsage.value = null
                     failCount++
                     if (failCount >= config.value.timeout && !ForgeQueueManager.isGenerating.value) {
@@ -870,8 +795,14 @@ object ForgeRepository {
     fun appendLora(name: String) {
         val current = appState.value.positivePrompt
         if (!current.contains("<lora:$name:")) {
-            val prefix = if (current.isNotEmpty() && !current.endsWith(",")) ", " else ""
-            val newPrompt = current.trimEnd() + prefix + "<lora:$name:1.0>"
+            val base = current.trimEnd()
+            val separator =
+                when {
+                    base.isEmpty() -> ""
+                    base.endsWith(",") -> " "
+                    else -> ", "
+                }
+            val newPrompt = base + separator + "<lora:$name:1.0>"
             ForgeSettingsManager.updateState { it.copy(positivePrompt = newPrompt) }
         }
     }
@@ -881,19 +812,24 @@ object ForgeRepository {
         strength: Float,
     ) {
         val current = appState.value.positivePrompt
-        val regex = Regex("<lora:${Regex.escape(name)}:[0-9.]+>")
+        val regex = Regex("<lora:${Regex.escape(name)}:-?[0-9.]+>")
         val formattedStrength = String.format(Locale.US, "%.2f", strength)
-        val newPrompt = current.replace(regex, "<lora:$name:$formattedStrength>")
+        // Lambda replacement: a '$' or '\' in the LoRA name must not be treated as a group reference.
+        val newPrompt = current.replace(regex) { "<lora:$name:$formattedStrength>" }
         ForgeSettingsManager.updateState { it.copy(positivePrompt = newPrompt) }
     }
 
     fun removeLora(name: String) {
         val current = appState.value.positivePrompt
         val escapedName = Regex.escape(name)
-        val regex = Regex(",?\\s*<lora:$escapedName:[0-9.]+>\\s*,?")
-        var newPrompt = current.replace(regex, ", ").trim()
-        if (newPrompt.startsWith(",")) newPrompt = newPrompt.substring(1).trim()
-        if (newPrompt.endsWith(",")) newPrompt = newPrompt.substring(0, newPrompt.length - 1).trim()
+        val newPrompt =
+            current
+                .replace(Regex("<lora:$escapedName:-?[0-9.]+>"), "")
+                .replace(Regex(",\\s*,"), ",") // separator left behind by the removed tag
+                .replace(Regex(" {2,}"), " ")
+                .trim()
+                .trim(',')
+                .trim()
         ForgeSettingsManager.updateState { it.copy(positivePrompt = newPrompt) }
     }
 
@@ -1157,364 +1093,6 @@ object ForgeRepository {
             newState
         }
         showSnackbar("Loaded generation data")
-    }
-
-    /* ============================================================================
-     * DATA SYNCHRONIZATION (CUSTOM API / A1111)
-     * Fetches only hashes/names locally, does not perform long external network operations.
-     * ============================================================================ */
-
-    fun fetchApiData() {
-        repositoryScope.launch(Dispatchers.IO) {
-            if (forgeApi == null) return@launch
-
-            // Fetch sd_cwd in the background
-            launch {
-                try {
-                    val response = forgeApi?.getGlobalSettings()
-                    if (response?.isSuccessful == true) {
-                        val sdCwd = response.body()?.sdCwd ?: ""
-                        if (sdCwd.isNotEmpty() && config.value.serverBasePath != sdCwd) {
-                            ForgeSettingsManager.saveConfig(config.value.copy(serverBasePath = sdCwd))
-                        }
-                    }
-                } catch (e: Exception) {
-                    // ignore silently
-                }
-            }
-
-            try {
-                coroutineScope {
-                    val defSamplers =
-                        async {
-                            try {
-                                val res = forgeApi?.getSamplers()
-                                if (res?.isSuccessful == true) {
-                                    ForgeModelManager.updateState(samplers = res.body()?.map { it.name } ?: emptyList())
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed samplers", e)
-                            }
-                        }
-
-                    val defSchedulers =
-                        async {
-                            try {
-                                val res = forgeApi?.getSchedulers()
-                                if (res?.isSuccessful == true) {
-                                    ForgeModelManager.updateState(schedulers = res.body()?.map { it.name } ?: emptyList())
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed schedulers", e)
-                            }
-                        }
-
-                    val defUpscalers =
-                        async {
-                            try {
-                                val res = forgeApi?.getUpscalers()
-                                if (res?.isSuccessful == true) {
-                                    ForgeModelManager.updateState(upscalers = res.body()?.map { it.name } ?: emptyList())
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed upscalers", e)
-                            }
-                        }
-
-                    val defModelsAndLoras =
-                        async {
-                            var customApiSuccess = false
-                            try {
-                                val customRes = forgeApi?.getCustomModelsHashes()
-                                if (customRes?.isSuccessful == true) {
-                                    val modelsList = customRes.body()?.models ?: emptyList()
-
-                                    val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-                                    val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
-                                    val parsedApiModels = mutableListOf<CustomApiModelDto>()
-
-                                    for (item in modelsList) {
-                                        val type = item.type ?: ""
-                                        val name = item.name ?: ""
-                                        val filename = item.filename ?: ""
-                                        val sha256 = item.sha256 ?: ""
-
-                                        if (sha256.isEmpty()) continue
-                                        parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
-
-                                        // We only add residual information so the model is visible.
-                                        // Real data from Civitai will be fetched manually in syncCivitaiModelsManual()
-                                        if (!localDbModels.containsKey(sha256)) {
-                                            newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
-                                        }
-                                    }
-
-                                    if (newModelsToInsert.isNotEmpty()) {
-                                        db.civitaiModelDao().insertModels(newModelsToInsert)
-                                    }
-
-                                    val updatedDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                                    val checkpoints =
-                                        parsedApiModels
-                                            .filter { it.type == "checkpoint" }
-                                            .map { cam ->
-                                                val dbEntity = updatedDbModels[cam.sha256]
-                                                ApiResource(
-                                                    title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                                    name = cam.name ?: "Unknown",
-                                                    path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                                    hash = cam.sha256,
-                                                )
-                                            }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                    val loras =
-                                        parsedApiModels
-                                            .filter { it.type == "lora" }
-                                            .map { cam ->
-                                                val dbEntity = updatedDbModels[cam.sha256]
-                                                ApiResource(
-                                                    title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                                    name = cam.name ?: "Unknown",
-                                                    path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                                    hash = cam.sha256,
-                                                )
-                                            }.sortedBy { it.title.lowercase(Locale.getDefault()) }
-
-                                    ForgeModelManager.updateState(models = checkpoints)
-                                    ForgeModelManager.updateState(availableLoras = loras)
-                                    customApiSuccess = true
-                                } else {
-                                    Log.w(TAG, "Custom API not found (HTTP ${customRes?.code()}). Fallback initiated.")
-                                    showSnackbar("Custom API missing. Falling back to standard models.")
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Custom API fetch failed", e)
-                                showSnackbar("Failed to reach Custom API. Falling back.")
-                            }
-
-                            if (!customApiSuccess) {
-                                try {
-                                    val modelRes = forgeApi?.getSdModels()
-                                    if (modelRes?.isSuccessful == true) {
-                                        ForgeModelManager.updateState(
-                                            models =
-                                                modelRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
-                                                    ?: emptyList(),
-                                        )
-                                    }
-
-                                    val loraRes = forgeApi?.getLoras()
-                                    if (loraRes?.isSuccessful == true) {
-                                        ForgeModelManager.updateState(
-                                            availableLoras =
-                                                loraRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
-                                                    ?: emptyList(),
-                                        )
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Fallback API fetch failed", e)
-                                    showSnackbar("Failed to fetch models completely.")
-                                }
-                            }
-                        }
-
-                    val defOpts =
-                        async {
-                            try {
-                                val res = forgeApi?.getOptions()
-                                if (res?.isSuccessful == true) {
-                                    ForgeModelManager.updateState(selectedModel = res.body()?.sdModelCheckpoint ?: "")
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed options", e)
-                            }
-                        }
-
-                    awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to synchronize API definitions: ${e.message}")
-            }
-        }
-    }
-
-    /* ============================================================================
-     * MANUAL CIVITAI SYNCHRONIZATION
-     * Manual, dedicated metadata downloading from Civitai with built-in pop-up
-     * and progress verification. Secured by a 5-second interval.
-     * ============================================================================ */
-
-    fun syncCivitaiModelsManual() {
-        if (ForgeModelManager.isCivitaiSyncing.value != IndicatorState.IDLE) return
-
-        repositoryScope.launch(Dispatchers.IO) {
-            try {
-                println("[CivitaiSync] --- STARTING CIVITAI SYNCHRONIZATION ---")
-                ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.LOADING)
-                ForgeModelManager.updateCivitaiSyncState(lastResult = null)
-
-                val notifManager =
-                    application.getSystemService(
-                        android.content.Context.NOTIFICATION_SERVICE,
-                    ) as android.app.NotificationManager
-                val notifId = 8888
-                val channelId = "forge_default"
-                val builder =
-                    androidx.core.app.NotificationCompat
-                        .Builder(application, channelId)
-                        .setSmallIcon(R.mipmap.ic_launcher_foreground)
-                        .setContentTitle("Civitai Sync")
-                        .setOngoing(true)
-                        .setOnlyAlertOnce(true)
-
-                val customRes = forgeApi?.getCustomModelsHashes()
-                if (customRes?.isSuccessful != true) {
-                    if (ForgeSettingsManager.config.value.notifCivitaiSync) {
-                        builder
-                            .setContentText("Sync failed: Missing Custom API")
-                            .setOngoing(false)
-                            .setAutoCancel(true)
-                        notifManager.notify(notifId, builder.build())
-                    }
-                    ForgeModelManager.updateCivitaiSyncState(lastResult = "Error: Missing Custom API on Forge server.")
-                    println("[CivitaiSync] Error: Server does not have the appropriate Custom API (HTTP ${customRes?.code()})")
-                    ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.ERROR)
-                    delay(3000)
-                    ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
-                    return@launch
-                }
-
-                val modelsList = customRes.body()?.models ?: emptyList()
-                val localDbModels = db.civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                println("[CivitaiSync] Read ${modelsList.size} models from Forge server.")
-
-                // We look for models that were added locally but have no image and keywords (thus require downloading from Civitai)
-                val missingOrIncomplete =
-                    modelsList.filter { item ->
-                        val sha = item.sha256 ?: return@filter false
-                        val entity = localDbModels[sha]
-                        entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
-                    }
-
-                if (missingOrIncomplete.isEmpty()) {
-                    ForgeModelManager.updateCivitaiSyncState(lastResult = "All models are already synchronized!")
-                    println("[CivitaiSync] Finished: All models already have saved metadata.")
-                    ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.SUCCESS)
-                    delay(2000)
-                    ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
-                    return@launch
-                }
-
-                println("[CivitaiSync] Found ${missingOrIncomplete.size} models waiting for metadata download.")
-                ForgeModelManager.updateCivitaiSyncState(progress = 0 to missingOrIncomplete.size)
-
-                if (ForgeSettingsManager.config.value.notifCivitaiSync) {
-                    builder
-                        .setContentText("Found ${missingOrIncomplete.size} models to sync")
-                        .setProgress(missingOrIncomplete.size, 0, false)
-                    notifManager.notify(notifId, builder.build())
-                }
-
-                var hasError = false
-
-                for ((index, cam) in missingOrIncomplete.withIndex()) {
-                    var civName = cam.name ?: "Unknown"
-                    val civType = cam.type ?: "checkpoint"
-                    val sha256 = cam.sha256 ?: continue
-                    var trainedWords = ""
-                    var previewImage: String? = null
-
-                    ForgeModelManager.updateCivitaiSyncState(currentModel = civName)
-                    ForgeModelManager.updateCivitaiSyncState(progress = index to missingOrIncomplete.size)
-
-                    if (ForgeSettingsManager.config.value.notifCivitaiSync) {
-                        builder
-                            .setContentText("Syncing ($index/${missingOrIncomplete.size}): $civName")
-                            .setProgress(missingOrIncomplete.size, index, false)
-                        notifManager.notify(notifId, builder.build())
-                    }
-
-                    // Protection against Civitai IP ban. Always 5 seconds gap between requests.
-                    if (index > 0) delay(5000) else delay(500)
-
-                    println("[CivitaiSync] [$index/${missingOrIncomplete.size}] Downloading for hash: $sha256 ($civName)")
-
-                    try {
-                        val civRes = civitaiApi.getModelByHash(sha256)
-                        if (civRes.isSuccessful) {
-                            val civBody = civRes.body()
-                            if (civBody?.model != null) {
-                                civName = civBody.model.name ?: civName
-                            }
-                            trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
-                            if (!civBody?.images.isNullOrEmpty()) {
-                                previewImage =
-                                    civBody
-                                        ?.images
-                                        ?.firstOrNull()
-                                        ?.url
-                                        ?.replace("original=true", "original=false")
-                            }
-                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Downloaded successfully")
-
-                            println("[CivitaiSync] SUCCESS for $sha256:")
-                            println("[CivitaiSync]  - Parsed Name: $civName")
-                            println("[CivitaiSync]  - Parsed Tags: $trainedWords")
-                            println("[CivitaiSync]  - Parsed Image URL: $previewImage")
-
-                            Log.d(TAG, "Civitai Success for $sha256")
-                        } else {
-                            ForgeModelManager.updateCivitaiSyncState(lastResult = "Error: HTTP ${civRes.code()}")
-                            println("[CivitaiSync] HTTP ERROR: ${civRes.code()} for hash $sha256")
-                            Log.w(TAG, "Civitai API returned error ${civRes.code()} for hash $sha256")
-                            hasError = true
-                        }
-                    } catch (e: Exception) {
-                        ForgeModelManager.updateCivitaiSyncState(lastResult = "Network error")
-                        println("[CivitaiSync] EXCEPTION during download for $sha256: ${e.message}")
-                        Log.e(TAG, "Civitai API fetch error for $sha256", e)
-                        hasError = true
-                    }
-
-                    // Overwriting entity in DB with new data from Civitai (or keeping just the name if download failed)
-                    val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
-                    db.civitaiModelDao().insertModels(listOf(updatedEntity))
-
-                    ForgeModelManager.updateCivitaiSyncState(progress = (index + 1) to missingOrIncomplete.size)
-                }
-
-                ForgeModelManager.updateCivitaiSyncState(lastResult = "Synchronization completed successfully")
-                println("[CivitaiSync] --- SYNCHRONIZATION FINISHED ---")
-
-                if (ForgeSettingsManager.config.value.notifCivitaiSync) {
-                    if (ForgeSettingsManager.config.value.autoDismissCivitaiNotif) {
-                        notifManager.cancel(notifId)
-                    } else {
-                        builder
-                            .setContentText("Sync complete! Updated ${missingOrIncomplete.size} models.")
-                            .setProgress(0, 0, false)
-                            .setOngoing(false)
-                            .setAutoCancel(true)
-                        notifManager.notify(notifId, builder.build())
-                    }
-                }
-
-                fetchApiData()
-
-                ForgeModelManager.updateCivitaiSyncState(state = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS)
-                delay(2000)
-                ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
-            } catch (e: Exception) {
-                Log.e(TAG, "Sync error", e)
-                println("[CivitaiSync] CRITICAL SYNCHRONIZATION LOOP ERROR: ${e.message}")
-                ForgeModelManager.updateCivitaiSyncState(lastResult = "A critical error occurred")
-                ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.ERROR)
-                delay(3000)
-                ForgeModelManager.updateCivitaiSyncState(state = IndicatorState.IDLE)
-            }
-        }
     }
 
     fun fetchGalleryFolder(path: String = config.value.galleryPath) {

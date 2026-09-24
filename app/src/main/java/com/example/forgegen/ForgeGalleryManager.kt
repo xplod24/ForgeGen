@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import java.io.InputStream
-import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,7 +34,6 @@ import androidx.core.app.NotificationManagerCompat
 @SuppressLint("StaticFieldLeak")
 object ForgeGalleryManager {
     private const val TAG = "ForgeGalleryManager"
-    private const val MAX_CHUNK_SIZE = 5 * 1024 * 1024 // 5MB Limit
 
     private lateinit var application: Application
     private lateinit var getDb: () -> ForgeDatabase
@@ -89,8 +87,11 @@ object ForgeGalleryManager {
     internal val _isRestoringPrompt = MutableStateFlow(IndicatorState.IDLE)
     val isRestoringPrompt: StateFlow<IndicatorState> = _isRestoringPrompt.asStateFlow()
 
+    private var restoreJob: Job? = null
+
     fun cancelPromptRestore() {
         if (_isRestoringPrompt.value == IndicatorState.LOADING) {
+            restoreJob?.cancel()
             _isRestoringPrompt.value = IndicatorState.IDLE
         }
     }
@@ -526,64 +527,72 @@ object ForgeGalleryManager {
                                 val imageUrl = getGalleryImageUrl(file)
                                 val request = Request.Builder().url(imageUrl).build()
                                 try {
-                                    val response = networkManager.client.newCall(request).execute()
-                                    if (!response.isSuccessful) {
-                                        Log.e("GallerySync", "Error ${response.code} fetching ${file.name}")
-                                    }
-                                    
-                                    val stream = response.body.byteStream()
-                                    val infoStr = extractPngParameters(stream)
-
-                                    var posPrompt = ""
-                                    var negPrompt = ""
-                                    var model = ""
-                                    var sampler = ""
-                                    var seed = ""
-                                    var loras = ""
-
-                                    if (infoStr.isNotEmpty()) {
-                                        val lines = infoStr.split("\n")
-                                        if (lines.isNotEmpty()) {
-                                            posPrompt =
-                                                lines[0].takeIf { !it.startsWith("Negative prompt:") && !it.startsWith("Steps:") } ?: ""
-                                        }
-                                        val negIndex = lines.indexOfFirst { it.startsWith("Negative prompt:") }
-                                        if (negIndex != -1) negPrompt = lines[negIndex].substringAfter("Negative prompt:").trim()
-
-                                        val paramLine = lines.lastOrNull { it.contains("Steps:") } ?: ""
-                                        val params =
-                                            paramLine.split(",").associate {
-                                                val parts = it.split(":")
-                                                if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
+                                    // Closing the response releases the connection; only the PNG header is read.
+                                    val infoStr =
+                                        networkManager.client.newCall(request).execute().use { response ->
+                                            if (!response.isSuccessful) {
+                                                Log.e("GallerySync", "Error ${response.code} fetching ${file.name}")
+                                                null
+                                            } else {
+                                                extractPngParameters(response.body.byteStream())
                                             }
+                                        }
+                                    // Not indexed on failure, so the next sync retries the file.
+                                    if (infoStr != null) {
+                                        var posPrompt = ""
+                                        var negPrompt = ""
+                                        var model = ""
+                                        var sampler = ""
+                                        var seed = ""
+                                        var loras = ""
 
-                                        model = params["Model"] ?: ""
-                                        sampler = params["Sampler"] ?: ""
-                                        seed = params["Seed"] ?: ""
+                                        if (infoStr.isNotEmpty()) {
+                                            val lines = infoStr.split("\n")
+                                            // The positive prompt may span several lines, up to "Negative prompt:" / "Steps:".
+                                            posPrompt =
+                                                lines
+                                                    .takeWhile { !it.startsWith("Negative prompt:") && !it.startsWith("Steps:") }
+                                                    .joinToString("\n")
+                                                    .trim()
+                                            val negIndex = lines.indexOfFirst { it.startsWith("Negative prompt:") }
+                                            if (negIndex != -1) negPrompt = lines[negIndex].substringAfter("Negative prompt:").trim()
 
-                                        val loraRegex = Regex("<lora:([^:]+):[^>]+>")
-                                        loras = loraRegex.findAll(posPrompt).map { it.groupValues[1] }.joinToString(",")
-                                        Log.d("GallerySync", "Parsed metadata for ${file.name}")
-                                    } else {
-                                        Log.w("GallerySync", "No metadata found in ${file.name}")
+                                            val paramLine = lines.lastOrNull { it.contains("Steps:") } ?: ""
+                                            val params =
+                                                paramLine.split(",").associate {
+                                                    val parts = it.split(":")
+                                                    if (parts.size == 2) parts[0].trim() to parts[1].trim() else "" to ""
+                                                }
+
+                                            model = params["Model"] ?: ""
+                                            sampler = params["Sampler"] ?: ""
+                                            seed = params["Seed"] ?: ""
+
+                                            val loraRegex = Regex("<lora:([^:]+):[^>]+>")
+                                            loras = loraRegex.findAll(posPrompt).map { it.groupValues[1] }.joinToString(",")
+                                            Log.d("GallerySync", "Parsed metadata for ${file.name}")
+                                        } else {
+                                            Log.w("GallerySync", "No metadata found in ${file.name}")
+                                        }
+
+                                        val entity =
+                                            GalleryImageEntity(
+                                                fullpath = file.fullpath,
+                                                name = file.name,
+                                                date = file.date ?: "",
+                                                positivePrompt = posPrompt,
+                                                negativePrompt = negPrompt,
+                                                model = model,
+                                                sampler = sampler,
+                                                seed = seed,
+                                                loras = loras,
+                                                savedAt = System.currentTimeMillis(),
+                                            )
+                                        dao.insertImage(entity)
+                                        Log.d("GallerySync", "Indexed: ${file.name}")
                                     }
-
-                                    val entity =
-                                        GalleryImageEntity(
-                                            fullpath = file.fullpath,
-                                            name = file.name,
-                                            date = file.date ?: "",
-                                            positivePrompt = posPrompt,
-                                            negativePrompt = negPrompt,
-                                            model = model,
-                                            sampler = sampler,
-                                            seed = seed,
-                                            loras = loras,
-                                            savedAt = System.currentTimeMillis(),
-                                        )
-                                    dao.insertImage(entity)
-                                    Log.d("GallerySync", "Indexed: ${file.name}")
                                 } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
                                     Log.e(TAG, "Sync failed for ${file.fullpath}: ${e.message}")
                                 }
                             } else {
@@ -666,59 +675,7 @@ object ForgeGalleryManager {
 
     // --- PNG METADATA EXTRACTION LOGIC (STREAMING SAFEGUARD) ---
 
-    private fun extractPngParameters(inputStream: InputStream): String {
-        try {
-            val signature = ByteArray(8)
-            if (inputStream.read(signature) != 8) return ""
-            val headerBuffer = ByteArray(8)
-
-            while (true) {
-                var readH = 0
-                while (readH < 8) {
-                    val c = inputStream.read(headerBuffer, readH, 8 - readH)
-                    if (c == -1) break
-                    readH += c
-                }
-                if (readH != 8) break
-
-                val length = ByteBuffer.wrap(headerBuffer, 0, 4).int
-                val chunkType = String(headerBuffer, 4, 4)
-
-                // SAFEGUARD: Protect against corrupted or malicious chunk sizes that could cause an OutOfMemory (OOM) error.
-                if (length < 0 || length > MAX_CHUNK_SIZE) {
-                    Log.w(TAG, "Skipping suspicious chunk: $chunkType with length $length")
-                    break
-                }
-
-                if (chunkType == "tEXt" || chunkType == "iTXt") {
-                    val chunkData = ByteArray(length)
-                    var read = 0
-                    while (read < length) {
-                        val count = inputStream.read(chunkData, read, length - read)
-                        if (count == -1) break
-                        read += count
-                    }
-                    val nullIndex = chunkData.indexOf(0.toByte())
-                    if (nullIndex != -1) {
-                        val keyword = String(chunkData.copyOfRange(0, nullIndex), Charsets.ISO_8859_1)
-                        if (keyword == "parameters") {
-                            return String(chunkData.copyOfRange(nullIndex + 1, chunkData.size), Charsets.UTF_8)
-                        }
-                    }
-                    // skip CRC
-                    val crc = ByteArray(4)
-                    inputStream.read(crc)
-                } else if (chunkType == "IDAT" || chunkType == "IEND") {
-                    break
-                } else {
-                    inputStream.skip(length.toLong() + 4)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error parsing PNG chunks", e)
-        }
-        return ""
-    }
+    private fun extractPngParameters(inputStream: InputStream): String = PngMetadata.readParameters(inputStream)
 
     suspend fun extractMetadataFromUri(uri: Uri): String? =
         withContext(Dispatchers.IO) {
@@ -731,6 +688,23 @@ object ForgeGalleryManager {
                 null
             }
         }
+
+    fun loadMetadataForLocalFile(path: String) {
+        _currentImageMetadata.value = "Loading metadata..."
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            _currentImageMetadata.value =
+                try {
+                    val file = java.io.File(path)
+                    if (!file.exists()) {
+                        "Failed to load image."
+                    } else {
+                        file.inputStream().use { extractPngParameters(it) }.ifBlank { "No generation data found." }
+                    }
+                } catch (e: Exception) {
+                    "Failed: ${e.message}"
+                }
+        }
+    }
 
     fun loadMetadataForImage(item: GalleryItem?) {
         if (item == null) {
@@ -821,38 +795,40 @@ object ForgeGalleryManager {
         if (_isRestoringPrompt.value != IndicatorState.IDLE) return
         _isRestoringPrompt.value = IndicatorState.LOADING
 
-        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            try {
-                val imageUrl = getGalleryImageUrl(item)
-                if (imageUrl.isEmpty()) throw Exception("Invalid URL")
+        restoreJob =
+            ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    val imageUrl = getGalleryImageUrl(item)
+                    if (imageUrl.isEmpty()) throw Exception("Invalid URL")
 
-                val imgReq = Request.Builder().url(imageUrl).build()
+                    val imgReq = Request.Builder().url(imageUrl).build()
 
-                networkManager.client.newCall(imgReq).awaitResponse().use { res ->
-                    if (res.isSuccessful) {
-                        res.body.byteStream().use { stream ->
-                            // Buffer to a local file to cache the image (required for UI preview/sharing).
-                            val cacheFile = java.io.File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
-                            stream.use { input -> java.io.FileOutputStream(cacheFile).use { out -> input.copyTo(out) } }
+                    networkManager.client.newCall(imgReq).awaitResponse().use { res ->
+                        if (res.isSuccessful) {
+                            res.body.byteStream().use { stream ->
+                                // Buffer to a local file to cache the image (required for UI preview/sharing).
+                                val cacheFile = java.io.File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
+                                stream.use { input -> java.io.FileOutputStream(cacheFile).use { out -> input.copyTo(out) } }
 
-                            val bytes = cacheFile.readBytes()
-                            val infoStr = cacheFile.inputStream().use { extractPngParameters(it) }
+                                val bytes = cacheFile.readBytes()
+                                val infoStr = cacheFile.inputStream().use { extractPngParameters(it) }
 
-                            ForgeQueueManager.saveRecoveredImageToCache(bytes)
-                            withContext(Dispatchers.Main) { parseAndApplyPngInfo(infoStr) }
-                            _isRestoringPrompt.value = IndicatorState.SUCCESS
+                                ForgeQueueManager.saveRecoveredImageToCache(bytes)
+                                withContext(Dispatchers.Main) { parseAndApplyPngInfo(infoStr) }
+                                _isRestoringPrompt.value = IndicatorState.SUCCESS
+                            }
+                        } else {
+                            throw Exception("No data")
                         }
-                    } else {
-                        throw Exception("No data")
                     }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ForgeRepository.showToast("Network error")
+                    _isRestoringPrompt.value = IndicatorState.ERROR
                 }
-            } catch (e: Exception) {
-                ForgeRepository.showToast("Network error")
-                _isRestoringPrompt.value = IndicatorState.ERROR
+                delay(1500)
+                _isRestoringPrompt.value = IndicatorState.IDLE
             }
-            delay(1500)
-            _isRestoringPrompt.value = IndicatorState.IDLE
-        }
     }
 
     private suspend fun fetchLastGeneratedImageInfo(): String? {
@@ -929,9 +905,13 @@ object ForgeGalleryManager {
                 }
 
                 if (success) {
-                    val infoStr = tempFile.inputStream().use { extractPngParameters(it) }
-                    ForgeQueueManager.saveRecoveredImageToCache(tempFile.readBytes())
-                    return infoStr
+                    try {
+                        val infoStr = tempFile.inputStream().use { extractPngParameters(it) }
+                        ForgeQueueManager.saveRecoveredImageToCache(tempFile.readBytes())
+                        return infoStr
+                    } finally {
+                        tempFile.delete()
+                    }
                 }
             }
         }
@@ -945,78 +925,79 @@ object ForgeGalleryManager {
         // Backup the current AppState to restore it in case the prompt recovery fails.
         val backupState = ForgeRepository.appState.value.copy()
 
-        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            try {
-                // 1. Fetch from server gallery
-                val galleryInfoStr = fetchLastGeneratedImageInfo()
-                if (galleryInfoStr != null) {
-                    val tempFile = java.io.File(application.cacheDir, "last_generated_image.png") // fetchLastGeneratedImageInfo might not save here but we can use the latest session image
-                    val sessionImage = ForgeQueueManager.sessionImages.value.firstOrNull()
-                    if (sessionImage != null) {
-                        val bytes = java.io.File(sessionImage).readBytes()
+        restoreJob =
+            ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+                try {
+                    // 1. Fetch from server gallery
+                    val galleryInfoStr = fetchLastGeneratedImageInfo()
+                    if (!galleryInfoStr.isNullOrBlank()) {
+                        val sessionImage = ForgeQueueManager.sessionImages.value.firstOrNull()
+                        if (sessionImage != null) {
+                            val bytes = java.io.File(sessionImage).readBytes()
+                            val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            ForgeQueueManager.setLivePreviewImage(base64Str)
+                        }
+                        withContext(Dispatchers.Main) { parseAndApplyPngInfo(galleryInfoStr) }
+                        _isRestoringPrompt.value = IndicatorState.SUCCESS
+                        return@launch
+                    }
+
+                    // 2. Check local cache (Fallback)
+                    val localInfoStr = ForgeSettingsManager.loadLastGeneratedInfo()
+                    val localImgFile = java.io.File(application.cacheDir, "last_generated_image.png")
+
+                    if (localInfoStr != null && localImgFile.exists()) {
+                        val bytes = localImgFile.readBytes()
+                        ForgeQueueManager.saveRecoveredImageToCache(bytes)
                         val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         ForgeQueueManager.setLivePreviewImage(base64Str)
+                        withContext(Dispatchers.Main) { parseAndApplyPngInfo(localInfoStr) }
+                        _isRestoringPrompt.value = IndicatorState.SUCCESS
+                        return@launch
                     }
-                    withContext(Dispatchers.Main) { parseAndApplyPngInfo(galleryInfoStr) }
+
+                    // 3. Fallback to Physton endpoints (for prompt only)
+                    var fallbackPos = ""
+                    var fallbackNeg = ""
+                    try {
+                        val posRes = networkManager.forgeApi?.getLatestHistory("txt2img")
+                        if (posRes?.isSuccessful == true) {
+                            fallbackPos = posRes.body()?.prompt ?: ""
+                        }
+                        val negRes = networkManager.forgeApi?.getLatestHistory("txt2img_neg")
+                        if (negRes?.isSuccessful == true) {
+                            fallbackNeg = negRes.body()?.prompt ?: ""
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to fetch physton history", e)
+                    }
+
+                    if (fallbackPos.isNotEmpty() || fallbackNeg.isNotEmpty()) {
+                        ForgeSettingsManager.updateState { state: AppState ->
+                            state.copy(
+                                positivePrompt = if (fallbackPos.isNotEmpty()) fallbackPos else state.positivePrompt,
+                                negativePrompt = if (fallbackNeg.isNotEmpty()) fallbackNeg else state.negativePrompt,
+                            )
+                        }
+                        ForgeRepository.showToast("Restored from server history (No image found)")
+                        _isRestoringPrompt.value = IndicatorState.SUCCESS
+                        return@launch
+                    }
+
+                    // 4. Fallback to backup state
+                    ForgeSettingsManager.updateState { state: AppState -> backupState }
+                    ForgeRepository.showToast("Used local cache (No images found)")
                     _isRestoringPrompt.value = IndicatorState.SUCCESS
-                    return@launch
-                }
-
-                // 2. Check local cache (Fallback)
-                val localInfoStr = ForgeSettingsManager.loadLastGeneratedInfo()
-                val localImgFile = java.io.File(application.cacheDir, "last_generated_image.png")
-
-                if (localInfoStr != null && localImgFile.exists()) {
-                    val bytes = localImgFile.readBytes()
-                    ForgeQueueManager.saveRecoveredImageToCache(bytes)
-                    val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    ForgeQueueManager.setLivePreviewImage(base64Str)
-                    withContext(Dispatchers.Main) { parseAndApplyPngInfo(localInfoStr) }
-                    _isRestoringPrompt.value = IndicatorState.SUCCESS
-                    return@launch
-                }
-
-                // 3. Fallback to Physton endpoints (for prompt only)
-                var fallbackPos = ""
-                var fallbackNeg = ""
-                try {
-                    val posRes = networkManager.forgeApi?.getLatestHistory("txt2img")
-                    if (posRes?.isSuccessful == true) {
-                        fallbackPos = posRes.body()?.prompt ?: ""
-                    }
-                    val negRes = networkManager.forgeApi?.getLatestHistory("txt2img_neg")
-                    if (negRes?.isSuccessful == true) {
-                        fallbackNeg = negRes.body()?.prompt ?: ""
-                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to fetch physton history", e)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    ForgeSettingsManager.updateState { state: AppState -> backupState }
+                    ForgeRepository.showToast("Recovery failed")
+                    _isRestoringPrompt.value = IndicatorState.ERROR
+                } finally {
+                    delay(1500)
+                    _isRestoringPrompt.value = IndicatorState.IDLE
                 }
-
-                if (fallbackPos.isNotEmpty() || fallbackNeg.isNotEmpty()) {
-                    ForgeSettingsManager.updateState { state: AppState ->
-                        state.copy(
-                            positivePrompt = if (fallbackPos.isNotEmpty()) fallbackPos else state.positivePrompt,
-                            negativePrompt = if (fallbackNeg.isNotEmpty()) fallbackNeg else state.negativePrompt,
-                        )
-                    }
-                    ForgeRepository.showToast("Restored from server history (No image found)")
-                    _isRestoringPrompt.value = IndicatorState.SUCCESS
-                    return@launch
-                }
-
-                // 4. Fallback to backup state
-                ForgeSettingsManager.updateState { state: AppState -> backupState }
-                ForgeRepository.showToast("Used local cache (No images found)")
-                _isRestoringPrompt.value = IndicatorState.SUCCESS
-            } catch (_: Exception) {
-                ForgeSettingsManager.updateState { state: AppState -> backupState }
-                ForgeRepository.showToast("Recovery failed")
-                _isRestoringPrompt.value = IndicatorState.ERROR
-            } finally {
-                delay(1500)
-                _isRestoringPrompt.value = IndicatorState.IDLE
             }
-        }
     }
 
     fun recoverLastSeed() {

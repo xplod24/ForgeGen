@@ -667,7 +667,12 @@ fun ForgeTopAppBar(
 @Composable
 fun OomAlertSection(viewModel: ForgeViewModel) {
     val oomAlert by viewModel.oomAlert.collectAsStateWithLifecycle()
-    AnimatedVisibility(visible = oomAlert) {
+    val isQueuePaused by viewModel.isQueuePaused.collectAsStateWithLifecycle()
+    val queue by viewModel.generationQueue.collectAsStateWithLifecycle()
+    val pauseReason by viewModel.queuePauseReason.collectAsStateWithLifecycle()
+    // Every pause with jobs left needs a Resume button, not only the out-of-memory one.
+    val hasPausedJobs = isQueuePaused && queue.isNotEmpty()
+    AnimatedVisibility(visible = oomAlert || hasPausedJobs) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -680,9 +685,18 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
                     modifier = Modifier.size(32.dp),
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("SERVER OUT OF MEMORY (OOM)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
                 Text(
-                    "The current generation failed and the queue is paused. The failed prompt was skipped.",
+                    if (oomAlert) "SERVER OUT OF MEMORY (OOM)" else "QUEUE PAUSED",
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Text(
+                    if (oomAlert) {
+                        "The server ran out of GPU memory and the failed prompt was skipped." +
+                            if (hasPausedJobs) " The queue is paused (${queue.size} waiting)." else ""
+                    } else {
+                        "${pauseReason ?: "The last generation failed."} Jobs waiting: ${queue.size}."
+                    },
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.onErrorContainer,
@@ -696,7 +710,7 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
                             contentColor = MaterialTheme.colorScheme.errorContainer,
                         ),
                 ) {
-                    Text("Resume Queue")
+                    Text(if (hasPausedJobs) "Resume Queue" else "OK")
                 }
             }
         }
@@ -1912,8 +1926,7 @@ fun FullscreenImageViewer(
 
     LaunchedEffect(pagerState.currentPage) {
         if (currentFile.isNotEmpty()) {
-            // Clearing old metadata because the function for local files was removed
-            viewModel.loadMetadataForImage(null)
+            viewModel.loadMetadataForLocalFile(currentFile)
         }
     }
 

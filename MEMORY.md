@@ -8,6 +8,13 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Queue & Notifications:** Managed by `ForgeQueueManager.kt`. 
 - **Foreground Service:** `GenerationService.kt` runs the persistent foreground notification.
 - **Updates:** `ForgeUpdateManager.kt` checks for updates and verifies SHA-256 hashes before installation. 
+- **Selected checkpoint:** single source of truth is `ForgeModelManager.selectedModel`. `ForgeNetworkManager` (UI lists, `changeCheckpoint`) writes to it and `ForgeQueueManager` reads it for `override_settings`. Never keep a second copy.
+- **Model/sampler/LoRA lists:** fetched only by `ForgeNetworkManager` (on connect and on URL change). `ForgeRepository` just rebuilds its Retrofit instance when the URL or timeout changes.
+- **Generation state:** `ForgeQueueManager` owns progress, ETA, live preview, status and the queue. The ping loop in `ForgeRepository` pushes server progress via `ForgeQueueManager.updateExternalProgress()`.
+- **Timeouts:** the "Connection Timeout" setting applies to ordinary API calls only; `ForgeSettingsManager.createClient` gives `sdapi/v1/txt2img` a 120 min read timeout.
+- **Queue pauses:** use `ForgeQueueManager.pauseQueue(reason)`; the UI card in `OomAlertSection` shows the reason and a Resume button for any pause. A queue that becomes empty is unpaused automatically.
+- **PNG metadata:** always read through `PngMetadata.readParameters` (tEXt = Latin-1, iTXt = UTF-8, optionally zlib-compressed).
+- **Settings persistence:** `loadConfig` must list every `AppConfig` field (covered by `ForgeSettingsManagerConfigTest`); DB writes go through a single-threaded dispatcher to keep their order.
 
 ## 2. User Preferences & UI Principles
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates).
@@ -21,6 +28,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - All empty legacy directories (`data`, `domain/models`) and temporary scripts have been cleaned up and ignored via `.gitignore`.
 - **Testing Architecture:** Integrated `io.mockk:mockk` and `kotlinx-coroutines-test` into the `testImplementation` to allow comprehensive testing of `ForgeQueueManager` (and future managers) without needing an emulator or physical device.
 - **Code Formatting:** Downloaded `ktlint.jar` to the project root. It can be run via `java -jar ktlint.jar -F "app/src/**/*.kt"` to auto-format all Kotlin files and remove unused imports.
+- **Build 277 fixes:** see CHANGELOG.md (generation timeout, checkpoint override, progress, settings persistence, lock on cold start, PNG metadata, queue pause UX). Unit tests: `PngMetadataTest`, `ForgeSettingsManagerConfigTest`; `ForgeUpdateManagerTest` fixed to the list-based changelog.
 
 ## 4. Current Outstanding Tasks
-- (None currently)
+- The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeRepository` and `ForgeSettingsManager`; it should become a setting.
+- `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git; consider untracking them.

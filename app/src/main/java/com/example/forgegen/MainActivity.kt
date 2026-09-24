@@ -297,6 +297,15 @@ class MainActivity : ComponentActivity() {
 
             var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
 
+            // Settings are loaded asynchronously from Room, so on a cold start `config` still holds the
+            // defaults (security off) when isUnlocked is first computed. Lock again once the real settings are in.
+            val isSettingsLoaded by ForgeSettingsManager.isInitialized.collectAsStateWithLifecycle()
+            LaunchedEffect(isSettingsLoaded) {
+                if (isSettingsLoaded && viewModel.config.value.useNativeSecurity) {
+                    isUnlocked = false
+                }
+            }
+
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
                 val observer =
@@ -317,21 +326,21 @@ class MainActivity : ComponentActivity() {
             // Initialize the Coil image loader configuration using a custom HTTP Client to force a 30-day cache (2.5GB maximum size) for loaded network thumbnails.
             val imageLoader =
                 remember(context) {
-                    val customClient =
-                        viewModel.client
-                            .newBuilder()
-                            .addNetworkInterceptor { chain ->
-                                val originalResponse = chain.proceed(chain.request())
-                                originalResponse
-                                    .newBuilder()
-                                    .header("Cache-Control", "public, max-age=2592000")
-                                    .build()
-                            }.build()
-
                     ImageLoader
                         .Builder(context)
-                        .okHttpClient { customClient }
-                        .diskCache {
+                        // Built lazily on the first image request: before initialization viewModel.client is a
+                        // bare OkHttpClient without the gallery cookie and timeouts from the settings.
+                        .okHttpClient {
+                            viewModel.client
+                                .newBuilder()
+                                .addNetworkInterceptor { chain ->
+                                    val originalResponse = chain.proceed(chain.request())
+                                    originalResponse
+                                        .newBuilder()
+                                        .header("Cache-Control", "public, max-age=2592000")
+                                        .build()
+                                }.build()
+                        }.diskCache {
                             DiskCache
                                 .Builder()
                                 .directory(context.cacheDir.resolve("image_cache"))

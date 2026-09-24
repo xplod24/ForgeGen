@@ -51,7 +51,8 @@ class ForgeNetworkManager(
             var currentUrl = ""
             var currentTimeout = -1
             ForgeRepository.config.collect { config ->
-                if (currentTimeout != config.timeout) {
+                val timeoutChanged = currentTimeout != config.timeout
+                if (timeoutChanged) {
                     currentTimeout = config.timeout
                     initClient(currentTimeout)
                 }
@@ -60,6 +61,8 @@ class ForgeNetworkManager(
                     rebuildForgeApi(currentUrl)
                     ForgeRepository.resetPingJob()
                     hasFetchedInitialData = false
+                } else if (timeoutChanged && currentUrl.isNotEmpty()) {
+                    rebuildForgeApi(currentUrl) // Retrofit keeps the client it was built with
                 }
             }
         }
@@ -105,8 +108,9 @@ class ForgeNetworkManager(
     }
 
     // --- STATIC CACHE STATES (Model list, Samplers, Schedulers) ---
-    private val _selectedModel = MutableStateFlow("")
-    val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
+    // The selected checkpoint is shared with ForgeQueueManager (override_settings of every job), so it lives in
+    // ForgeModelManager: a second copy here let the queue keep sending the model that was active at app start.
+    val selectedModel: StateFlow<String> get() = ForgeModelManager.selectedModel
 
     private val _samplers = MutableStateFlow<List<String>>(emptyList())
     val samplers: StateFlow<List<String>> = _samplers.asStateFlow()
@@ -127,8 +131,11 @@ class ForgeNetworkManager(
     private val _isCivitaiSyncing = MutableStateFlow(IndicatorState.IDLE)
     val isCivitaiSyncing: StateFlow<IndicatorState> = _isCivitaiSyncing.asStateFlow()
 
+    private var civitaiSyncJob: kotlinx.coroutines.Job? = null
+
     fun cancelCivitaiSync() {
         if (_isCivitaiSyncing.value == IndicatorState.LOADING) {
+            civitaiSyncJob?.cancel()
             _isCivitaiSyncing.value = IndicatorState.IDLE
         }
     }
@@ -222,7 +229,7 @@ class ForgeNetworkManager(
     }
 
     fun changeCheckpoint(modelTitle: String) {
-        _selectedModel.value = modelTitle
+        ForgeModelManager.updateState(selectedModel = modelTitle)
         managerScope.launch(Dispatchers.IO) {
             try {
                 forgeApi?.setOptions(OptionsPayloadDto(modelTitle))
@@ -418,7 +425,7 @@ class ForgeNetworkManager(
                                 try {
                                     val res = forgeApi?.getOptions()
                                     if (res?.isSuccessful == true) {
-                                        _selectedModel.value = res.body()?.sdModelCheckpoint ?: ""
+                                        ForgeModelManager.updateState(selectedModel = res.body()?.sdModelCheckpoint ?: "")
                                     }
                                 } catch (
                                     e: Exception,
@@ -443,98 +450,99 @@ class ForgeNetworkManager(
     fun syncCivitaiModelsManual() {
         if (_isCivitaiSyncing.value != IndicatorState.IDLE) return
 
-        managerScope.launch(Dispatchers.IO) {
-            try {
-                _isCivitaiSyncing.value = IndicatorState.LOADING
-                _civitaiSyncLastResult.value = null
+        civitaiSyncJob =
+            managerScope.launch(Dispatchers.IO) {
+                try {
+                    _isCivitaiSyncing.value = IndicatorState.LOADING
+                    _civitaiSyncLastResult.value = null
 
-                val customRes = forgeApi?.getCustomModelsHashes()
-                if (customRes?.isSuccessful != true) {
-                    _civitaiSyncLastResult.value = "Error: No Custom API on Forge server."
+                    val customRes = forgeApi?.getCustomModelsHashes()
+                    if (customRes?.isSuccessful != true) {
+                        _civitaiSyncLastResult.value = "Error: No Custom API on Forge server."
+                        _isCivitaiSyncing.value = IndicatorState.ERROR
+                        delay(3000)
+                        _isCivitaiSyncing.value = IndicatorState.IDLE
+                        return@launch
+                    }
+
+                    val modelsList = customRes.body()?.models ?: emptyList()
+                    val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
+
+                    val missingOrIncomplete =
+                        modelsList.filter { item ->
+                            val sha = item.sha256 ?: return@filter false
+                            val entity = localDbModels[sha]
+                            entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
+                        }
+
+                    if (missingOrIncomplete.isEmpty()) {
+                        _civitaiSyncLastResult.value = "All models are already synchronized!"
+                        _isCivitaiSyncing.value = IndicatorState.SUCCESS
+                        delay(2000)
+                        _isCivitaiSyncing.value = IndicatorState.IDLE
+                        return@launch
+                    }
+
+                    _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
+                    var hasError = false
+
+                    for ((index, cam) in missingOrIncomplete.withIndex()) {
+                        var civName = cam.name ?: "Unknown"
+                        val civType = cam.type ?: "checkpoint"
+                        val sha256 = cam.sha256 ?: continue
+                        var trainedWords = ""
+                        var previewImage: String? = null
+
+                        _civitaiSyncCurrentModel.value = civName
+                        _civitaiSyncProgress.value = index to missingOrIncomplete.size
+
+                        // Rate-limiting delay (5 seconds) to prevent Civitai from issuing an IP ban/rate-limit.
+                        if (index > 0) delay(5000) else delay(500)
+
+                        try {
+                            val civRes = civitaiApi.getModelByHash(sha256)
+                            if (civRes.isSuccessful) {
+                                val civBody = civRes.body()
+                                if (civBody?.model != null) civName = civBody.model.name ?: civName
+                                trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
+                                if (!civBody?.images.isNullOrEmpty()) {
+                                    previewImage =
+                                        civBody.images
+                                            .firstOrNull()
+                                            ?.url
+                                            ?.replace("original=true", "original=false")
+                                }
+                                _civitaiSyncLastResult.value = "Downloaded successfully"
+                            } else {
+                                _civitaiSyncLastResult.value = "Error: HTTP ${civRes.code()}"
+                                hasError = true
+                            }
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            _civitaiSyncLastResult.value = "Network error"
+                            hasError = true
+                        }
+
+                        val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
+                        getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
+                        _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
+                    }
+
+                    _civitaiSyncLastResult.value = "Synchronization completed successfully"
+                    fetchApiData() // Refresh model resources from the local SQLite database to reflect synced metadata.
+
+                    _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
+                    delay(2000)
+                    _isCivitaiSyncing.value = IndicatorState.IDLE
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.e(TAG, "Critical error during Civitai synchronization: $e")
+                    _civitaiSyncLastResult.value = "A critical error occurred"
                     _isCivitaiSyncing.value = IndicatorState.ERROR
                     delay(3000)
                     _isCivitaiSyncing.value = IndicatorState.IDLE
-                    return@launch
                 }
-
-                val modelsList = customRes.body()?.models ?: emptyList()
-                val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                val missingOrIncomplete =
-                    modelsList.filter { item ->
-                        val sha = item.sha256 ?: return@filter false
-                        val entity = localDbModels[sha]
-                        entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
-                    }
-
-                if (missingOrIncomplete.isEmpty()) {
-                    _civitaiSyncLastResult.value = "All models are already synchronized!"
-                    _isCivitaiSyncing.value = IndicatorState.SUCCESS
-                    delay(2000)
-                    _isCivitaiSyncing.value = IndicatorState.IDLE
-                    return@launch
-                }
-
-                _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
-                var hasError = false
-
-                for ((index, cam) in missingOrIncomplete.withIndex()) {
-                    var civName = cam.name ?: "Unknown"
-                    val civType = cam.type ?: "checkpoint"
-                    val sha256 = cam.sha256 ?: continue
-                    var trainedWords = ""
-                    var previewImage: String? = null
-
-                    _civitaiSyncCurrentModel.value = civName
-                    _civitaiSyncProgress.value = index to missingOrIncomplete.size
-
-                    // Rate-limiting delay (5 seconds) to prevent Civitai from issuing an IP ban/rate-limit.
-                    if (index > 0) delay(5000) else delay(500)
-
-                    try {
-                        val civRes = civitaiApi.getModelByHash(sha256)
-                        if (civRes.isSuccessful) {
-                            val civBody = civRes.body()
-                            if (civBody?.model != null) civName = civBody.model.name ?: civName
-                            trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
-                            if (!civBody?.images.isNullOrEmpty()) {
-                                previewImage =
-                                    civBody.images
-                                        .firstOrNull()
-                                        ?.url
-                                        ?.replace("original=true", "original=false")
-                            }
-                            _civitaiSyncLastResult.value = "Downloaded successfully"
-                        } else {
-                            _civitaiSyncLastResult.value = "Error: HTTP ${civRes.code()}"
-                            hasError = true
-                        }
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        _civitaiSyncLastResult.value = "Network error"
-                        hasError = true
-                    }
-
-                    val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
-                    getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
-                    _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
-                }
-
-                _civitaiSyncLastResult.value = "Synchronization completed successfully"
-                fetchApiData() // Refresh model resources from the local SQLite database to reflect synced metadata.
-
-                _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
-                delay(2000)
-                _isCivitaiSyncing.value = IndicatorState.IDLE
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Log.e(TAG, "Critical error during Civitai synchronization: $e")
-                _civitaiSyncLastResult.value = "A critical error occurred"
-                _isCivitaiSyncing.value = IndicatorState.ERROR
-                delay(3000)
-                _isCivitaiSyncing.value = IndicatorState.IDLE
             }
-        }
     }
 
     fun refreshCheckpoints(onResult: (Boolean, String) -> Unit) {

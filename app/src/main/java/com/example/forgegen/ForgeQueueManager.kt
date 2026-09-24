@@ -58,6 +58,15 @@ object ForgeQueueManager {
     private val _oomAlert = MutableStateFlow(false)
     val oomAlert: StateFlow<Boolean> = _oomAlert.asStateFlow()
 
+    // Why the queue is paused; statusText can't carry it because the ping loop overwrites it every second.
+    private val _queuePauseReason = MutableStateFlow<String?>(null)
+    val queuePauseReason: StateFlow<String?> = _queuePauseReason.asStateFlow()
+
+    private fun pauseQueue(reason: String) {
+        _queuePauseReason.value = reason
+        _isQueuePaused.value = true
+    }
+
     private val _totalQueueSize = MutableStateFlow(0)
     val totalQueueSize: StateFlow<Int> = _totalQueueSize.asStateFlow()
 
@@ -145,7 +154,11 @@ object ForgeQueueManager {
                     val queue = _generationQueue.value
                     val firstItem = queue.firstOrNull()
 
-                    if (firstItem != null && !_isGenerating.value && !ForgeRepository.isServerBusy.value && !_isQueuePaused.value) {
+                    if (firstItem != null &&
+                        !ForgeRepository.isServerBusy.value &&
+                        !_isQueuePaused.value &&
+                        _isGenerating.compareAndSet(false, true) // atomic claim: queueGeneration() may start the same item
+                    ) {
                         // Resume suspended task if the queue is unpaused
                         if (firstItem.status == GenerationStatus.SUSPENDED) {
                             _generationQueue.update { q ->
@@ -155,7 +168,6 @@ object ForgeQueueManager {
                             }
                         }
 
-                        _isGenerating.value = true
                         currentGenerationJob =
                             launch {
                                 executeGeneration(firstItem)
@@ -250,8 +262,7 @@ object ForgeQueueManager {
                 _totalQueueSize.value = 1
                 _completedQueueItems.value = 0
 
-                if (!_isGenerating.value && !ForgeRepository.isServerBusy.value && !_isQueuePaused.value) {
-                    _isGenerating.value = true
+                if (!ForgeRepository.isServerBusy.value && !_isQueuePaused.value && _isGenerating.compareAndSet(false, true)) {
                     currentGenerationJob = launch { executeGeneration(item) }
                 }
             } else {
@@ -312,7 +323,6 @@ object ForgeQueueManager {
                             try {
                                 val lastGenFile = File(cachePath, "last_generated_image.png")
                                 lastGenFile.writeBytes(bytes)
-                                ForgeSettingsManager.saveLastGeneratedInfo(txt2ImgData.info)
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to cache local last generated image", e)
                             }
@@ -359,16 +369,17 @@ object ForgeQueueManager {
                 }
             } else {
                 val errorBody = response?.errorBody()?.string() ?: ""
-                if (response?.code() == 500 ||
-                    errorBody.contains("OutOfMemoryError", true) ||
-                    errorBody.contains("CUDA out of memory", true)
+                // Forge answers most failures (bad sampler, missing model, ...) with HTTP 500, so the status code
+                // alone must not raise the out-of-memory alarm.
+                if (errorBody.contains("OutOfMemoryError", true) ||
+                    errorBody.contains("out of memory", true)
                 ) {
                     _statusText.value = "SERVER OUT OF MEMORY (OOM)"
-                    _isQueuePaused.value = true
+                    pauseQueue("Server out of memory (OOM).")
                     _oomAlert.value = true
                 } else {
-                    _statusText.value = "Error: ${response?.code()}"
-                    if (!config.overnightMode) _isQueuePaused.value = true
+                    _statusText.value = "Error: HTTP ${response?.code()}"
+                    if (!config.overnightMode) pauseQueue("The server returned HTTP ${response?.code()}.")
                 }
             }
         } catch (e: CancellationException) {
@@ -377,7 +388,7 @@ object ForgeQueueManager {
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
             if (!ForgeRepository.config.value.overnightMode) {
-                _isQueuePaused.value = true
+                pauseQueue("Generation failed: ${e.localizedMessage}")
             }
         } finally {
             val isSuspended =
@@ -391,6 +402,9 @@ object ForgeQueueManager {
                 if (_generationQueue.value.isEmpty()) {
                     _totalQueueSize.value = 0
                     _completedQueueItems.value = 0
+                    // Nothing left to hold back: a paused empty queue would silently swallow the next job.
+                    _isQueuePaused.value = false
+                    _queuePauseReason.value = null
 
                     if (ForgeRepository.config.value.notifOnQueueFinish) {
                         launchNotification(
@@ -466,7 +480,7 @@ object ForgeQueueManager {
             }
             list
         }
-        _isQueuePaused.value = true
+        pauseQueue("Connection to the server was lost.")
         _statusText.value = "Queue Suspended (Connection Lost)"
 
         currentGenerationJob?.cancel()
@@ -508,7 +522,14 @@ object ForgeQueueManager {
         saveQueueState()
     }
 
+    /** The first queue item is the one being sent to the server while a generation is running. */
+    private fun isActiveItem(
+        queue: List<QueuedGeneration>,
+        index: Int,
+    ) = index == 0 && _isGenerating.value && queue.isNotEmpty()
+
     fun removeFromQueue(id: String) {
+        if (_isGenerating.value && _generationQueue.value.firstOrNull()?.id == id) return
         _generationQueue.update { currentQueue ->
             val prevSize = currentQueue.size
             val newQueue = currentQueue.filter { it.id != id }
@@ -523,7 +544,7 @@ object ForgeQueueManager {
     fun moveQueueItemUp(id: String) {
         _generationQueue.update { q ->
             val idx = q.indexOfFirst { it.id == id }
-            if (idx > 0) {
+            if (idx > 0 && !isActiveItem(q, idx - 1)) {
                 val list = q.toMutableList()
                 Collections.swap(list, idx, idx - 1)
                 list
@@ -537,7 +558,7 @@ object ForgeQueueManager {
     fun moveQueueItemDown(id: String) {
         _generationQueue.update { q ->
             val idx = q.indexOfFirst { it.id == id }
-            if (idx in 0 until q.size - 1) {
+            if (idx in 0 until q.size - 1 && !isActiveItem(q, idx)) {
                 val list = q.toMutableList()
                 Collections.swap(list, idx, idx + 1)
                 list
@@ -550,6 +571,7 @@ object ForgeQueueManager {
 
     fun resumeQueue() {
         _isQueuePaused.value = false
+        _queuePauseReason.value = null
         _oomAlert.value = false
         _statusText.value = "Queue Resumed"
     }

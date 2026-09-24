@@ -98,6 +98,7 @@ class ForgeViewModel(
 
         // 1. Init Database & Settings
         ForgeRepository.initializeDatabaseAndSettings(getApplication())
+        ForgePromptManager.init() // wildcards must be loaded before the first job expands __name__ tokens
 
         // Load stats time range from database
         val json = ForgeRepository.db.appSettingDao().getSetting(STATS_TIME_RANGE_KEY)?.value
@@ -187,6 +188,7 @@ class ForgeViewModel(
     val generationQueue: StateFlow<List<QueuedGeneration>> = ForgeQueueManager.generationQueue
     val isQueuePaused: StateFlow<Boolean> = ForgeQueueManager.isQueuePaused
     val oomAlert: StateFlow<Boolean> = ForgeQueueManager.oomAlert
+    val queuePauseReason: StateFlow<String?> = ForgeQueueManager.queuePauseReason
     val totalQueueSize: StateFlow<Int> = ForgeQueueManager.totalQueueSize
     val completedQueueItems: StateFlow<Int> = ForgeQueueManager.completedQueueItems
     val sessionImages: StateFlow<List<String>> = ForgeQueueManager.sessionImages
@@ -371,6 +373,8 @@ class ForgeViewModel(
 
     // --- DELEGATION OF ACTIONS TO MANAGERS (Missing ones) ---
     fun loadMetadataForImage(item: GalleryItem?) = ForgeGalleryManager.loadMetadataForImage(item)
+
+    fun loadMetadataForLocalFile(path: String) = ForgeGalleryManager.loadMetadataForLocalFile(path)
 
     fun checkIfFavorite(path: String) = ForgeGalleryManager.checkIfFavorite(path)
 

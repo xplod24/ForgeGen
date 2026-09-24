@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /* ============================================================================
@@ -37,6 +39,10 @@ object ForgeSettingsManager {
     val gson = Gson()
 
     val settingsScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    // Settings are persisted fire-and-forget; a single-threaded dispatcher keeps the writes in call order,
+    // so a burst of updates (e.g. dragging a slider) can never leave an older value in the database.
+    private val dbWriteDispatcher = Dispatchers.IO.limitedParallelism(1)
 
     // --- Preference keys ---
     const val CONFIG_KEY = "config"
@@ -108,7 +114,7 @@ object ForgeSettingsManager {
             }
         }
         _pinnedImages.value = current
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(PINNED_IMAGES_KEY, gson.toJson(current)))
         }
     }
@@ -163,12 +169,25 @@ object ForgeSettingsManager {
     }
 
     // --- Client creation ---
+    // txt2img answers only when the whole batch is finished, so the user's "Connection Timeout"
+    // (default 10 s) must not apply to it. Connection loss is still detected by connectTimeout and the ping loop.
+    private const val GENERATION_READ_TIMEOUT_MINUTES = 120L
+
     fun createClient(timeoutSeconds: Int): OkHttpClient =
         OkHttpClient
             .Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .addInterceptor { chain ->
+                val request = chain.request()
+                if (request.url.encodedPath.endsWith("sdapi/v1/txt2img")) {
+                    chain
+                        .withReadTimeout(GENERATION_READ_TIMEOUT_MINUTES.toInt(), TimeUnit.MINUTES)
+                        .proceed(request)
+                } else {
+                    chain.proceed(request)
+                }
+            }.addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
 
@@ -208,15 +227,6 @@ object ForgeSettingsManager {
                 null
             }
 
-        val oldLivePreviewState =
-            try {
-                val jsonObj = org.json.JSONObject(json ?: "{}")
-                jsonObj.optBoolean("livePreviews", false)
-            } catch (_: Exception) {
-                false
-            }
-
-
         return AppConfig(
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             serverBasePath = parsed?.serverBasePath ?: "",
@@ -224,6 +234,10 @@ object ForgeSettingsManager {
             isDarkMode = parsed?.isDarkMode ?: false,
             timeout = parsed?.timeout ?: 10,
             receiveGenerationNotification = parsed?.receiveGenerationNotification ?: true,
+            notifOnBatchFinish = parsed?.notifOnBatchFinish ?: false,
+            notifOnQueueFinish = parsed?.notifOnQueueFinish ?: true,
+            notifCivitaiSync = parsed?.notifCivitaiSync ?: true,
+            autoDismissCivitaiNotif = parsed?.autoDismissCivitaiNotif ?: false,
             notifQueueStatus = parsed?.notifQueueStatus ?: false,
             notificationMode = parsed?.notificationMode ?: "Simple",
             keepScreenOn = parsed?.keepScreenOn ?: false,
@@ -238,6 +252,7 @@ object ForgeSettingsManager {
             showGridAfterGeneration = parsed?.showGridAfterGeneration ?: true,
             showActiveTagsUI = parsed?.showActiveTagsUI ?: true,
             enableLogging = parsed?.enableLogging ?: false,
+            lastUpdateCheckDate = parsed?.lastUpdateCheckDate ?: "",
             defaultState = parsed?.defaultState ?: AppState(),
             presets = parsed?.presets ?: emptyList(),
             autoSyncModels = parsed?.autoSyncModels ?: false,
@@ -255,11 +270,12 @@ object ForgeSettingsManager {
 
         val oldPersistent = _config.value.enablePersistentService
         val oldUrl = _config.value.apiUrl
+        val oldTimeout = _config.value.timeout
         val updatedConfig = newConfig.copy(apiUrl = cleanUrl)
 
         _config.value = updatedConfig
 
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(CONFIG_KEY, gson.toJson(updatedConfig)))
         }
 
@@ -274,7 +290,7 @@ object ForgeSettingsManager {
             onPersistentServiceChanged?.invoke(updatedConfig.enablePersistentService)
         }
 
-        if (cleanUrl != oldUrl) {
+        if (cleanUrl != oldUrl || updatedConfig.timeout != oldTimeout) {
             onApiUrlChanged?.invoke(cleanUrl)
         } else if (ForgeRepository.isConnected.value == false) {
             // Reconnect if offline and user clicked save
@@ -302,7 +318,7 @@ object ForgeSettingsManager {
     fun updateState(update: (AppState) -> AppState) {
         val newState = update(_appState.value)
         _appState.value = newState
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(newState)))
         }
     }
@@ -317,7 +333,7 @@ object ForgeSettingsManager {
 
     fun resetToDefaults() {
         _appState.value = _config.value.defaultState.copy()
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
         }
         showSnackbar("Reset to Defaults")
@@ -351,14 +367,14 @@ object ForgeSettingsManager {
         val trimmedList = currentList.take(20)
         _promptHistory.value = trimmedList
 
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(HISTORY_KEY, gson.toJson(trimmedList)))
         }
     }
 
     fun clearPromptHistory() {
         _promptHistory.value = emptyList()
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().removeSetting(HISTORY_KEY)
         }
     }
@@ -377,8 +393,14 @@ object ForgeSettingsManager {
     fun loadPreset(name: String) {
         val preset = _config.value.presets.find { it.name == name }
         if (preset != null) {
-            _appState.value = preset.state.copy()
-            settingsScope.launch(Dispatchers.IO) {
+            val current = _appState.value
+            _appState.value =
+                if (preset.includePrompts) {
+                    preset.state.copy()
+                } else {
+                    preset.state.copy(positivePrompt = current.positivePrompt, negativePrompt = current.negativePrompt)
+                }
+            settingsScope.launch(dbWriteDispatcher) {
                 db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
             }
             showSnackbar("Loaded: $name")
@@ -421,7 +443,7 @@ object ForgeSettingsManager {
     fun toggleGalleryMetadata() {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
-        settingsScope.launch(Dispatchers.IO) {
+        settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(SHOW_META_KEY, newVal.toString()))
         }
     }
@@ -438,11 +460,11 @@ object ForgeSettingsManager {
         return null
     }
 
-    suspend fun loadLastGeneratedInfo(): String? {
-        return null // Placeholder since it was hallucinated
-    }
-
-    suspend fun saveLastGeneratedInfo(info: String) {
-        // Placeholder
-    }
+    /** Infotext of the last image generated by this app (cached as last_generated_image.png by ForgeQueueManager). */
+    suspend fun loadLastGeneratedInfo(): String? =
+        withContext(Dispatchers.IO) {
+            val file = File(application.cacheDir, "last_generated_image.png")
+            if (!file.exists()) return@withContext null
+            file.inputStream().use { PngMetadata.readParameters(it) }.ifBlank { null }
+        }
 }

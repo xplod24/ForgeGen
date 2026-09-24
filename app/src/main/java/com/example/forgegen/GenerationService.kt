@@ -323,6 +323,19 @@ class GenerationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Android 15+ limits dataSync foreground services to 6 hours per 24 h. If the service is still in the
+     * foreground when the limit is reached it must stop within a few seconds, otherwise the system crashes the app.
+     */
+    override fun onTimeout(
+        startId: Int,
+        fgsType: Int,
+    ) {
+        Log.w("GenerationService", "Foreground service time limit reached (type $fgsType), stopping")
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         stopSelf()

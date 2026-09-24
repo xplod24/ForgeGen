@@ -59,8 +59,8 @@ class ForgeUpdateManagerTest {
     @Test
     fun `checkForUpdates fetches manifest with changelog and correctly updates state`() = kotlinx.coroutines.runBlocking {
         // Arrange
-        val expectedEnglishChangelog = listOf("Added cool new feature", "Fixed a bug")
-        val expectedPolishChangelog = listOf("Dodano nową funkcję", "Naprawiono błąd")
+        // The manifest changelog is a flat list of lines (generateUpdateJson* reads them from CHANGELOG.md).
+        val expectedChangelog = listOf("Added cool new feature", "Fixed a bug", "Dodano nową funkcję", "Naprawiono błąd")
         
         val fakeManifestDto = UpdateManifestDto(
             versionCode = 101, // Higher than local 100
@@ -70,10 +70,7 @@ class ForgeUpdateManagerTest {
             sha256 = "dummy_sha256",
             releaseDate = "2026-07-17",
             isCritical = false,
-            changelog = mapOf(
-                "en" to expectedEnglishChangelog,
-                "pl" to expectedPolishChangelog
-            )
+            changelog = expectedChangelog,
         )
         
         coEvery { mockApi.getAppMetadata() } returns Response.success(fakeManifestDto)
@@ -93,10 +90,7 @@ class ForgeUpdateManagerTest {
         assertNotNull("Update manifest should not be null", manifest)
         assertEquals(101, manifest?.versionCode)
         
-        val changelog = manifest?.changelog
-        assertNotNull("Changelog map should be present", changelog)
-        assertEquals(expectedEnglishChangelog, changelog?.get("en"))
-        assertEquals(expectedPolishChangelog, changelog?.get("pl"))
+        assertEquals(expectedChangelog, manifest?.changelog)
     }
     
     @Test

@@ -1,4 +1,23 @@
 
+- Fixed generations longer than the "Connection Timeout" setting (10 s by default) failing with a timeout and pausing the queue.
+- Fixed the checkpoint picked in the UI being ignored: jobs kept forcing the model that was active at app start.
+- The progress bar, ETA and live preview now update during generation (in the app and in the notification).
+- Notification settings (batch/queue finished, Civitai sync) and the last update check date are no longer reset on every app start.
+- Presets saved without prompts no longer overwrite the current prompts when loaded.
+- Wildcards (__name__) work right after app start instead of only after opening the Wildcards screen.
+- Generation data with Polish or other non-Latin characters is read correctly (no garbage at the start of recovered prompts).
+- A regular HTTP 500 error is no longer reported as "server out of memory"; any paused queue now shows the reason and a Resume button.
+- A queue left empty after an error is no longer silently paused.
+- App lock (device PIN/biometrics) is now enforced on cold start, not only after returning from the background.
+- Generation info is available again for images generated in the current session.
+- "Recover last prompt" falls back to the last image generated on this device when the gallery is unavailable.
+- Cancel buttons for prompt recovery and Civitai sync now actually stop the task.
+- Gallery indexing no longer leaks network connections and retries images that failed to download.
+- Adding/removing LoRAs keeps the prompt tidy (no ",," or double spaces) and negative LoRA weights are recognised.
+- The generating job can no longer be moved in the queue.
+- Removed duplicate model/sampler requests and the "Custom API missing" message shown on every start.
+- Android 15: the background service stops cleanly when the system time limit for data sync services is reached.
+
 - Completely migrated app settings, state, and queue persistence from Jetpack DataStore to Room Database for more robust local storage.
 - Refactored settings architecture into a dedicated manager.
 - Fixed a bug where UI section expanded/collapsed states (Prompts, Settings, LoRAs) were forcefully reverting to their defaults upon app restart.
