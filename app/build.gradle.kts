@@ -8,29 +8,26 @@ plugins {
 // ==========================================
 // VERSIONING
 // ==========================================
-// versionCode = 1000 + number of commits. It grows with every commit and is identical for a local build and
-// the CI build of the same commit, so the in-app updater always sees a newer GitHub release as an update.
-// (The offset keeps it above the codes of the old build_number.txt scheme, which reached 277.)
-// Needs the full git history: the release workflow checks out with fetch-depth 0.
-val gitCommitCount: Int? =
-    runCatching {
-        providers
-            .exec {
-                commandLine("git", "rev-list", "--count", "HEAD")
-                isIgnoreExitValue = true // outside a git checkout fall back below instead of failing the build
-            }.standardOutput.asText
-            .get()
-            .trim()
-            .toIntOrNull()
-    }.getOrNull()
+// The version lives in gradle.properties (VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH). Raising it and pushing
+// to master is what publishes a release: the release workflow tags it "v<major>.<minor>.<patch>".
+// versionCode = major * 1_000_000 + minor * 1_000 + patch, e.g. 1.4.12 -> 1004012. The in-app updater computes
+// the same number from the release tag (versionCodeFromTag in ForgeModels.kt), so keep both formulas in sync.
+fun versionPart(name: String): Int =
+    providers.gradleProperty(name).orNull?.trim()?.toIntOrNull()
+        ?: throw GradleException("gradle.properties: $name must be a number")
 
-if (gitCommitCount == null) logger.warn("ForgeGen: git commit count unavailable, using versionCode 1000")
+val versionMajor = versionPart("VERSION_MAJOR")
+val versionMinor = versionPart("VERSION_MINOR")
+val versionPatch = versionPart("VERSION_PATCH")
+if (versionMajor !in 0..2099 || versionMinor !in 0..999 || versionPatch !in 0..999) {
+    throw GradleException("Version $versionMajor.$versionMinor.$versionPatch: minor and patch must be below 1000")
+}
+val appVersionName = "$versionMajor.$versionMinor.$versionPatch"
+val appVersionCode = versionMajor * 1_000_000 + versionMinor * 1_000 + versionPatch
 
-val appVersionCode: Int = 1000 + (gitCommitCount ?: 0)
-
-tasks.register("printVersionCode") {
-    val code = appVersionCode
-    doLast { println(code) }
+tasks.register("printVersionName") {
+    val name = appVersionName
+    doLast { println(name) }
 }
 
 android {
@@ -61,7 +58,7 @@ android {
         minSdk = 31
         targetSdk = 37
         versionCode = appVersionCode
-        versionName = "build-$appVersionCode"
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resValue("string", "app_name", "ForgeGen (Beta)")

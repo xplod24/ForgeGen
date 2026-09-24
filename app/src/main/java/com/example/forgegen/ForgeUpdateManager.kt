@@ -22,7 +22,7 @@ import java.util.Locale
  * UPDATE MANAGER (OTA)
  * Checks the latest GitHub release of the app, downloads its APK with live progress,
  * verifies the SHA-256 digest reported by GitHub and launches the Android Package Installer.
- * A release is an update when its tag "build-<versionCode>" is newer than the installed build.
+ * A release is an update when its tag "v<major>.<minor>.<patch>" maps to a higher versionCode than the installed build.
  * ============================================================================ */
 class ForgeUpdateManager(
     private val application: Application,
@@ -73,18 +73,15 @@ class ForgeUpdateManager(
 
                 if (response.isSuccessful) {
                     val manifest = response.body()?.toUpdateManifest()
-                    val currentVersionCode =
-                        application.packageManager
-                            .getPackageInfo(application.packageName, 0)
-                            .longVersionCode
-                            .toInt()
+                    val installed = application.packageManager.getPackageInfo(application.packageName, 0)
+                    val currentVersionCode = installed.longVersionCode.toInt()
 
                     if (manifest != null && manifest.versionCode > currentVersionCode) {
                         _updateManifest.value = manifest
                         if (manual) showToast("Update available: ${manifest.versionName}")
-                    } else {
-                        val latest = manifest?.versionCode?.toString() ?: "none"
-                        if (manual) showToast("App is up to date (installed: $currentVersionCode, latest release: $latest)")
+                    } else if (manual) {
+                        val installedName = installed.versionName?.removeSuffix("-DEBUG") ?: currentVersionCode.toString()
+                        showToast("App is up to date (installed: $installedName, latest release: ${manifest?.versionName ?: "none"})")
                     }
 
                     // Persist today's date to signify a successful update check.

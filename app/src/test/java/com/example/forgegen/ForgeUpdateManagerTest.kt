@@ -26,7 +26,7 @@ class ForgeUpdateManagerTest {
     private fun apk(digest: String? = "sha256:abc123") =
         GitHubAssetDto(
             name = "app-debug.apk",
-            downloadUrl = "https://github.com/xplod24/ForgeGen/releases/download/build-1101/app-debug.apk",
+            downloadUrl = "https://github.com/xplod24/ForgeGen/releases/download/v1.0.1/app-debug.apk",
             size = 1234,
             digest = digest,
         )
@@ -35,7 +35,7 @@ class ForgeUpdateManagerTest {
         tag: String,
         assets: List<GitHubAssetDto> = listOf(apk()),
         body: String? = null,
-    ) = GitHubReleaseDto(tagName = tag, name = "build-1101", body = body, publishedAt = "2026-09-24T10:00:00Z", assets = assets)
+    ) = GitHubReleaseDto(tagName = tag, name = tag, body = body, publishedAt = "2026-09-24T10:00:00Z", assets = assets)
 
     @Before
     fun setup() {
@@ -47,7 +47,7 @@ class ForgeUpdateManagerTest {
         every { mockApplication.packageName } returns "com.example.forgegen"
 
         val mockPackageInfo = mockk<PackageInfo>()
-        every { mockPackageInfo.longVersionCode } returns 1100L
+        every { mockPackageInfo.longVersionCode } returns 1_000_000L // 1.0.0
         every { mockPackageManager.getPackageInfo("com.example.forgegen", 0) } returns mockPackageInfo
 
         updateManager =
@@ -66,7 +66,7 @@ class ForgeUpdateManagerTest {
         kotlinx.coroutines.runBlocking {
             val body = "What's new:\n- Added cool new feature\n- Naprawiono błąd\n\nBuilt by CI"
             coEvery { mockApi.getLatestRelease(ForgeUpdateManager.UPDATE_REPOSITORY) } returns
-                Response.success(release("build-1101", body = body))
+                Response.success(release("v1.0.1", body = body))
 
             updateManager.checkForUpdates(manual = true)
 
@@ -79,7 +79,8 @@ class ForgeUpdateManagerTest {
 
             val manifest = updateManager.updateManifest.value
             assertNotNull("Update manifest should not be null", manifest)
-            assertEquals(1101, manifest?.versionCode)
+            assertEquals(1_000_001, manifest?.versionCode)
+            assertEquals("1.0.1", manifest?.versionName)
             assertEquals("abc123", manifest?.sha256)
             assertEquals(apk().downloadUrl, manifest?.url)
             assertEquals(listOf("Added cool new feature", "Naprawiono błąd"), manifest?.changelog)
@@ -88,7 +89,7 @@ class ForgeUpdateManagerTest {
     @Test
     fun `release that is not newer than the installed build is ignored`() =
         kotlinx.coroutines.runBlocking {
-            coEvery { mockApi.getLatestRelease(any()) } returns Response.success(release("build-1100"))
+            coEvery { mockApi.getLatestRelease(any()) } returns Response.success(release("v1.0.0"))
 
             updateManager.checkForUpdates(manual = true)
             kotlinx.coroutines.delay(300)
@@ -97,15 +98,30 @@ class ForgeUpdateManagerTest {
         }
 
     @Test
-    fun `only build tags with an APK asset count as updates`() {
+    fun `only version tags with an APK asset count as updates`() {
         assertNull(release("release-main").toUpdateManifest())
-        assertNull(release("build-1101", assets = emptyList()).toUpdateManifest())
-        assertNull(release("build-1101", assets = listOf(apk().copy(name = "notes.txt"))).toUpdateManifest())
-        assertEquals(1101, release("build-1101").toUpdateManifest()?.versionCode)
+        assertNull("old build-N tags are no longer releases", release("build-1034").toUpdateManifest())
+        assertNull(release("v1.0.1", assets = emptyList()).toUpdateManifest())
+        assertNull(release("v1.0.1", assets = listOf(apk().copy(name = "notes.txt"))).toUpdateManifest())
+        assertEquals(1_000_001, release("v1.0.1").toUpdateManifest()?.versionCode)
+    }
+
+    @Test
+    fun `version tags map to the versionCode formula of the build script`() {
+        assertEquals(1_000_000, versionCodeFromTag("v1.0.0"))
+        assertEquals(1_004_012, versionCodeFromTag("v1.4.12"))
+        assertEquals(2_000_000, versionCodeFromTag(" v2.0.0 "))
+        // Releases stay above the old commit-count builds (build-1034 had versionCode 1034) and keep their order.
+        assertEquals(true, versionCodeFromTag("v1.0.0")!! > 1034)
+        assertEquals(true, versionCodeFromTag("v1.9.999")!! < versionCodeFromTag("v1.10.0")!!)
+        assertNull(versionCodeFromTag("v1.1000.0"))
+        assertNull(versionCodeFromTag("1.0.0"))
+        assertNull(versionCodeFromTag("v1.0"))
+        assertNull(versionCodeFromTag("V-1_0_0"))
     }
 
     @Test
     fun `missing digest leaves sha256 empty instead of failing`() {
-        assertNull(release("build-1101", assets = listOf(apk(digest = null))).toUpdateManifest()?.sha256)
+        assertNull(release("v1.0.1", assets = listOf(apk(digest = null))).toUpdateManifest()?.sha256)
     }
 }

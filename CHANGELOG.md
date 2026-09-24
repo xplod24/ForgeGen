@@ -1,3 +1,9 @@
+## 1.0.0
+- Versions are numbered now (major.minor.patch) and released as v1.0.0, v1.0.1, …; the start screen shows the version.
+- Update messages show version names instead of build numbers.
+- If you have build-1034 or older, install this version once by hand from GitHub (it keeps your data); later versions update from the app.
+
+## build-1034
 - A failed or out-of-memory generation now shows an alert, and the progress notification no longer freezes on the last percentage when the queue pauses.
 - Reopening the app from the notification no longer shows empty model lists and a broken gallery.
 - "Exit App" in the notification works even when the app screen is closed.
@@ -9,9 +15,11 @@
 - Model lists reload after switching between two reachable servers and after the server comes back online.
 - The progress notification shows the ETA, and the notification mode descriptions match what is shown.
 
+## build-1033
 - New package name (io.github.xplod24.forgegen), so this build installs next to older ForgeGen builds instead of failing with a package conflict. It starts with fresh settings; the old app keeps its data until you uninstall it.
 - The launcher label is now "ForgeGen", to tell it apart from the old "ForgeGen (Beta)".
 
+## build-1032
 - App updates now come from the latest GitHub release (Settings → App Updates → Check for Updates); the Forge server is no longer involved.
 - Every build is signed with the same key, so a new release installs over the previous one without losing data.
 - Favourite images show their star right after the app starts, not only after something is toggled.
@@ -50,6 +58,7 @@
 - Removed duplicate model/sampler requests and the "Custom API missing" message shown on every start.
 - Android 15: the background service stops cleanly when the system time limit for data sync services is reached.
 
+## Earlier
 - Completely migrated app settings, state, and queue persistence from Jetpack DataStore to Room Database for more robust local storage.
 - Refactored settings architecture into a dedicated manager.
 - Fixed a bug where UI section expanded/collapsed states (Prompts, Settings, LoRAs) were forcefully reverting to their defaults upon app restart.

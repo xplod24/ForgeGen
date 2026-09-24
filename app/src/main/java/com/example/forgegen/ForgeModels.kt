@@ -428,19 +428,27 @@ data class GlobalSettingInnerDto(
  * Pure conversions between the network layer (DTO) and the Domain.
  * ============================================================================ */
 
-private val RELEASE_TAG = Regex("^build-(\\d+)$")
+private val RELEASE_TAG = Regex("^v(\\d+)\\.(\\d+)\\.(\\d+)$")
 
 /**
- * Releases are tagged "build-<versionCode>" by the release workflow. Anything else (e.g. an old
- * "release-main" tag) or a release without an APK is not an update and gives null.
+ * versionCode of a release tag "v<major>.<minor>.<patch>": major * 1_000_000 + minor * 1_000 + patch,
+ * the formula app/build.gradle.kts uses. Null for any other tag (e.g. the old "build-1034" ones).
  */
+fun versionCodeFromTag(tag: String): Int? {
+    val (major, minor, patch) = RELEASE_TAG.find(tag.trim())?.destructured ?: return null
+    val parts = listOf(major, minor, patch).map { it.toIntOrNull() ?: return null }
+    if (parts[0] > 2099 || parts[1] > 999 || parts[2] > 999) return null
+    return parts[0] * 1_000_000 + parts[1] * 1_000 + parts[2]
+}
+
+/** Releases tagged "v<major>.<minor>.<patch>" that carry an APK are updates; anything else gives null. */
 fun GitHubReleaseDto.toUpdateManifest(): UpdateManifest? {
-    val tagMatch = tagName?.let { RELEASE_TAG.find(it.trim()) } ?: return null
-    val versionCode = tagMatch.groupValues[1].toIntOrNull() ?: return null
+    val tag = tagName?.trim() ?: return null
+    val versionCode = versionCodeFromTag(tag) ?: return null
     val apk = assets.orEmpty().firstOrNull { it.name?.endsWith(".apk") == true && !it.downloadUrl.isNullOrEmpty() } ?: return null
     return UpdateManifest(
         versionCode = versionCode,
-        versionName = name?.takeIf { it.isNotBlank() } ?: tagMatch.value,
+        versionName = tag.removePrefix("v"),
         url = apk.downloadUrl!!,
         sha256 = apk.digest?.takeIf { it.startsWith("sha256:") }?.removePrefix("sha256:"),
         size = apk.size,
