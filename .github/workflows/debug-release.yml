@@ -3,7 +3,7 @@ name: Build and Release Debug APK
 on:
   pull_request: # Changed this from 'push' to trigger on pull requests
     branches:
-      - main
+      - master # the repository has no 'main' branch, so this workflow never ran
 
 permissions:
   contents: write # Required to allow the action to create a GitHub Release
@@ -42,6 +42,9 @@ jobs:
 
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug

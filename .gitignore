@@ -21,3 +21,6 @@ old_*.kt
 init_*.kt
 git_*.kt
 temp_*.kt
+
+# Kotlin compiler daemon logs
+.kotlin/
