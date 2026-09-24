@@ -219,10 +219,11 @@ object ForgeRepository {
 
     fun deletePreset(name: String) = ForgeSettingsManager.deletePreset(name)
 
-    fun fetchAutoConfig() {
+    /** Reads the server's working folder and txt2img output folder from the gallery extension ([galleryPrefix]). */
+    fun fetchAutoConfig(galleryPrefix: String) {
         repositoryScope.launch(Dispatchers.IO) {
             try {
-                val response = forgeApi?.getGlobalSettings()
+                val response = forgeApi?.getGlobalSettingsDynamic("$galleryPrefix/global_setting")
                 if (response?.isSuccessful == true) {
                     val body = response.body()
                     val sdCwd = body?.sdCwd ?: ""
@@ -231,7 +232,14 @@ object ForgeRepository {
                     if (sdCwd.isNotEmpty()) {
                         val separator = if (sdCwd.contains("\\")) "\\" else "/"
                         val cleanOutdir = outdirTxt2Img.trimStart('/', '\\')
-                        val galleryPath = if (cleanOutdir.isNotEmpty()) "$sdCwd$separator$cleanOutdir" else sdCwd
+                        // An output folder set as an absolute path in Forge must not be put under the working folder.
+                        val isAbsolute = outdirTxt2Img.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(outdirTxt2Img)
+                        val galleryPath =
+                            when {
+                                isAbsolute -> outdirTxt2Img
+                                cleanOutdir.isNotEmpty() -> "$sdCwd$separator$cleanOutdir"
+                                else -> sdCwd
+                            }
 
                         val newConfig =
                             config.value.copy(

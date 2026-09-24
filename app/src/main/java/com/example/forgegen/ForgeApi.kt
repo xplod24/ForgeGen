@@ -83,9 +83,6 @@ interface ForgeApi {
     @GET("customapi/v1/all-models-hashes")
     suspend fun getCustomModelsHashes(): Response<CustomApiModelsResponseDto>
 
-    @GET("infinite_image_browsing/global_setting")
-    suspend fun getGlobalSettings(): Response<GlobalSettingResponseDto>
-
     @GET
     suspend fun getGlobalSettingsDynamic(
         @Url url: String,
@@ -99,6 +96,20 @@ interface ForgeApi {
         @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
         @Query(value = "folder_path", encoded = true) folderPath: String = "",
     ): Response<ResponseBody>
+
+    /** Generation parameters of one image, read by the gallery extension on the server (a JSON string). */
+    @GET
+    suspend fun getGalleryGenInfo(
+        @Url url: String,
+        @Query("path") path: String,
+    ): Response<ResponseBody>
+
+    /** Generation parameters of many images at once (newer versions of the gallery extension): path -> text. */
+    @POST
+    suspend fun getGalleryGenInfoBatch(
+        @Url url: String,
+        @Body body: GalleryPathsRequestDto,
+    ): Response<Map<String, String?>>
 }
 
 /* ============================================================================

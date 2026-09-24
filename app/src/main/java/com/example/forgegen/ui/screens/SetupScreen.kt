@@ -391,6 +391,14 @@ fun SetupScreen(
             }
             item {
                 SwitchPreference(
+                    title = "Show Grid After Batch",
+                    subtitle = "Temporarily show a grid of images when a batch generation finishes",
+                    checked = config.showGridAfterGeneration,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
                     title = "Keep Screen On",
                     subtitle = "Prevents phone sleep while rendering",
                     checked = config.keepScreenOn,

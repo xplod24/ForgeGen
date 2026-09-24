@@ -57,7 +57,16 @@ data class AppConfig(
     var mainPromptsExpanded: Boolean = true,
     var mainSettingsExpanded: Boolean = false,
     var mainLorasExpanded: Boolean = false,
+    // Gallery images saved to the phone on their own: AUTO_SAVE_OFF, AUTO_SAVE_FAVORITES or AUTO_SAVE_ALL.
+    var autoSaveMode: String = AUTO_SAVE_OFF,
+    // With AUTO_SAVE_ALL only images newer than this (the server's "yyyy-MM-dd HH:mm:ss" format) are saved,
+    // so switching it on does not download the whole existing gallery.
+    var autoSaveSince: String = "",
 )
+
+const val AUTO_SAVE_OFF = "Off"
+const val AUTO_SAVE_FAVORITES = "Favorites"
+const val AUTO_SAVE_ALL = "All new images"
 
 data class AppState(
     var setupExpandedSections: Set<String> = emptySet(),
@@ -215,7 +224,10 @@ interface GalleryImageDao {
     suspend fun getImageByPath(path: String): GalleryImageEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertImage(image: GalleryImageEntity)
+    suspend fun insertImages(images: List<GalleryImageEntity>)
+
+    @Query("DELETE FROM gallery_images WHERE fullpath IN (:paths)")
+    suspend fun deleteImages(paths: List<String>)
 
     @Query("DELETE FROM gallery_images")
     suspend fun clearAll()
@@ -361,6 +373,10 @@ data class GitHubAssetDto(
 
 data class GalleryFileListDto(
     val files: List<GalleryItemDto> = emptyList(),
+)
+
+data class GalleryPathsRequestDto(
+    val paths: List<String>,
 )
 
 data class GalleryItemDto(

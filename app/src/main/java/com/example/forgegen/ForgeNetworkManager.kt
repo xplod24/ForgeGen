@@ -164,15 +164,22 @@ class ForgeNetworkManager(
             HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
             }
+        // Image downloads are logged without their body: logging a body buffers all of it, so reading only the
+        // start of a PNG (gallery metadata) downloaded the whole file while logging was on.
+        val headerLogging =
+            HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.HEADERS
+            }
         val conditionalLogger =
             okhttp3.Interceptor { chain ->
                 val request = chain.request()
                 val path = request.url.encodedPath
                 val skipLogging = path.contains("progress") || path.contains("memory") || !getConfig().enableLogging
-                if (skipLogging) {
-                    chain.proceed(request)
-                } else {
-                    logging.intercept(chain)
+                val isImage = path.endsWith("/file") || path.endsWith("/image-thumbnail")
+                when {
+                    skipLogging -> chain.proceed(request)
+                    isImage -> headerLogging.intercept(chain)
+                    else -> logging.intercept(chain)
                 }
             }
 

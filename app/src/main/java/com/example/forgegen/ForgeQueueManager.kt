@@ -2,10 +2,7 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
-import android.content.ContentValues
 import android.content.Intent
-import android.os.Environment
-import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
@@ -25,6 +22,10 @@ import java.util.UUID
 @SuppressLint("StaticFieldLeak")
 object ForgeQueueManager {
     private const val TAG = "ForgeQueueManager"
+
+    // Cache files of a session: generated images, images restored from the gallery, temporary downloads.
+    private val SESSION_CACHE_PREFIXES = listOf("gen_", "recovered_", "temp_rec_")
+
     private lateinit var application: Application
     private val gson = Gson()
 
@@ -91,7 +92,7 @@ object ForgeQueueManager {
     fun start() {
         loadQueueState()
         startQueueLoop()
-        cleanupRecoveredImages()
+        cleanupSessionCache()
     }
 
     fun updateExternalProgress(
@@ -278,7 +279,11 @@ object ForgeQueueManager {
         var succeeded = false
         var errorReason: String? = null // set when a failure paused the queue
         var isOom = false
-        val shouldSaveToDevice = ForgeRepository.appState.value.saveToDevice
+        // With "Save to phone: All new images" the gallery sync saves the server's copy (its own name and
+        // folder), so saving here as well would put every image on the phone twice.
+        val shouldSaveToDevice =
+            ForgeRepository.appState.value.saveToDevice &&
+                !(config.autoSaveMode == AUTO_SAVE_ALL && job.payload.save_images)
 
         _progress.value = 0f
         _currentEta.value = 0.0
@@ -327,21 +332,7 @@ object ForgeQueueManager {
 
                         if (shouldSaveToDevice) {
                             try {
-                                val fileName = "Gen_${System.currentTimeMillis()}_$i.png"
-                                val contentValues =
-                                    ContentValues().apply {
-                                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen")
-                                    }
-                                val resolver = application.contentResolver
-                                val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                                val uri = resolver.insert(insertUri, contentValues)
-                                if (uri != null) {
-                                    resolver.openOutputStream(uri)?.use { out ->
-                                        out.write(bytes)
-                                    }
-                                }
+                                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}_$i.png") { it.write(bytes) }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Failed to save generated image directly to device", e)
                             }
@@ -627,11 +618,16 @@ object ForgeQueueManager {
         }
     }
 
-    private fun cleanupRecoveredImages() {
+    /**
+     * Deletes the images of the previous run from the cache. The session only lives in memory, so after a restart
+     * nothing refers to them any more; generated images ("gen_") used to pile up there forever.
+     */
+    private fun cleanupSessionCache() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
                 application.cacheDir.listFiles()?.forEach { file ->
-                    if (file.name.startsWith("recovered_") && file.name.endsWith(".png")) {
+                    val isSessionFile = SESSION_CACHE_PREFIXES.any { file.name.startsWith(it) }
+                    if (isSessionFile && file.name.endsWith(".png")) {
                         file.delete()
                     }
                 }
@@ -665,29 +661,10 @@ object ForgeQueueManager {
             try {
                 val file = File(localFilePath)
                 if (!file.exists()) throw Exception("Local file missing")
-
-                val fileName = "Gen_${System.currentTimeMillis()}.png"
-                val contentValues =
-                    ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ForgeGen")
-                    }
-
-                val resolver = application.contentResolver
-                val insertUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
-                val uri = resolver.insert(insertUri, contentValues)
-
-                if (uri != null) {
-                    resolver.openOutputStream(uri)?.use { outStream ->
-                        file.inputStream().use { inStream ->
-                            inStream.copyTo(outStream)
-                        }
-                    }
-                    ForgeRepository.showToast("Saved to Downloads")
-                } else {
-                    throw Exception("Failed to create file in MediaStore")
+                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}.png") { out ->
+                    file.inputStream().use { it.copyTo(out) }
                 }
+                ForgeRepository.showToast("Saved to Pictures/ForgeGen")
             } catch (e: Exception) {
                 ForgeRepository.showToast("Download Failed: ${e.message}")
             }
@@ -702,36 +679,12 @@ object ForgeQueueManager {
             try {
                 val file = File(localFilePath)
                 if (!file.exists()) throw Exception("Local file missing")
-
-                val fileName = "Shared_${System.currentTimeMillis()}.png"
-                val contentValues =
-                    ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ForgeGen_Shared")
+                // A temporary copy for the share sheet; it used to be saved to Pictures/ForgeGen_Shared for good.
+                val intent =
+                    DeviceImages.shareIntent(application, "ForgeGen_${System.currentTimeMillis()}.png") { out ->
+                        file.inputStream().use { it.copyTo(out) }
                     }
-
-                val resolver = application.contentResolver
-                val insertUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                val uri = resolver.insert(insertUri, contentValues)
-
-                if (uri != null) {
-                    resolver.openOutputStream(uri)?.use { outStream ->
-                        file.inputStream().use { inStream ->
-                            inStream.copyTo(outStream)
-                        }
-                    }
-
-                    val shareIntent =
-                        Intent(Intent.ACTION_SEND).apply {
-                            type = "image/png"
-                            putExtra(Intent.EXTRA_STREAM, uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        }
-                    withContext(Dispatchers.Main) { onIntentReady(Intent.createChooser(shareIntent, "Share Image")) }
-                } else {
-                    throw Exception("Failed to prepare file for sharing")
-                }
+                withContext(Dispatchers.Main) { onIntentReady(intent) }
             } catch (e: Exception) {
                 ForgeRepository.showToast("Share Failed: ${e.message}")
             }

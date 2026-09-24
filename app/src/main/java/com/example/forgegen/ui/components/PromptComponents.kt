@@ -2011,31 +2011,10 @@ fun AppMetadataAlertDialog(
         !metadata.startsWith("Invalid") &&
         !metadata.startsWith("Server")
     ) {
-        val lines = metadata.split("\n")
-        var currentMode = 0
-        for (line in lines) {
-            if (line.startsWith("Negative prompt:")) {
-                currentMode = 1
-                negPrompt += line.substringAfter("Negative prompt:").trim() + "\n"
-            } else if (line.startsWith("Steps:")) {
-                currentMode = 2
-                val params = line.split(",")
-                params.forEach { p ->
-                    val kv = p.split(":")
-                    if (kv.size >= 2 && kv[0].trim() == "Model") {
-                        modelName = kv[1].trim()
-                    }
-                }
-            } else {
-                if (currentMode == 0) {
-                    posPrompt += line + "\n"
-                } else if (currentMode == 1) {
-                    negPrompt += line + "\n"
-                }
-            }
-        }
-        posPrompt = posPrompt.trim()
-        negPrompt = negPrompt.trim()
+        val info = remember(metadata) { Infotext.parse(metadata) }
+        posPrompt = info.positivePrompt
+        negPrompt = info.negativePrompt
+        modelName = info.model
 
         PromptParser.LORA.findAll(posPrompt).forEach { match ->
             loras.add(match.value)

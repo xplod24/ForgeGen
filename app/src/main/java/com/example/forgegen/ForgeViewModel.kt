@@ -137,7 +137,6 @@ class ForgeViewModel(
     val appState: StateFlow<AppState> = ForgeRepository.appState
     val promptHistory: StateFlow<List<PromptHistoryItem>> = ForgeRepository.promptHistory
     val wildcards: StateFlow<List<WildcardEntity>> = ForgePromptManager.wildcards
-    val pinnedImages: StateFlow<Set<String>> = ForgeSettingsManager.pinnedImages
 
     val activeLoras: StateFlow<List<ActiveLora>> = ForgeRepository.activeLoras
 
@@ -172,7 +171,8 @@ class ForgeViewModel(
     val currentImageMetadata: StateFlow<String?> = ForgeGalleryManager.currentImageMetadata
     val galleryMode: StateFlow<GalleryMode> = ForgeGalleryManager.galleryMode
 
-    val isCurrentFavorite: StateFlow<Boolean> = ForgeGalleryManager.isCurrentFavorite
+    val isGalleryIndexing: StateFlow<Boolean> = ForgeGalleryManager.isIndexing
+    val galleryIndexedImageCount: StateFlow<Int> = ForgeGalleryManager.indexedImageCount
     val favoritePaths: StateFlow<Set<String>> = ForgeGalleryManager.favoritePaths
     val isRestoringPrompt: StateFlow<IndicatorState> = ForgeGalleryManager.isRestoringPrompt
 
@@ -212,7 +212,6 @@ class ForgeViewModel(
     fun clearGalleryFilters() = ForgeGalleryManager.clearFilters()
     fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
 
-    fun togglePinnedImage(path: String) = ForgeSettingsManager.togglePinnedImage(path)
 
     // --- DELEGATION OF ACTIONS TO REPOSITORY ---
     suspend fun getTagsForLora(hash: String) = ForgeModelManager.getTagsForLora(hash)
@@ -244,7 +243,7 @@ class ForgeViewModel(
         updated: GenerationPreset,
     ) = ForgeSettingsManager.updatePreset(oldName, updated)
 
-    fun fetchAutoConfig() = ForgeRepository.fetchAutoConfig()
+    fun fetchAutoConfig() = ForgeRepository.fetchAutoConfig(networkManager.galleryApiPrefix.value)
 
     fun getPreviewUrl(
         originalPath: String,
@@ -344,8 +343,6 @@ class ForgeViewModel(
 
     fun loadMetadataForLocalFile(path: String) = ForgeGalleryManager.loadMetadataForLocalFile(path)
 
-    fun checkIfFavorite(path: String) = ForgeGalleryManager.checkIfFavorite(path)
-
     fun toggleFavorite(item: GalleryItem) = ForgeGalleryManager.toggleFavorite(item)
 
     fun shareImage(
@@ -358,6 +355,12 @@ class ForgeViewModel(
     fun downloadImage(item: GalleryItem) = ForgeGalleryManager.downloadImage(item)
 
     fun getGalleryImageUrl(item: GalleryItem): String = ForgeGalleryManager.getGalleryImageUrl(item)
+
+    fun getGalleryThumbnailUrl(item: GalleryItem): String = ForgeGalleryManager.getGalleryThumbnailUrl(item)
+
+    fun autoSyncGallery() = ForgeGalleryManager.autoSyncGallery()
+
+    fun setAutoSaveMode(mode: String) = ForgeGalleryManager.setAutoSaveMode(mode)
 
     fun recoverPromptFromImage(item: GalleryItem) = ForgeGalleryManager.recoverPromptFromImage(item)
 

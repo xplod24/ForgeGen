@@ -96,24 +96,16 @@ object ForgeSettingsManager {
     private val _promptHistory = MutableStateFlow<List<PromptHistoryItem>>(emptyList())
     val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
 
-    // --- Pinned Images ---
+    // --- Pinned Images (up to 1.0.2) ---
+    // Pins were a second list of bookmarks next to the favorites. ForgeGalleryManager moves them into the
+    // favorites once and then clears them here.
     private val _pinnedImages = MutableStateFlow<Set<String>>(emptySet())
     val pinnedImages: StateFlow<Set<String>> = _pinnedImages.asStateFlow()
 
-    fun togglePinnedImage(path: String) {
-        val current = _pinnedImages.value.toMutableSet()
-        if (current.contains(path)) {
-            current.remove(path)
-        } else {
-            current.add(path)
-            // Limit to 500 images max. Remove oldest (first in iteration) if over limit.
-            while (current.size > 500) {
-                current.remove(current.first())
-            }
-        }
-        _pinnedImages.value = current
+    fun clearPinnedImages() {
+        _pinnedImages.value = emptySet()
         settingsScope.launch(dbWriteDispatcher) {
-            db.appSettingDao().putSetting(AppSettingEntity(PINNED_IMAGES_KEY, gson.toJson(current)))
+            db.appSettingDao().removeSetting(PINNED_IMAGES_KEY)
         }
     }
 
@@ -253,6 +245,8 @@ object ForgeSettingsManager {
             mainPromptsExpanded = parsed?.mainPromptsExpanded ?: true,
             mainSettingsExpanded = parsed?.mainSettingsExpanded ?: false,
             mainLorasExpanded = parsed?.mainLorasExpanded ?: false,
+            autoSaveMode = parsed?.autoSaveMode ?: AUTO_SAVE_OFF,
+            autoSaveSince = parsed?.autoSaveSince ?: "",
         )
     }
 

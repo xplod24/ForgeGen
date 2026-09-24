@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Only the downloaded update APK (getExternalFilesDir(DIRECTORY_DOWNLOADS)) is shared, with the package installer. -->
+    <!-- The downloaded update APK (getExternalFilesDir(DIRECTORY_DOWNLOADS)), shared with the package installer. -->
     <external-files-path name="download_files" path="Download/" />
+    <!-- Temporary copies of shared images (DeviceImages.shareIntent). -->
+    <cache-path name="shared_images" path="shared/" />
 </paths>

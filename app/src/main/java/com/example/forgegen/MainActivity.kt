@@ -225,9 +225,6 @@ private fun AppLockScreen(onUnlock: () -> Unit) {
     }
 }
 
-/** Fade of the full-screen overlays (offline, prompt recovery, Civitai sync), in and out alike. */
-private const val OVERLAY_FADE_MS = 200
-
 // --- MAIN ACTIVITY ENTRY POINT ---
 
 class MainActivity : ComponentActivity() {

@@ -235,6 +235,9 @@ class PromptVisualTransformation : VisualTransformation {
 
 enum class IndicatorState { IDLE, LOADING, SUCCESS, ERROR }
 
+/** Fade of the full-screen overlays (offline, prompt recovery, Civitai and gallery sync), in and out alike. */
+const val OVERLAY_FADE_MS = 200
+
 /**
  * The last [value] that was not [idle]. An overlay that fades out when its state returns to idle keeps
  * showing its final state (e.g. the tick) during the exit animation instead of snapping back.
