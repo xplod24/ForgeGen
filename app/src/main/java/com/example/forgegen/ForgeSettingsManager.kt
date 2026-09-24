@@ -233,7 +233,6 @@ object ForgeSettingsManager {
             notifOnQueueFinish = parsed?.notifOnQueueFinish ?: true,
             notifCivitaiSync = parsed?.notifCivitaiSync ?: true,
             autoDismissCivitaiNotif = parsed?.autoDismissCivitaiNotif ?: false,
-            notifQueueStatus = parsed?.notifQueueStatus ?: false,
             notificationMode = parsed?.notificationMode ?: "Simple",
             keepScreenOn = parsed?.keepScreenOn ?: false,
             enablePersistentService = parsed?.enablePersistentService ?: false,

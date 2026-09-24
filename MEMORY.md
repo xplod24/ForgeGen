@@ -6,7 +6,9 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **State Management:** All settings and app state variables are consolidated in `ForgeModels.kt` (specifically `AppConfig` and `AppState` data classes).
 - **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, stored in the Room `app_settings` table.
 - **Queue & Notifications:** Managed by `ForgeQueueManager.kt`. 
-- **Foreground Service:** `GenerationService.kt` runs the persistent foreground notification.
+- **Foreground Service:** `GenerationService.kt` runs the persistent foreground notification. `ACTION_QUEUE_FINISHED` means "the queue stopped" (empty or paused): the service stops, or shows Ready/Paused in persistent mode. "Exit App" is handled by the service (kills the process); MainActivity only closes its task.
+- **Notifications:** always go through `ForgeNotifications` (channels created at app start: `forge_high` errors, `forge_default` finished jobs, `forge_low` silent progress; fixed ids for service/queue alert/gallery/Civitai). Each finished job produces at most one notification (error alert, queue completed or batch completed).
+- **Reopening:** when the process outlives the activity, `initializeApp` only starts the new ViewModel's `ForgeNetworkManager`; that manager fetches lists itself if already connected (isConnected emits only on changes).
 - **Updates:** `ForgeUpdateManager.kt` reads `releases/latest` of `xplod24/ForgeGen` through `GitHubApi` (public repo, no token), offers releases tagged `build-<versionCode>` newer than the installed build, downloads the `.apk` asset and checks the SHA-256 `digest` GitHub reports.
 - **Versioning:** `versionCode = 1000 + git commit count` (`app/build.gradle.kts`), `versionName = "build-<versionCode>"`. Same commit = same code locally and on CI; needs a full clone (CI uses `fetch-depth: 0`).
 - **Signing:** debug builds are signed with the committed `app/debug.keystore` (password `android`) so local and CI builds can update each other. Changing the key forces users to uninstall.

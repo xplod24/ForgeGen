@@ -41,7 +41,7 @@ class ForgeNetworkManager(
     var forgeApi: ForgeApi? = null
         private set
 
-    private var hasFetchedInitialData = false
+    @Volatile private var hasFetchedInitialData = false
 
     fun start() {
         managerScope.launch(Dispatchers.IO) {
@@ -58,6 +58,12 @@ class ForgeNetworkManager(
                     rebuildForgeApi(currentUrl)
                     ForgeRepository.resetPingJob()
                     hasFetchedInitialData = false
+                    // isConnected only emits on a change, so when it is already true (app reopened while the process
+                    // lived on, or a switch between two reachable servers) the lists must be fetched from here.
+                    if (ForgeRepository.isConnected.value) {
+                        hasFetchedInitialData = true
+                        fetchApiData()
+                    }
                 } else if (timeoutChanged && currentUrl.isNotEmpty()) {
                     rebuildForgeApi(currentUrl) // Retrofit keeps the client it was built with
                 }
@@ -66,7 +72,10 @@ class ForgeNetworkManager(
 
         managerScope.launch(Dispatchers.IO) {
             ForgeRepository.isConnected.collect { isConnected ->
-                if (isConnected && !hasFetchedInitialData) {
+                if (!isConnected) {
+                    hasFetchedInitialData = false // refresh the lists once the server is back (it may have restarted)
+                } else if (!hasFetchedInitialData && forgeApi != null) {
+                    // forgeApi is null until the config collector above has built it; that collector fetches then.
                     hasFetchedInitialData = true
                     fetchApiData()
                 }
@@ -133,6 +142,7 @@ class ForgeNetworkManager(
     fun cancelCivitaiSync() {
         if (_isCivitaiSyncing.value == IndicatorState.LOADING) {
             civitaiSyncJob?.cancel()
+            ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC)
             _isCivitaiSyncing.value = IndicatorState.IDLE
         }
     }
@@ -482,6 +492,7 @@ class ForgeNetworkManager(
 
                     _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
                     var hasError = false
+                    var failedCount = 0
 
                     for ((index, cam) in missingOrIncomplete.withIndex()) {
                         var civName = cam.name ?: "Unknown"
@@ -492,6 +503,11 @@ class ForgeNetworkManager(
 
                         _civitaiSyncCurrentModel.value = civName
                         _civitaiSyncProgress.value = index to missingOrIncomplete.size
+                        notifyCivitaiSync(
+                            title = "Syncing Civitai models (${index + 1}/${missingOrIncomplete.size})",
+                            text = civName,
+                            progress = index to missingOrIncomplete.size,
+                        )
 
                         // Rate-limiting delay (5 seconds) to prevent Civitai from issuing an IP ban/rate-limit.
                         if (index > 0) delay(5000) else delay(500)
@@ -513,11 +529,13 @@ class ForgeNetworkManager(
                             } else {
                                 _civitaiSyncLastResult.value = "Error: HTTP ${civRes.code()}"
                                 hasError = true
+                                failedCount++
                             }
                         } catch (e: Exception) {
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             _civitaiSyncLastResult.value = "Network error"
                             hasError = true
+                            failedCount++
                         }
 
                         val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
@@ -525,21 +543,60 @@ class ForgeNetworkManager(
                         _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
                     }
 
-                    _civitaiSyncLastResult.value = "Synchronization completed successfully"
+                    val total = missingOrIncomplete.size
+                    _civitaiSyncLastResult.value =
+                        if (hasError) {
+                            "Finished with errors: $failedCount of $total models failed"
+                        } else {
+                            "Synchronization completed successfully"
+                        }
+                    when {
+                        hasError ->
+                            notifyCivitaiSync(
+                                title = "Civitai sync finished with errors",
+                                text = "$failedCount of $total models failed",
+                                isError = true,
+                            )
+                        getConfig().autoDismissCivitaiNotif -> ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC)
+                        else -> notifyCivitaiSync("Civitai sync finished", "$total models updated")
+                    }
                     fetchApiData() // Refresh model resources from the local SQLite database to reflect synced metadata.
 
                     _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
                     delay(2000)
                     _isCivitaiSyncing.value = IndicatorState.IDLE
                 } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (e is kotlinx.coroutines.CancellationException) {
+                        ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC) // an ongoing notification cannot be swiped away
+                        throw e
+                    }
                     Log.e(TAG, "Critical error during Civitai synchronization: $e")
                     _civitaiSyncLastResult.value = "A critical error occurred"
+                    notifyCivitaiSync("Civitai sync failed", "A critical error occurred", isError = true)
                     _isCivitaiSyncing.value = IndicatorState.ERROR
                     delay(3000)
                     _isCivitaiSyncing.value = IndicatorState.IDLE
                 }
             }
+    }
+
+    /** Honours "Notify during Civitai Sync"; the sync pauses 5 s per model, so it can run for minutes. */
+    private fun notifyCivitaiSync(
+        title: String,
+        text: String,
+        progress: Pair<Int, Int>? = null,
+        isError: Boolean = false,
+    ) {
+        if (!getConfig().notifCivitaiSync) return
+        val channel = if (isError) ForgeNotifications.CHANNEL_RESULTS else ForgeNotifications.CHANNEL_PROGRESS
+        val builder = ForgeNotifications.builder(channel) ?: return
+        builder.setContentTitle(title).setContentText(text)
+        if (progress != null) {
+            builder.setProgress(progress.second, progress.first, false).setOngoing(true).setSilent(true)
+        } else {
+            builder.setAutoCancel(true)
+        }
+        ForgeNotifications.post(ForgeNotifications.ID_CIVITAI_SYNC, builder.build())
     }
 
     fun refreshCheckpoints(onResult: (Boolean, String) -> Unit) {

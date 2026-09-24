@@ -202,7 +202,7 @@ object ForgeRepository {
     private fun refreshServiceState() {
         val serviceIntent =
             Intent(application, GenerationService::class.java).apply {
-                action = "ACTION_UPDATE_PERSISTENCE"
+                action = GenerationService.ACTION_UPDATE_PERSISTENCE
             }
         try {
             application.startService(serviceIntent)

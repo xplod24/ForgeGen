@@ -2,16 +2,12 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.ContentValues
-import android.content.Context
 import android.content.Intent
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Base64
 import android.util.Log
-import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
@@ -279,6 +275,9 @@ object ForgeQueueManager {
 
     private suspend fun executeGeneration(job: QueuedGeneration) {
         val config = ForgeRepository.config.value
+        var succeeded = false
+        var errorReason: String? = null // set when a failure paused the queue
+        var isOom = false
         val shouldSaveToDevice = ForgeRepository.appState.value.saveToDevice
 
         _progress.value = 0f
@@ -292,7 +291,7 @@ object ForgeQueueManager {
 
         val serviceIntent =
             Intent(application, GenerationService::class.java).apply {
-                action = "ACTION_START_GENERATION"
+                action = GenerationService.ACTION_START_GENERATION
             }
         try {
             application.startForegroundService(serviceIntent)
@@ -361,9 +360,7 @@ object ForgeQueueManager {
                         _isShowingGridPreview.value = true
                     }
 
-                    if (config.notifOnBatchFinish) {
-                        launchNotification(job.positivePrompt, currentList.lastOrNull(), config, isQueueFinished = false)
-                    }
+                    succeeded = true
                 }
             } else {
                 val errorBody = response?.errorBody()?.string() ?: ""
@@ -375,9 +372,14 @@ object ForgeQueueManager {
                     _statusText.value = "SERVER OUT OF MEMORY (OOM)"
                     pauseQueue("Server out of memory (OOM).")
                     _oomAlert.value = true
+                    errorReason = "Server out of memory (OOM)."
+                    isOom = true
                 } else {
                     _statusText.value = "Error: HTTP ${response?.code()}"
-                    if (!config.overnightMode) pauseQueue("The server returned HTTP ${response?.code()}.")
+                    if (!config.overnightMode) {
+                        pauseQueue("The server returned HTTP ${response?.code()}.")
+                        errorReason = "The server returned HTTP ${response?.code()}."
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -387,6 +389,7 @@ object ForgeQueueManager {
             _statusText.value = "Failed: ${e.localizedMessage}"
             if (!ForgeRepository.config.value.overnightMode) {
                 pauseQueue("Generation failed: ${e.localizedMessage}")
+                errorReason = "Generation failed: ${e.localizedMessage}"
             }
         } finally {
             val isSuspended =
@@ -397,24 +400,32 @@ object ForgeQueueManager {
                 _generationQueue.update { q -> q.filter { it.id != job.id } }
                 _completedQueueItems.update { it + 1 }
 
-                if (_generationQueue.value.isEmpty()) {
+                val queueEmpty = _generationQueue.value.isEmpty()
+                if (queueEmpty) {
                     _totalQueueSize.value = 0
                     _completedQueueItems.value = 0
                     // Nothing left to hold back: a paused empty queue would silently swallow the next job.
                     _isQueuePaused.value = false
                     _queuePauseReason.value = null
+                }
 
-                    if (ForgeRepository.config.value.notifOnQueueFinish) {
-                        launchNotification(
-                            job.positivePrompt,
-                            _sessionImages.value.lastOrNull(),
-                            ForgeRepository.config.value,
-                            isQueueFinished = true,
-                        )
-                    }
+                // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
+                // failed job only gets the error alert (it used to be reported as a completed queue).
+                val notifConfig = ForgeRepository.config.value
+                val failure = errorReason
+                when {
+                    failure != null -> notifyGenerationError(failure, isOom, queuePaused = !queueEmpty)
+                    queueEmpty && notifConfig.notifOnQueueFinish ->
+                        launchNotification(job.positivePrompt, isQueueFinished = true)
+                    succeeded && notifConfig.notifOnBatchFinish ->
+                        launchNotification(job.positivePrompt, isQueueFinished = false)
+                }
 
+                // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
+                if (queueEmpty || _isQueuePaused.value) {
                     try {
-                        val finishIntent = Intent(application, GenerationService::class.java).apply { action = "ACTION_QUEUE_FINISHED" }
+                        val finishIntent =
+                            Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
                         application.startService(finishIntent)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to notify service of queue finish", e)
@@ -431,41 +442,48 @@ object ForgeQueueManager {
 
     private fun launchNotification(
         prompt: String,
-        lastImagePath: String?,
-        config: AppConfig,
-        isQueueFinished: Boolean = false,
+        isQueueFinished: Boolean,
     ) {
-        try {
-            val notifManager = application.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val openIntent =
-                Intent(application, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
-            val pendingIntent =
-                PendingIntent.getActivity(
-                    application,
-                    0,
-                    openIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                )
-            val channelId = "forge_default"
-            val title = if (isQueueFinished) "Queue Completed" else "Batch Completed"
-            val text = if (isQueueFinished) "All generation jobs have finished." else "Finished: ${prompt.take(35)}..."
+        val title = if (isQueueFinished) "Queue Completed" else "Batch Completed"
+        val text = if (isQueueFinished) "All generation jobs have finished." else "Finished: ${prompt.take(35)}..."
+        val builder = ForgeNotifications.builder(ForgeNotifications.CHANNEL_RESULTS) ?: return
+        val notification =
+            builder
+                .setContentTitle(title)
+                .setContentText(text)
+                .setAutoCancel(true)
+                .build()
+        ForgeNotifications.post(System.currentTimeMillis().toInt(), notification)
+    }
 
-            val builder =
-                NotificationCompat
-                    .Builder(application, channelId)
-                    .setSmallIcon(R.mipmap.ic_launcher_foreground)
-                    .setContentTitle(title)
-                    .setContentText(text)
-                    .setContentIntent(pendingIntent)
-                    .setAutoCancel(true)
-
-            val uniqueNotifId = System.currentTimeMillis().toInt()
-            notifManager.notify(uniqueNotifId, builder.build())
-        } catch (e: Exception) {
-            Log.e(TAG, "Notification Launch Failed", e)
-        }
+    /** A failed job needs the user, who may not be looking at the app; one alert, replaced by the next. */
+    private fun notifyGenerationError(
+        reason: String,
+        isOom: Boolean,
+        queuePaused: Boolean,
+    ) {
+        val builder = ForgeNotifications.builder(ForgeNotifications.CHANNEL_ALERTS) ?: return
+        val title =
+            when {
+                isOom -> "Server out of memory"
+                queuePaused -> "Queue paused"
+                else -> "Generation failed"
+            }
+        val text =
+            when {
+                isOom && queuePaused -> "Lower the resolution or batch size, then resume the queue."
+                isOom -> "Lower the resolution or batch size and try again."
+                queuePaused -> "$reason Open the app to resume the queue."
+                else -> reason
+            }
+        val notification =
+            builder
+                .setContentTitle(title)
+                .setContentText(text)
+                .setColor(0xFFFF0000.toInt())
+                .setAutoCancel(true)
+                .build()
+        ForgeNotifications.post(ForgeNotifications.ID_QUEUE_PAUSED, notification)
     }
 
     fun suspendCurrentGeneration() {
@@ -484,7 +502,7 @@ object ForgeQueueManager {
         currentGenerationJob?.cancel()
 
         try {
-            val finishIntent = Intent(application, GenerationService::class.java).apply { action = "ACTION_QUEUE_FINISHED" }
+            val finishIntent = Intent(application, GenerationService::class.java).apply { action = GenerationService.ACTION_QUEUE_FINISHED }
             application.startService(finishIntent)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to notify service of queue finish", e)
@@ -514,6 +532,7 @@ object ForgeQueueManager {
     }
 
     fun clearQueue() {
+        ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
         _generationQueue.value = emptyList()
         _totalQueueSize.value = 0
         _completedQueueItems.value = 0
@@ -568,6 +587,7 @@ object ForgeQueueManager {
     }
 
     fun resumeQueue() {
+        ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
         _isQueuePaused.value = false
         _queuePauseReason.value = null
         _oomAlert.value = false

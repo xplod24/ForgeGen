@@ -38,7 +38,6 @@ data class AppConfig(
     var notifOnQueueFinish: Boolean = true,
     var notifCivitaiSync: Boolean = true,
     var autoDismissCivitaiNotif: Boolean = false,
-    var notifQueueStatus: Boolean = false,
     var notificationMode: String = "Simple",
     var keepScreenOn: Boolean = false,
     var enablePersistentService: Boolean = false,

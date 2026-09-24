@@ -1,7 +1,6 @@
 package com.example.forgegen
 
 import android.app.Activity
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.ContextWrapper
@@ -19,7 +18,6 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -73,7 +71,6 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import kotlin.system.exitProcess
 
 // --- GLOBAL UTILITIES & SHARED COMPONENTS ---
 
@@ -274,23 +271,14 @@ class MainActivity : ComponentActivity() {
                             context: Context?,
                             intent: Intent?,
                         ) {
-                            if (intent?.action == "ACTION_EXIT_APP") {
-                                val manager = context?.getSystemService(NOTIFICATION_SERVICE) as? NotificationManager
-                                manager?.cancel(1001)
-                                manager?.cancel(1002)
-
-                                val svcIntent = Intent(context, GenerationService::class.java)
-                                context?.stopService(svcIntent)
-
-                                if (context is Activity) {
-                                    context.finishAndRemoveTask()
-                                }
-                                Process.killProcess(Process.myPid())
-                                exitProcess(0)
+                            // GenerationService handles "Exit App" (notifications, service, process); the activity
+                            // only has to leave Recents before the process ends.
+                            if (intent?.action == GenerationService.ACTION_EXIT_APP) {
+                                activity.finishAndRemoveTask()
                             }
                         }
                     }
-                val filter = IntentFilter("ACTION_EXIT_APP")
+                val filter = IntentFilter(GenerationService.ACTION_EXIT_APP)
                 ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
                 onDispose { context.unregisterReceiver(receiver) }
             }

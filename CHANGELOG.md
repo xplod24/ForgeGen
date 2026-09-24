@@ -1,3 +1,14 @@
+- A failed or out-of-memory generation now shows an alert, and the progress notification no longer freezes on the last percentage when the queue pauses.
+- Reopening the app from the notification no longer shows empty model lists and a broken gallery.
+- "Exit App" in the notification works even when the app screen is closed.
+- A failed last job is no longer reported as "Queue Completed", and a single job gives one notification instead of two.
+- Generation progress is silent (it made a sound at every start); errors have their own "Errors" channel.
+- Swiping the app away from Recents no longer stops a running queue or the "Run in Background" service.
+- "Notify during Civitai Sync" and "Auto-Dismiss" now work (the switches did nothing), and a sync with failed models is no longer reported as successful.
+- Notifications posted before the first generation (e.g. gallery indexing in the background) are no longer lost; indexing ends with an "Indexed" notification.
+- Model lists reload after switching between two reachable servers and after the server comes back online.
+- The progress notification shows the ETA, and the notification mode descriptions match what is shown.
+
 - New package name (io.github.xplod24.forgegen), so this build installs next to older ForgeGen builds instead of failing with a package conflict. It starts with fresh settings; the old app keeps its data until you uninstall it.
 - The launcher label is now "ForgeGen", to tell it apart from the old "ForgeGen (Beta)".
 

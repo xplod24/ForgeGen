@@ -20,11 +20,6 @@ import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 
 /* ============================================================================
  * GALLERY MANAGER
@@ -442,8 +437,7 @@ object ForgeGalleryManager {
         syncJob?.cancel()
         _isGallerySyncing.value = IndicatorState.IDLE
         isGallerySyncBackgrounded = false
-        val notificationManager = NotificationManagerCompat.from(application)
-        notificationManager.cancel(555)
+        ForgeNotifications.cancel(ForgeNotifications.ID_GALLERY_SYNC)
     }
 
     fun putSyncToBackground() {
@@ -489,6 +483,7 @@ object ForgeGalleryManager {
                 }
 
                 val processedCount = java.util.concurrent.atomic.AtomicInteger(0)
+                val lastNotifiedPercent = java.util.concurrent.atomic.AtomicInteger(-1)
                 val channel = kotlinx.coroutines.channels.Channel<GalleryItem>(kotlinx.coroutines.channels.Channel.UNLIMITED)
                 files.forEach { channel.trySend(it) }
                 channel.close()
@@ -580,19 +575,20 @@ object ForgeGalleryManager {
                             val current = processedCount.incrementAndGet()
                             _gallerySyncProgress.value = current to total
 
-                            if (isGallerySyncBackgrounded &&
-                                ContextCompat.checkSelfPermission(application, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-                            ) {
-                                val notificationManager = NotificationManagerCompat.from(application)
-                                val notification = NotificationCompat.Builder(application, "forge_low")
-                                    .setSmallIcon(R.drawable.ic_launcher_foreground)
-                                    .setContentTitle("Indexing Gallery...")
-                                    .setContentText("$current / $total images")
-                                    .setProgress(total, current, false)
-                                    .setOngoing(true)
-                                    .setSilent(true)
-                                    .build()
-                                notificationManager.notify(555, notification)
+                            // Only on a new percentage: one post per file exceeded Android's rate limit.
+                            val percent = if (total > 0) current * 100 / total else 100
+                            if (isGallerySyncBackgrounded && lastNotifiedPercent.getAndSet(percent) != percent) {
+                                ForgeNotifications.builder(ForgeNotifications.CHANNEL_PROGRESS)?.let { builder ->
+                                    val notification =
+                                        builder
+                                            .setContentTitle("Indexing Gallery...")
+                                            .setContentText("$current / $total images")
+                                            .setProgress(total, current, false)
+                                            .setOngoing(true)
+                                            .setSilent(true)
+                                            .build()
+                                    ForgeNotifications.post(ForgeNotifications.ID_GALLERY_SYNC, notification)
+                                }
                             }
                         }
                     }
@@ -601,10 +597,18 @@ object ForgeGalleryManager {
                 workers.joinAll()
                 _isGallerySyncing.value = IndicatorState.SUCCESS
                 
-                // Remove notification if it exists
+                // In the background the "Indexed" toast is skipped, so the progress notification turns into the result.
                 if (isGallerySyncBackgrounded) {
-                    val notificationManager = NotificationManagerCompat.from(application)
-                    notificationManager.cancel(555)
+                    ForgeNotifications.builder(ForgeNotifications.CHANNEL_PROGRESS)?.let { builder ->
+                        val notification =
+                            builder
+                                .setContentTitle("Gallery indexed")
+                                .setContentText("$total images checked")
+                                .setAutoCancel(true)
+                                .setSilent(true)
+                                .build()
+                        ForgeNotifications.post(ForgeNotifications.ID_GALLERY_SYNC, notification)
+                    }
                 }
 
                 fetchAvailableModels()

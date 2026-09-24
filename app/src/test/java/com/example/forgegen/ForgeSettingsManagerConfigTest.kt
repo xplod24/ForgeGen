@@ -17,7 +17,6 @@ class ForgeSettingsManagerConfigTest {
                 notifOnQueueFinish = false,
                 notifCivitaiSync = false,
                 autoDismissCivitaiNotif = true,
-                notifQueueStatus = true,
                 notificationMode = "Verbose",
                 keepScreenOn = true,
                 enablePersistentService = true,

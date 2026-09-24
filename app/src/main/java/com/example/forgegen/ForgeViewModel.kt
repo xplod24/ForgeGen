@@ -57,6 +57,8 @@ class ForgeViewModel(
     val updateManager: ForgeUpdateManager
 
     init {
+        ForgeNotifications.init(getApplication())
+
         // Create managers but do NOT start them yet.
         networkManager =
             ForgeNetworkManager(
@@ -88,7 +90,13 @@ class ForgeViewModel(
     }
 
     suspend fun initializeApp() {
-        if (ForgeSettingsManager.isInitialized.value) return
+        if (ForgeSettingsManager.isInitialized.value) {
+            // The process outlived the previous activity (e.g. Back was pressed while the background service kept it
+            // alive). The app-wide managers still run; only this ViewModel's network manager is new and must start,
+            // otherwise model lists stay empty and the gallery has no API after reopening from the notification.
+            networkManager.start()
+            return
+        }
 
         // 1. Init Database & Settings
         ForgeRepository.initializeDatabaseAndSettings(getApplication())

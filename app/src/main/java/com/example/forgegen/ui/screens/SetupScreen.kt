@@ -419,10 +419,10 @@ fun SetupScreen(
             item {
                 val modeDesc =
                     when (config.notificationMode) {
-                        "Disabled" -> "No background progress notifications"
-                        "Simple" -> "Shows overall batch progress & ETA"
-                        "Verbose" -> "Detailed progress for each step"
-                        else -> "Shows overall batch progress & ETA"
+                        "Disabled" -> "Only a static notice (Android requires one)"
+                        "Simple" -> "Image number, progress and ETA"
+                        "Verbose" -> "Also batch size and an Open App button"
+                        else -> "Image number, progress and ETA"
                     }
                 TextPreference(
                     title = "Progress Notification Mode",
@@ -638,9 +638,9 @@ fun SetupScreen(
                     Column {
                         val modes =
                             listOf(
-                                Triple("Simple", "Simple", "Shows overall batch progress & ETA"),
-                                Triple("Verbose", "Verbose", "Detailed progress for each step"),
-                                Triple("Disabled", "Disabled", "No background progress notifications"),
+                                Triple("Simple", "Simple", "Image number, progress and ETA"),
+                                Triple("Verbose", "Verbose", "Also batch size and an Open App button"),
+                                Triple("Disabled", "Disabled", "Only a static notice (Android requires one)"),
                             )
                         modes.forEach { (internalValue, displayName, desc) ->
                             Row(
