@@ -74,7 +74,7 @@ object ForgeGalleryManager {
     private val gson = Gson()
     private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val _galleryFiles = MutableStateFlow<List<GalleryItem>>(emptyList())
+    private val folderItems = MutableStateFlow<List<GalleryItem>>(emptyList())
 
     private val _currentGalleryPath = MutableStateFlow("")
     val currentGalleryPath: StateFlow<String> = _currentGalleryPath.asStateFlow()
@@ -98,6 +98,7 @@ object ForgeGalleryManager {
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
 
     // --- Index sync state ---
+
     /** The sync dialog: LOADING while shown, SUCCESS/ERROR briefly at the end, IDLE when hidden. */
     private val _isGallerySyncing = MutableStateFlow(IndicatorState.IDLE)
     val isGallerySyncing: StateFlow<IndicatorState> = _isGallerySyncing.asStateFlow()
@@ -112,7 +113,7 @@ object ForgeGalleryManager {
     private val _gallerySyncCurrentFile = MutableStateFlow("")
     val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
 
-    private val _indexedImages = MutableStateFlow<List<GalleryImageEntity>>(emptyList())
+    private val indexedImages = MutableStateFlow<List<GalleryImageEntity>>(emptyList())
 
     private val _indexedImageCount = MutableStateFlow(0)
     val indexedImageCount: StateFlow<Int> = _indexedImageCount.asStateFlow()
@@ -168,7 +169,7 @@ object ForgeGalleryManager {
     val availableLoras: StateFlow<List<String>> = _availableLoras.asStateFlow()
 
     val displayedFiles: StateFlow<List<GalleryItem>> =
-        combine(_galleryFiles, _currentGalleryPath, _galleryFilters, _indexedImages) { files, path, filters, index ->
+        combine(folderItems, _currentGalleryPath, _galleryFilters, indexedImages) { files, path, filters, index ->
             if (filters.isSearch || path == ALL_IMAGES) {
                 val root = galleryRoot()
                 val found =
@@ -287,7 +288,7 @@ object ForgeGalleryManager {
             val all = getDb().galleryImageDao().getAllImages()
             val root = galleryRoot()
             val inGallery = all.filter { root == null || isUnder(it.fullpath, root) }
-            _indexedImages.value = all
+            indexedImages.value = all
             _indexedImageCount.value = inGallery.size
             _availableModels.value = inGallery.map { it.model }.filter { it.isNotBlank() }.distinct().sorted()
             _availableLoras.value =
@@ -340,7 +341,7 @@ object ForgeGalleryManager {
                 dao.deleteFavorite(item.fullpath)
                 _favoritePaths.update { it - item.fullpath }
                 if (_currentGalleryPath.value == FAVORITES) {
-                    _galleryFiles.update { files -> files.filterNot { it.fullpath == item.fullpath } }
+                    folderItems.update { files -> files.filterNot { it.fullpath == item.fullpath } }
                 }
             } else {
                 dao.insertFavorite(FavoriteImageEntity(fullpath = item.fullpath, name = item.name, date = item.date ?: ""))
@@ -481,7 +482,7 @@ object ForgeGalleryManager {
                         }
                     if (request != folderRequest.get()) return@launch
                     if (items != null) {
-                        _galleryFiles.value = items
+                        folderItems.value = items
                         _currentGalleryPath.value = path
                     }
                     _isGalleryLoading.value = false
@@ -925,7 +926,7 @@ object ForgeGalleryManager {
         val since = ForgeRepository.config.value.autoSaveSince
         if (since.isBlank() || isOnMeteredNetwork()) return 0
         val candidates =
-            _indexedImages.value
+            indexedImages.value
                 .filter { isUnder(it.fullpath, root) && it.date.isNotEmpty() && it.date >= since }
                 .sortedBy { it.date }
         if (candidates.isEmpty()) return 0

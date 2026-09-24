@@ -290,8 +290,8 @@ fun GalleryScreen(
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // SLIDE-DOWN MENUS
-            AnimatedVisibility(
+            // SLIDE-DOWN MENUS (the plain AnimatedVisibility: the Column's version cannot be used inside this Box)
+            androidx.compose.animation.AnimatedVisibility(
                 visible = activeMenu != ActiveMenu.NONE,
                 enter = expandVertically(animationSpec = tween(200, easing = LinearOutSlowInEasing)),
                 exit = shrinkVertically(animationSpec = tween(200, easing = FastOutLinearInEasing)),

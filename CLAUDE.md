@@ -8,5 +8,6 @@ Read `MEMORY.md` before working: it holds the architecture notes and the owner's
 - Releasing is part of finishing a change: raise the version in `gradle.properties` (patch for fixes and small changes,
   minor for new features, major only for a clear change across the whole repository OR on the owner's explicit
   command), add a `## <version>` section to the top of `CHANGELOG.md`
-  and push to master. `.github/workflows/release.yml` then tags `v<version>` and publishes `app-debug.apk`.
+  and push to master. `.github/workflows/release.yml` then tags `v<version>` and publishes the release APK signed with
+  the release key (repository secrets); debug builds are never published.
 - A session cannot push tags; the workflow creates them.

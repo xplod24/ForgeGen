@@ -212,7 +212,6 @@ class ForgeViewModel(
     fun clearGalleryFilters() = ForgeGalleryManager.clearFilters()
     fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
 
-
     // --- DELEGATION OF ACTIONS TO REPOSITORY ---
     suspend fun getTagsForLora(hash: String) = ForgeModelManager.getTagsForLora(hash)
 

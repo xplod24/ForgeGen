@@ -1,3 +1,15 @@
+## 1.1.0
+- ForgeGen is now a proper release build. It installs as a new app next to the old one (1.0.2 and older were test builds): set it up once (server address, presets, wildcards), then uninstall the old ForgeGen. It keeps updating itself as before.
+- The gallery grid shows small thumbnails made by the server instead of downloading every full-size image, so it loads much faster and uses a fraction of the data.
+- The full-screen viewer shows the thumbnail at once while the full image loads, and loads the next and previous images in advance.
+- The gallery index updates itself when you open the gallery: the server reads the generation data and sends only the text, a hundred images at a time, instead of the app downloading every image. Deleted images are removed from the index.
+- Search and filters now cover the whole gallery, not only the open folder, and the new "All Images" view lists every image, newest first. "Newest First" and "Oldest First" sort by date.
+- New "Save to Phone Automatically" option in the gallery settings: off, favorites, or all new images (on Wi-Fi). Saved images go to Pictures/ForgeGen, the ForgeGen album of the phone's gallery.
+- Pinned images are now favorites: one list of bookmarks instead of two.
+- Sharing an image no longer leaves a copy in Pictures/ForgeGen_Shared.
+- Fixed: the app could close when the connection dropped while indexing the gallery; cancelling indexing reported success; favorites without a date did not load; a slow folder could replace the one opened after it; Back from "Pinned" left the gallery; generated images kept filling the phone's storage; multi-line negative prompts were cut to their first line.
+- "Show Grid After Batch" moved to Settings > Appearance & UI.
+
 ## 1.0.2
 - Unlocking the app no longer restarts it: it returns to the screen you left, with everything as it was.
 - Turning the app lock or biometric unlock on or off, and wiping app data, now ask for the phone's PIN, pattern, password or biometrics first.
