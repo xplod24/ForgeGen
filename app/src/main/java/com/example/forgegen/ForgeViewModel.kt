@@ -11,9 +11,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 
@@ -42,12 +45,21 @@ class ForgeViewModel(
         _toastMessage.tryEmit(message)
     }
 
-    private val _isAppBlurred = MutableStateFlow(false)
+    // --- APP LOCK ---
+    // Kept here rather than in the UI: it survives rotation (a remember{} was reset by it) but not a restart of the
+    // process, so the app is always locked again after being killed.
+    private val unlocked = MutableStateFlow(false)
 
-    val isAppBlurred: StateFlow<Boolean> = _isAppBlurred.asStateFlow()
+    val isLocked: StateFlow<Boolean> =
+        combine(ForgeRepository.config, unlocked) { config, isUnlocked -> config.useNativeSecurity && !isUnlocked }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ForgeRepository.config.value.useNativeSecurity)
 
-    fun setAppBlurred(blurred: Boolean) {
-        _isAppBlurred.value = blurred
+    fun lockApp() {
+        unlocked.value = false
+    }
+
+    fun markUnlocked() {
+        unlocked.value = true
     }
 
     // --- INITIALIZATION OF MANAGERS ---

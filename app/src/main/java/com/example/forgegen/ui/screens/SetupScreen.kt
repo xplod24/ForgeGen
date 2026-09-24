@@ -144,6 +144,22 @@ fun SetupScreen(
     val keyguardManager = remember { context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
     val isDeviceSecure = remember { keyguardManager.isDeviceSecure }
 
+    // Runs [action] after the phone's PIN/biometrics check when the app lock is on or being set up; without a phone
+    // lock there is nothing to check against.
+    val confirmWithPhoneLock: (title: String, action: () -> Unit) -> Unit = { title, action ->
+        val activity = context.findActivity()
+        if (activity != null && AppLock.isAvailable(context)) {
+            AppLock.authenticate(
+                activity = activity,
+                allowBiometrics = config.useNativeSecurity && config.useBiometricLock,
+                title = title,
+                onSuccess = action,
+            )
+        } else {
+            action()
+        }
+    }
+
     val pm = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isIgnoringBattery by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
 
@@ -308,26 +324,34 @@ fun SetupScreen(
             }
             item {
                 SwitchPreference(
-                    title = "Use Native Security",
-                    subtitle = "Require device PIN/Password/Pattern to open app",
+                    title = "App Lock",
+                    subtitle = "Ask for the phone's PIN, pattern or password when opening the app",
                     checked = config.useNativeSecurity,
-                    enabled = isDeviceSecure,
-                    onCheckedChange = {
-                        val newConfig = config.copy(useNativeSecurity = it)
-                        if (!it) {
-                            newConfig.useBiometricLock = false
+                    // Stays switchable while on, so it can be turned off after the phone lock was removed.
+                    enabled = isDeviceSecure || config.useNativeSecurity,
+                    onCheckedChange = { enable ->
+                        // Both directions need the phone's lock: off, so whoever holds the unlocked phone cannot just
+                        // switch it off; on, so nobody enables a lock they are unable to open.
+                        confirmWithPhoneLock(if (enable) "Turn on the app lock" else "Turn off the app lock") {
+                            viewModel.markUnlocked()
+                            viewModel.saveConfig(
+                                config.copy(useNativeSecurity = enable, useBiometricLock = enable && config.useBiometricLock),
+                            )
                         }
-                        viewModel.saveConfig(newConfig)
                     },
                 )
             }
             item {
                 SwitchPreference(
-                    title = "Biometric App Lock",
-                    subtitle = "Require fingerprint or face scan on launch",
+                    title = "Allow Biometrics",
+                    subtitle = "Also unlock with fingerprint or face (the PIN keeps working)",
                     checked = config.useBiometricLock,
                     enabled = config.useNativeSecurity && isDeviceSecure,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(useBiometricLock = it)) },
+                    onCheckedChange = { allow ->
+                        confirmWithPhoneLock(if (allow) "Allow biometric unlock" else "Turn off biometric unlock") {
+                            viewModel.saveConfig(config.copy(useBiometricLock = allow))
+                        }
+                    },
                 )
             }
 
@@ -601,14 +625,18 @@ fun SetupScreen(
                     TextButton(
                         enabled = anySelected,
                         onClick = {
-                            if (wipeSettings) viewModel.wipeSettings()
-                            if (wipePresets) viewModel.wipePresets()
-                            if (wipeProfiles) viewModel.wipeServerProfiles()
-                            if (wipeHistory) viewModel.wipePromptHistory()
-                            if (wipeWildcards) viewModel.wipeWildcards()
-                            if (wipeImages) viewModel.wipeGalleryIndex()
-                            viewModel.showToast("Selected data wiped")
-                            showWipeDataDialog = false
+                            val wipe = {
+                                if (wipeSettings) viewModel.wipeSettings()
+                                if (wipePresets) viewModel.wipePresets()
+                                if (wipeProfiles) viewModel.wipeServerProfiles()
+                                if (wipeHistory) viewModel.wipePromptHistory()
+                                if (wipeWildcards) viewModel.wipeWildcards()
+                                if (wipeImages) viewModel.wipeGalleryIndex()
+                                viewModel.showToast("Selected data wiped")
+                                showWipeDataDialog = false
+                            }
+                            // Wiping the settings also switches the app lock off, so it needs the same check.
+                            if (config.useNativeSecurity) confirmWithPhoneLock("Wipe application data") { wipe() } else wipe()
                         },
                     ) {
                         val labelColor =

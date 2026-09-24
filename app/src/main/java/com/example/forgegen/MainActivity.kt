@@ -7,15 +7,12 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.hardware.biometrics.BiometricManager
-import android.hardware.biometrics.BiometricPrompt
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
@@ -50,6 +47,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -58,6 +57,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.withResumed
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -210,6 +210,21 @@ fun AppNavigation(
     }
 }
 
+@Composable
+private fun AppLockScreen(onUnlock: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.White)
+            Spacer(Modifier.height(16.dp))
+            Text("App Locked", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Spacer(Modifier.height(32.dp))
+            Button(onClick = onUnlock) {
+                Text("Tap to unlock")
+            }
+        }
+    }
+}
+
 /** Fade of the full-screen overlays (offline, prompt recovery, Civitai sync), in and out alike. */
 private const val OVERLAY_FADE_MS = 200
 
@@ -288,16 +303,8 @@ class MainActivity : ComponentActivity() {
                 onDispose { context.unregisterReceiver(receiver) }
             }
 
-            var isUnlocked by remember { mutableStateOf(!config.useNativeSecurity) }
-
-            // Settings are loaded asynchronously from Room, so on a cold start `config` still holds the
-            // defaults (security off) when isUnlocked is first computed. Lock again once the real settings are in.
-            val isSettingsLoaded by ForgeSettingsManager.isInitialized.collectAsStateWithLifecycle()
-            LaunchedEffect(isSettingsLoaded) {
-                if (isSettingsLoaded && viewModel.config.value.useNativeSecurity) {
-                    isUnlocked = false
-                }
-            }
+            // Locked whenever "App Lock" is on and the app has not been unlocked since it was last left.
+            val isLocked by viewModel.isLocked.collectAsStateWithLifecycle()
 
             val lifecycleOwner = LocalLifecycleOwner.current
             DisposableEffect(lifecycleOwner) {
@@ -307,13 +314,33 @@ class MainActivity : ComponentActivity() {
                             viewModel.setAppForegroundState(true)
                         } else if (event == Lifecycle.Event.ON_STOP) {
                             viewModel.setAppForegroundState(false)
-                            if (config.useNativeSecurity) {
-                                isUnlocked = false
-                            }
+                            // Rotating also stops the activity; that must not lock the app.
+                            if (!activity.isChangingConfigurations) viewModel.lockApp()
                         }
                     }
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+
+            val requestUnlock: () -> Unit = {
+                if (AppLock.isAvailable(activity)) {
+                    AppLock.authenticate(activity, allowBiometrics = config.useBiometricLock, title = "Unlock ForgeGen") {
+                        viewModel.markUnlocked()
+                    }
+                } else {
+                    // The phone lock was removed, so there is nothing to check against; don't lock the user out for good.
+                    viewModel.markUnlocked()
+                }
+            }
+            // Ask right away instead of waiting for a tap: once per lock, and only while the app is on screen.
+            LaunchedEffect(isLocked) {
+                if (isLocked) lifecycleOwner.lifecycle.withResumed { requestUnlock() }
+            }
+            // With the lock on, keep the app's content out of the Recents preview (Android 13+).
+            LaunchedEffect(config.useNativeSecurity) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    activity.setRecentsScreenshotEnabled(!config.useNativeSecurity)
+                }
             }
 
             // Initialize the Coil image loader configuration using a custom HTTP Client to force a 30-day cache (2.5GB maximum size) for loaded network thumbnails.
@@ -341,43 +368,6 @@ class MainActivity : ComponentActivity() {
                                 .build()
                         }.build()
                 }
-
-            if (!isUnlocked) {
-                Box(modifier = Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(64.dp), tint = Color.White)
-                        Spacer(Modifier.height(16.dp))
-                        Text("App Locked", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        Spacer(Modifier.height(32.dp))
-                        Button(onClick = {
-                            val authenticators =
-                                if (config.useBiometricLock) {
-                                    BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                                } else {
-                                    BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                                }
-                            val prompt =
-                                BiometricPrompt
-                                    .Builder(activity)
-                                    .setTitle("ForgeGen Security")
-                                    .setAllowedAuthenticators(authenticators)
-                                    .build()
-                            prompt.authenticate(
-                                CancellationSignal(),
-                                activity.mainExecutor,
-                                object : BiometricPrompt.AuthenticationCallback() {
-                                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult?) {
-                                        isUnlocked = true
-                                    }
-                                },
-                            )
-                        }) {
-                            Text("Tap to unlock")
-                        }
-                    }
-                }
-                return@setContent
-            }
 
             LaunchedEffect(config.keepScreenOn) {
                 if (config.keepScreenOn) {
@@ -470,7 +460,6 @@ class MainActivity : ComponentActivity() {
             val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
             val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
             val updateDownloadStats by viewModel.updateDownloadStats.collectAsStateWithLifecycle()
-            val isAppBlurred by viewModel.isAppBlurred.collectAsStateWithLifecycle()
 
             // Global Toast event bus
             LaunchedEffect(Unit) {
@@ -702,7 +691,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         // GLOBAL DOWNLOAD PROGRESS DIALOG
-                        if (isUpdateDownloading) {
+                        if (isUpdateDownloading && !isLocked) {
                             AlertDialog(
                                 onDismissRequest = { },
                                 properties =
@@ -728,7 +717,7 @@ class MainActivity : ComponentActivity() {
 
                         // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
                         val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
-                        if (importedImageMetadata != null) {
+                        if (importedImageMetadata != null && !isLocked) {
                             AppMetadataAlertDialog(
                                 metadata = importedImageMetadata,
                                 onDismiss = { viewModel.setImportedImageMetadata(null) },
@@ -753,76 +742,20 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // GLOBAL APP BLUR PRIVACY OVERLAY
-                        if (isAppBlurred) {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxSize()
-                                        .background(MaterialTheme.colorScheme.background.copy(alpha = 0.9f))
-                                        .blur(25.dp)
-                                        .clickable(enabled = true) {
-                                            if (config.useBiometricLock || config.useNativeSecurity) {
-                                                val authenticators =
-                                                    if (config.useBiometricLock) {
-                                                        android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                                                            android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                                                    } else {
-                                                        android.hardware.biometrics.BiometricManager.Authenticators.DEVICE_CREDENTIAL
-                                                    }
-                                                val prompt =
-                                                    android.hardware.biometrics.BiometricPrompt
-                                                        .Builder(activity)
-                                                        .setTitle("ForgeGen Authentication")
-                                                        .setAllowedAuthenticators(authenticators)
-                                                        .build()
-                                                prompt.authenticate(
-                                                    android.os.CancellationSignal(),
-                                                    activity.mainExecutor,
-                                                    object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
-                                                        override fun onAuthenticationSucceeded(
-                                                            result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?,
-                                                        ) {
-                                                            viewModel.setAppBlurred(false)
-                                                        }
-
-                                                        override fun onAuthenticationError(
-                                                            errorCode: Int,
-                                                            errString: CharSequence?,
-                                                        ) {
-                                                            activity.finishAffinity()
-                                                            java.lang.System.exit(0)
-                                                        }
-
-                                                        override fun onAuthenticationFailed() {
-                                                            activity.finishAffinity()
-                                                            java.lang.System.exit(0)
-                                                        }
-                                                    },
-                                                )
-                                            } else {
-                                                viewModel.setAppBlurred(false)
-                                            }
-                                        },
-                                contentAlignment = Alignment.Center,
+                        // APP LOCK: laid over the app instead of replacing it. The old lock removed the whole UI, so
+                        // every unlock rebuilt the app from the start screen and lost the current screen and state.
+                        // Its own window also keeps it above dialogs that were open when the app was left.
+                        if (isLocked) {
+                            Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                            Dialog(
+                                onDismissRequest = { activity.moveTaskToBack(true) }, // Back leaves the app, still locked
+                                properties =
+                                    DialogProperties(
+                                        dismissOnClickOutside = false,
+                                        usePlatformDefaultWidth = false,
+                                    ),
                             ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.VisibilityOff,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(64.dp),
-                                        tint = MaterialTheme.colorScheme.primary,
-                                    )
-                                    Text("App Blurred / Hidden", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                                    Text(
-                                        "Tap anywhere to unlock/reveal",
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    )
-                                }
+                                AppLockScreen(onUnlock = requestUnlock)
                             }
                         }
                     }

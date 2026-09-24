@@ -1,3 +1,11 @@
+## 1.0.2
+- Unlocking the app no longer restarts it: it returns to the screen you left, with everything as it was.
+- Turning the app lock or biometric unlock on or off, and wiping app data, now ask for the phone's PIN, pattern, password or biometrics first.
+- Removing the phone's screen lock no longer locks you out of the app.
+- Rotating the screen no longer locks the app.
+- With the app lock on, the Recents screen no longer shows a preview of the app (Android 13+).
+- The "Use Native Security" switch is now called "App Lock".
+
 ## 1.0.1
 - The "Recovering prompt", "Civitai Sync" and "Server not found" overlays now fade out the same way they fade in (they used to vanish instantly), and the background blur fades with them.
 - The start animation begins right away instead of waiting for the app to initialise, and it no longer redraws the whole start screen on every frame.
