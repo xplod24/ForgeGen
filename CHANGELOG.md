@@ -1,3 +1,7 @@
+## 1.0.1
+- The "Recovering prompt", "Civitai Sync" and "Server not found" overlays now fade out the same way they fade in (they used to vanish instantly), and the background blur fades with them.
+- The start animation begins right away instead of waiting for the app to initialise, and it no longer redraws the whole start screen on every frame.
+
 ## 1.0.0
 - Versions are numbered now (major.minor.patch) and released as v1.0.0, v1.0.1, …; the start screen shows the version.
 - Update messages show version names instead of build numbers.

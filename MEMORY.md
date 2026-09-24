@@ -27,6 +27,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Dead code:** `ForgeModels.kt` has `@file:Suppress("unused")` (for Gson DTO fields), so the IDE won't flag unused classes or DAO methods there; check references by hand.
 
 ## 2. User Preferences & UI Principles
+- **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates).
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.
 - **UI Blocking for Critical Tasks:** When downloading an update, the UI must be completely blocked using `DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)` to prevent interference.

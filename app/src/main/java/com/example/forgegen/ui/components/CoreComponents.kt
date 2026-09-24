@@ -234,3 +234,21 @@ class PromptVisualTransformation : VisualTransformation {
  * ============================================================================ */
 
 enum class IndicatorState { IDLE, LOADING, SUCCESS, ERROR }
+
+/**
+ * The last [value] that was not [idle]. An overlay that fades out when its state returns to idle keeps
+ * showing its final state (e.g. the tick) during the exit animation instead of snapping back.
+ */
+@Composable
+fun <T> rememberLastActive(
+    value: T,
+    idle: T,
+): T {
+    val last = remember { LastValue(value) }
+    if (value != idle) last.value = value
+    return last.value
+}
+
+private class LastValue<T>(
+    var value: T,
+)

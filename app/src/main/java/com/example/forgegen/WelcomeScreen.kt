@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -34,7 +35,6 @@ fun WelcomeScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val buildTextValue = remember { AppVersion.currentVersion }
 
     val initStatus by ForgeSettingsManager.initStatus.collectAsState()
-    val isInitialized by ForgeSettingsManager.isInitialized.collectAsState()
 
     val animationProgress = remember { Animatable(0f) }
     val textMeasurer = rememberTextMeasurer()
@@ -42,23 +42,21 @@ fun WelcomeScreen(viewModel: ForgeViewModel, navController: NavHostController) {
     val onBackgroundColor = MaterialTheme.colorScheme.onBackground
 
     LaunchedEffect(Unit) {
-        // Kick off the initialization pipeline
-        viewModel.initializeApp()
-        
+        // Initialise while the intro plays: awaiting initializeApp() first delayed the start by the whole init time.
+        val initialization = launch { viewModel.initializeApp() }
+
         // Smooth animation from 0.0 to 1.0 extended to 3 seconds to fit the heartbeat effect
         animationProgress.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 3000, easing = FastOutSlowInEasing),
         )
-    }
 
-    LaunchedEffect(isInitialized, animationProgress.value) {
-        // Wait for initialization to actually finish AND animation to complete
-        if (isInitialized && animationProgress.value == 1f) {
-            if (navController.currentDestination?.route == "welcome") {
-                navController.navigate("main") {
-                    popUpTo("welcome") { inclusive = true }
-                }
+        // Continue once both have finished. (This used to be a LaunchedEffect keyed on animationProgress.value,
+        // which recomposed the whole screen and restarted the effect on every animation frame.)
+        initialization.join()
+        if (navController.currentDestination?.route == "welcome") {
+            navController.navigate("main") {
+                popUpTo("welcome") { inclusive = true }
             }
         }
     }

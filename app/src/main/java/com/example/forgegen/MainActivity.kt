@@ -24,8 +24,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -207,6 +209,9 @@ fun AppNavigation(
         composable("presets") { PresetsScreen(viewModel, navController) }
     }
 }
+
+/** Fade of the full-screen overlays (offline, prompt recovery, Civitai sync), in and out alike. */
+private const val OVERLAY_FADE_MS = 200
 
 // --- MAIN ACTIVITY ENTRY POINT ---
 
@@ -478,18 +483,28 @@ class MainActivity : ComponentActivity() {
 
             CompositionLocalProvider(LocalImageLoader provides imageLoader) {
                 MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
+                    // The overlays below fade in and out, so the blur behind them follows instead of snapping.
+                    val backgroundBlur by animateDpAsState(
+                        targetValue = if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) 15.dp else 0.dp,
+                        animationSpec = tween(OVERLAY_FADE_MS),
+                        label = "background_blur",
+                    )
                     Box(modifier = Modifier.fillMaxSize()) {
                         Surface(
                             modifier =
                                 Modifier
                                     .fillMaxSize()
-                                    .then(if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) Modifier.blur(15.dp) else Modifier),
+                                    .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier),
                             color = MaterialTheme.colorScheme.background,
                         ) {
                             AppNavigation(viewModel = viewModel, navController = navController)
                         }
 
-                        if (shouldBlur) {
+                        AnimatedVisibility(
+                            visible = shouldBlur,
+                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
+                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
+                        ) {
                             Box(
                                 modifier =
                                     Modifier
@@ -556,22 +571,27 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if (isRestoringPrompt != IndicatorState.IDLE) {
+                        val shownRestoreState = rememberLastActive(isRestoringPrompt, IndicatorState.IDLE)
+                        AnimatedVisibility(
+                            visible = isRestoringPrompt != IndicatorState.IDLE,
+                            modifier = Modifier.zIndex(100f),
+                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
+                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
+                        ) {
                             Box(
                                 modifier =
                                     Modifier
                                         .fillMaxSize()
                                         .background(Color.Black.copy(alpha = 0.5f))
-                                        .zIndex(100f)
                                         .clickable(enabled = false) {},
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    AnimatedStatusIndicator(state = isRestoringPrompt)
+                                    AnimatedStatusIndicator(state = shownRestoreState)
                                     Spacer(modifier = Modifier.height(16.dp))
 
                                     val statusText =
-                                        when (isRestoringPrompt) {
+                                        when (shownRestoreState) {
                                             IndicatorState.SUCCESS -> "Successfully recovered!"
                                             IndicatorState.ERROR -> "Failed to recover."
                                             else -> "Recovering prompt..."
@@ -602,13 +622,18 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if (isCivitaiSyncing != IndicatorState.IDLE) {
+                        val shownCivitaiState = rememberLastActive(isCivitaiSyncing, IndicatorState.IDLE)
+                        AnimatedVisibility(
+                            visible = isCivitaiSyncing != IndicatorState.IDLE,
+                            modifier = Modifier.zIndex(150f),
+                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
+                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
+                        ) {
                             Box(
                                 modifier =
                                     Modifier
                                         .fillMaxSize()
                                         .background(Color.Black.copy(alpha = 0.7f))
-                                        .zIndex(150f)
                                         .clickable(enabled = false) {},
                                 contentAlignment = Alignment.Center,
                             ) {
@@ -626,7 +651,7 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.padding(24.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                     ) {
-                                        AnimatedStatusIndicator(state = isCivitaiSyncing)
+                                        AnimatedStatusIndicator(state = shownCivitaiState)
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Text("Civitai Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
                                         Spacer(modifier = Modifier.height(12.dp))
