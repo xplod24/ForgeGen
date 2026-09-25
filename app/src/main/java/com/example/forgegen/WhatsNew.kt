@@ -12,7 +12,7 @@ object WhatsNew {
     private val SECTION_HEADING = Regex("""^##\s+(.+?)\s*$""")
 
     /**
-     * The changelog of the versions after [lastSeen] up to [current] (both "major.minor.patch"), or null when
+     * The changelog of the versions after [lastSeen] up to [current] (both "major.minor.patch[-micro]"), or null when
      * there is nothing new. Without [lastSeen] the app never showed this before: after an update only the
      * [current] version's notes are shown, after a fresh install nothing.
      */

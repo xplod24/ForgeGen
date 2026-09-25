@@ -22,7 +22,8 @@ import java.util.Locale
  * UPDATE MANAGER (OTA)
  * Checks the latest GitHub release of the app, downloads its APK with live progress,
  * verifies the SHA-256 digest reported by GitHub and launches the Android Package Installer.
- * A release is an update when its tag "v<major>.<minor>.<patch>" maps to a higher versionCode than the installed build.
+ * A release is an update when its tag "v<major>.<minor>.<patch>[-<micro>]" maps to a higher versionCode than the
+ * installed build.
  * ============================================================================ */
 class ForgeUpdateManager(
     private val application: Application,

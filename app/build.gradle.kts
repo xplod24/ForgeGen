@@ -8,10 +8,13 @@ plugins {
 // ==========================================
 // VERSIONING
 // ==========================================
-// The version lives in gradle.properties (VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH). Raising it and pushing
-// to master is what publishes a release: the release workflow tags it "v<major>.<minor>.<patch>".
-// versionCode = major * 1_000_000 + minor * 1_000 + patch, e.g. 1.4.12 -> 1004012. The in-app updater computes
-// the same number from the release tag (versionCodeFromTag in ForgeModels.kt), so keep both formulas in sync.
+// The version lives in gradle.properties (VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH, and VERSION_MICRO for a
+// micro-patch of a release, 0 otherwise). Raising it and pushing to master is what publishes a release: the release
+// workflow tags it "v<major>.<minor>.<patch>", or "v<major>.<minor>.<patch>-<micro>" for a micro-patch.
+// versionCode = major * 100_000_000 + minor * 100_000 + patch * 100 + micro, e.g. 1.4.12 -> 100401200 and
+// 1.1.4-1 -> 100100401. Up to 1.1.4 it was major * 1_000_000 + minor * 1_000 + patch; every new code is higher.
+// The in-app updater computes the same number from the release tag (versionCodeFromTag in ForgeModels.kt), so keep
+// both formulas in sync.
 fun versionPart(name: String): Int =
     providers.gradleProperty(name).orNull?.trim()?.toIntOrNull()
         ?: throw GradleException("gradle.properties: $name must be a number")
@@ -19,11 +22,14 @@ fun versionPart(name: String): Int =
 val versionMajor = versionPart("VERSION_MAJOR")
 val versionMinor = versionPart("VERSION_MINOR")
 val versionPatch = versionPart("VERSION_PATCH")
-if (versionMajor !in 0..2099 || versionMinor !in 0..999 || versionPatch !in 0..999) {
-    throw GradleException("Version $versionMajor.$versionMinor.$versionPatch: minor and patch must be below 1000")
+val versionMicro = versionPart("VERSION_MICRO")
+if (versionMajor !in 0..20 || versionMinor !in 0..999 || versionPatch !in 0..999 || versionMicro !in 0..99) {
+    throw GradleException(
+        "Version $versionMajor.$versionMinor.$versionPatch-$versionMicro: major up to 20, minor and patch below 1000, micro below 100",
+    )
 }
-val appVersionName = "$versionMajor.$versionMinor.$versionPatch"
-val appVersionCode = versionMajor * 1_000_000 + versionMinor * 1_000 + versionPatch
+val appVersionName = "$versionMajor.$versionMinor.$versionPatch" + if (versionMicro > 0) "-$versionMicro" else ""
+val appVersionCode = versionMajor * 100_000_000 + versionMinor * 100_000 + versionPatch * 100 + versionMicro
 
 tasks.register("printVersionName") {
     val name = appVersionName

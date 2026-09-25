@@ -1,3 +1,7 @@
+## 1.1.4-1
+- "Sync Models Now" works only while the app is connected to the Forge server; otherwise it is greyed out. If the connection is lost during a sync, the sync stops, and the models synchronized until then are kept.
+- Version numbers can now carry a micro-patch number, like this one. The updater of 1.1.4 does not recognize it, so this version has to be installed from the release page once; later updates are offered in the app again.
+
 ## 1.1.4
 - The start screen says "Ready" only when everything is ready to work: settings, wildcards, the saved queue, the gallery favorites and index, and the server with its model, sampler and LoRA lists. It shows each step on the way. If the server cannot be reached, the app still opens, and the start screen says "Server not reachable" instead of "Ready".
 - Civitai sync starts only while the Forge server answers with status 200. Otherwise it stops at once and says why: the server is unreachable, or which status it answered with.

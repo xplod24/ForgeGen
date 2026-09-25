@@ -440,20 +440,22 @@ data class GlobalSettingInnerDto(
  * Pure conversions between the network layer (DTO) and the Domain.
  * ============================================================================ */
 
-private val RELEASE_TAG = Regex("^v(\\d+)\\.(\\d+)\\.(\\d+)$")
+private val RELEASE_TAG = Regex("^v(\\d+)\\.(\\d+)\\.(\\d+)(?:-(\\d+))?$")
 
 /**
- * versionCode of a release tag "v<major>.<minor>.<patch>": major * 1_000_000 + minor * 1_000 + patch,
- * the formula app/build.gradle.kts uses. Null for any other tag (e.g. the old "build-1034" ones).
+ * versionCode of a release tag "v<major>.<minor>.<patch>" or, for a micro-patch, "v<major>.<minor>.<patch>-<micro>":
+ * major * 100_000_000 + minor * 100_000 + patch * 100 + micro, the formula app/build.gradle.kts uses. Null for any
+ * other tag (e.g. the old "build-1034" ones). Up to 1.1.4 the formula was major * 1_000_000 + minor * 1_000 + patch;
+ * every code of the new one is higher.
  */
 fun versionCodeFromTag(tag: String): Int? {
-    val (major, minor, patch) = RELEASE_TAG.find(tag.trim())?.destructured ?: return null
-    val parts = listOf(major, minor, patch).map { it.toIntOrNull() ?: return null }
-    if (parts[0] > 2099 || parts[1] > 999 || parts[2] > 999) return null
-    return parts[0] * 1_000_000 + parts[1] * 1_000 + parts[2]
+    val match = RELEASE_TAG.find(tag.trim()) ?: return null
+    val (major, minor, patch, micro) = match.groupValues.drop(1).map { it.ifEmpty { "0" }.toIntOrNull() ?: return null }
+    if (major > 20 || minor > 999 || patch > 999 || micro > 99) return null
+    return major * 100_000_000 + minor * 100_000 + patch * 100 + micro
 }
 
-/** Releases tagged "v<major>.<minor>.<patch>" that carry an APK are updates; anything else gives null. */
+/** Releases tagged "v<major>.<minor>.<patch>" (or "...-<micro>") that carry an APK are updates; anything else gives null. */
 fun GitHubReleaseDto.toUpdateManifest(): UpdateManifest? {
     val tag = tagName?.trim() ?: return null
     val versionCode = versionCodeFromTag(tag) ?: return null

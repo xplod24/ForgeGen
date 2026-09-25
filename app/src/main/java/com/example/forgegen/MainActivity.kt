@@ -665,7 +665,8 @@ class MainActivity : ComponentActivity() {
                                             Spacer(modifier = Modifier.height(12.dp))
                                             val isError =
                                                 civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true) ||
-                                                    civitaiSyncLastResult!!.contains("Error", ignoreCase = true)
+                                                    civitaiSyncLastResult!!.contains("Error", ignoreCase = true) ||
+                                                    civitaiSyncLastResult!!.startsWith("Stopped")
                                             Text(
                                                 text = "Last result: $civitaiSyncLastResult",
                                                 fontSize = 11.sp,

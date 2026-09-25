@@ -88,7 +88,7 @@ class MarkdownTest {
                 .filterIsInstance<Block.Heading>()
                 .map { heading -> heading.text.joinToString("") { it.text } }
         assertEquals(text.lines().filter { it.startsWith("## ") }.map { it.removePrefix("## ").trim() }, headings)
-        assertTrue("newest section first: ${headings.first()}", Regex("""\d+\.\d+\.\d+""").matches(headings.first()))
+        assertTrue("newest section first: ${headings.first()}", Regex("""\d+\.\d+\.\d+(-\d+)?""").matches(headings.first()))
     }
 }
 
@@ -119,6 +119,17 @@ class WhatsNewTest {
     @Test
     fun `the first version with the dialog shows only its own notes after an update`() {
         assertEquals("## 1.1.0\n- New gallery", WhatsNew.notesFor(changelog, current = "1.1.0", lastSeen = null, wasUpdated = true))
+    }
+
+    @Test
+    fun `a micro-patch comes after its release`() {
+        val withMicro = "## 1.1.4-1\n- Fix\n\n## 1.1.4\n- Feature\n\n$changelog"
+        assertEquals("## 1.1.4-1\n- Fix", WhatsNew.notesFor(withMicro, current = "1.1.4-1", lastSeen = "1.1.4", wasUpdated = true))
+        assertEquals(
+            "## 1.1.4-1\n- Fix\n\n## 1.1.4\n- Feature",
+            WhatsNew.notesFor(withMicro, current = "1.1.4-1", lastSeen = "1.1.0", wasUpdated = true),
+        )
+        assertNull(WhatsNew.notesFor(withMicro, current = "1.1.4-1", lastSeen = "1.1.4-1", wasUpdated = true))
     }
 
     @Test

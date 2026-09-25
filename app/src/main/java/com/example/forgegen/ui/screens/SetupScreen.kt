@@ -81,17 +81,18 @@ fun TextPreference(
     title: String,
     value: String,
     subtitle: String? = value,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     Row(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onClick)
+                .clickable(enabled = enabled, onClick = onClick)
                 .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f)) {
+        Column(modifier = Modifier.weight(1f).alpha(if (enabled) 1f else 0.5f)) {
             Text(text = title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
             if (subtitle != null) {
                 Text(
@@ -120,6 +121,7 @@ fun SetupScreen(
     val config by viewModel.config.collectAsStateWithLifecycle()
     val appState by viewModel.appState.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
     val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
 
     // --- DIALOG VISIBILITY STATES ---
@@ -294,10 +296,17 @@ fun SetupScreen(
             if ("Metadata & Civitai" in appState.setupExpandedSections) {
 
             item {
+                // Only while connected to the Forge server: the models to look up come from it.
                 TextPreference(
                     title = "Sync Models Now",
-                    subtitle = "Fetch missing thumbnails and trigger words from Civitai API (the Forge server must be online)",
+                    subtitle =
+                        if (isConnected) {
+                            "Fetch missing thumbnails and trigger words from Civitai API"
+                        } else {
+                            "Needs a connection to the Forge server"
+                        },
                     value = "",
+                    enabled = isConnected,
                 ) {
                     viewModel.syncCivitaiModelsManual()
                 }

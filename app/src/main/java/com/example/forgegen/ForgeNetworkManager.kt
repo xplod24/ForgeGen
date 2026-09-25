@@ -489,26 +489,16 @@ class ForgeNetworkManager(
     }
 
     /**
-     * Why the Forge server cannot be used for a Civitai sync right now, or null when it answers with HTTP 200.
-     * Asked directly rather than taken from the ping loop, which may not have noticed an outage yet.
-     */
-    private suspend fun serverNotReadyReason(): String? {
-        val api = forgeApi ?: return "No Forge server is set."
-        return try {
-            val code = api.getProgress(skipImage = true).code()
-            if (code == 200) null else "The Forge server answered HTTP $code instead of 200."
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            "The Forge server is not reachable."
-        }
-    }
-
-    /**
      * Manually triggers Civitai synchronization. Implements a rate-limiting delay to prevent IP bans.
-     * It only starts while the Forge server answers with HTTP 200: the models to look up come from the server.
+     * It works only while the app is connected to the Forge server (the settings grey the button out otherwise)
+     * and stops when the connection is lost; the models synchronized until then are kept.
      */
     fun syncCivitaiModelsManual() {
         if (_isCivitaiSyncing.value != IndicatorState.IDLE) return
+        if (!ForgeRepository.isConnected.value) {
+            ForgeRepository.showToast("Civitai sync needs a connection to the Forge server")
+            return
+        }
 
         civitaiSyncJob =
             managerScope.launch(Dispatchers.IO) {
@@ -516,11 +506,9 @@ class ForgeNetworkManager(
                     _isCivitaiSyncing.value = IndicatorState.LOADING
                     _civitaiSyncLastResult.value = null
 
-                    val notReady = serverNotReadyReason()
-                    val customRes = if (notReady == null) forgeApi?.getCustomModelsHashes() else null
-                    if (notReady != null || customRes?.code() != 200) {
-                        _civitaiSyncLastResult.value =
-                            "Error: " + (notReady ?: "No Custom API on Forge server (HTTP ${customRes?.code() ?: -1}).")
+                    val customRes = forgeApi?.getCustomModelsHashes()
+                    if (customRes?.code() != 200) {
+                        _civitaiSyncLastResult.value = "Error: No Custom API on Forge server (HTTP ${customRes?.code() ?: -1})."
                         _isCivitaiSyncing.value = IndicatorState.ERROR
                         delay(3000)
                         _isCivitaiSyncing.value = IndicatorState.IDLE
@@ -548,6 +536,8 @@ class ForgeNetworkManager(
                     _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
                     var hasError = false
                     var failedCount = 0
+                    var doneCount = 0
+                    var connectionLost = false
 
                     for ((index, cam) in missingOrIncomplete.withIndex()) {
                         var civName = cam.name ?: "Unknown"
@@ -566,6 +556,10 @@ class ForgeNetworkManager(
 
                         // Rate-limiting delay (5 seconds) to prevent Civitai from issuing an IP ban/rate-limit.
                         if (index > 0) delay(5000) else delay(500)
+                        if (!ForgeRepository.isConnected.value) {
+                            connectionLost = true
+                            break
+                        }
 
                         try {
                             val civRes = civitaiApi.getModelByHash(sha256)
@@ -596,16 +590,24 @@ class ForgeNetworkManager(
                         val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
                         getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
                         _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
+                        doneCount++
                     }
 
                     val total = missingOrIncomplete.size
+                    if (connectionLost) hasError = true
                     _civitaiSyncLastResult.value =
-                        if (hasError) {
-                            "Finished with errors: $failedCount of $total models failed"
-                        } else {
-                            "Synchronization completed successfully"
+                        when {
+                            connectionLost -> "Stopped: the connection to the Forge server was lost ($doneCount of $total models done)"
+                            hasError -> "Finished with errors: $failedCount of $total models failed"
+                            else -> "Synchronization completed successfully"
                         }
                     when {
+                        connectionLost ->
+                            notifyCivitaiSync(
+                                title = "Civitai sync stopped",
+                                text = "The connection to the Forge server was lost ($doneCount of $total models done)",
+                                isError = true,
+                            )
                         hasError ->
                             notifyCivitaiSync(
                                 title = "Civitai sync finished with errors",

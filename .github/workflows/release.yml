@@ -1,9 +1,10 @@
 name: Release
 
 # Publishes a release when the version in gradle.properties has not been tagged yet:
-# raise VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH, add a "## <version>" section to CHANGELOG.md
-# and push to master. The workflow tags the commit "v<major>.<minor>.<patch>" and attaches app-debug.apk,
-# which the app's updater then offers. Any other push to master only runs the tests and the build.
+# raise VERSION_MAJOR / VERSION_MINOR / VERSION_PATCH (or VERSION_MICRO for a micro-patch), add a "## <version>"
+# section to CHANGELOG.md and push to master. The workflow tags the commit "v<major>.<minor>.<patch>" (a micro-patch:
+# "v<major>.<minor>.<patch>-<micro>") and attaches app-debug.apk, which the app's updater then offers.
+# Any other push to master only runs the tests and the build.
 #
 # Releases are debug builds signed with app/debug.keystore (the owner's choice). Signing them with the release
 # key instead is prepared in app/build.gradle.kts; the workflow for it is in commit 42b5928 and needs the
@@ -47,7 +48,7 @@ jobs:
         id: version
         run: |
           NAME=$(./gradlew -q :app:printVersionName | tail -n 1 | tr -d '[:space:]')
-          if ! [[ "$NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if ! [[ "$NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
             echo "::error::Could not read the version from gradle.properties (got '$NAME')"
             exit 1
           fi

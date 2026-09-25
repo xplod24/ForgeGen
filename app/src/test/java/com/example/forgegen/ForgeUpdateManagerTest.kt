@@ -47,7 +47,7 @@ class ForgeUpdateManagerTest {
         every { mockApplication.packageName } returns "com.example.forgegen"
 
         val mockPackageInfo = mockk<PackageInfo>()
-        every { mockPackageInfo.longVersionCode } returns 1_000_000L // 1.0.0
+        every { mockPackageInfo.longVersionCode } returns 100_000_000L // 1.0.0
         every { mockPackageManager.getPackageInfo("com.example.forgegen", 0) } returns mockPackageInfo
 
         updateManager =
@@ -79,7 +79,7 @@ class ForgeUpdateManagerTest {
 
             val manifest = updateManager.updateManifest.value
             assertNotNull("Update manifest should not be null", manifest)
-            assertEquals(1_000_001, manifest?.versionCode)
+            assertEquals(100_000_100, manifest?.versionCode)
             assertEquals("1.0.1", manifest?.versionName)
             assertEquals("abc123", manifest?.sha256)
             assertEquals(apk().downloadUrl, manifest?.url)
@@ -103,18 +103,30 @@ class ForgeUpdateManagerTest {
         assertNull("old build-N tags are no longer releases", release("build-1034").toUpdateManifest())
         assertNull(release("v1.0.1", assets = emptyList()).toUpdateManifest())
         assertNull(release("v1.0.1", assets = listOf(apk().copy(name = "notes.txt"))).toUpdateManifest())
-        assertEquals(1_000_001, release("v1.0.1").toUpdateManifest()?.versionCode)
+        assertEquals(100_000_100, release("v1.0.1").toUpdateManifest()?.versionCode)
+        assertEquals(100_100_401, release("v1.1.4-1").toUpdateManifest()?.versionCode)
     }
 
     @Test
     fun `version tags map to the versionCode formula of the build script`() {
-        assertEquals(1_000_000, versionCodeFromTag("v1.0.0"))
-        assertEquals(1_004_012, versionCodeFromTag("v1.4.12"))
-        assertEquals(2_000_000, versionCodeFromTag(" v2.0.0 "))
-        // Releases stay above the old commit-count builds (build-1034 had versionCode 1034) and keep their order.
+        assertEquals(100_000_000, versionCodeFromTag("v1.0.0"))
+        assertEquals(100_401_200, versionCodeFromTag("v1.4.12"))
+        assertEquals(200_000_000, versionCodeFromTag(" v2.0.0 "))
+        assertEquals(100_100_401, versionCodeFromTag("v1.1.4-1"))
+        assertEquals(versionCodeFromTag("v1.1.4"), versionCodeFromTag("v1.1.4-0"))
+        // Releases stay above the old commit-count builds (build-1034 had versionCode 1034) and above the codes of
+        // the old formula (1.1.4 had major * 1_000_000 + minor * 1_000 + patch = 1001004), and keep their order.
         assertEquals(true, versionCodeFromTag("v1.0.0")!! > 1034)
+        assertEquals(true, versionCodeFromTag("v1.0.0")!! > 1_001_004)
         assertEquals(true, versionCodeFromTag("v1.9.999")!! < versionCodeFromTag("v1.10.0")!!)
+        assertEquals(true, versionCodeFromTag("v1.1.4")!! < versionCodeFromTag("v1.1.4-1")!!)
+        assertEquals(true, versionCodeFromTag("v1.1.4-99")!! < versionCodeFromTag("v1.1.5")!!)
+        assertEquals(true, versionCodeFromTag("v20.999.999-99")!! <= Int.MAX_VALUE)
         assertNull(versionCodeFromTag("v1.1000.0"))
+        assertNull(versionCodeFromTag("v21.0.0"))
+        assertNull(versionCodeFromTag("v1.1.4-100"))
+        assertNull(versionCodeFromTag("v1.1.4-"))
+        assertNull(versionCodeFromTag("v1.1.4-beta"))
         assertNull(versionCodeFromTag("1.0.0"))
         assertNull(versionCodeFromTag("v1.0"))
         assertNull(versionCodeFromTag("V-1_0_0"))
