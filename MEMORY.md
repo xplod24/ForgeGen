@@ -30,6 +30,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Dead code:** `ForgeModels.kt` has `@file:Suppress("unused")` (for Gson DTO fields), so the IDE won't flag unused classes or DAO methods there; check references by hand.
 
 ## 2. User Preferences & UI Principles
+- **Language (owner's explicit request):** always talk to the owner in Polish, with no English sentences or headings and Polish words instead of English jargon where a natural one exists; code, UI texts and release notes stay in English.
 - **Releases (owner's standing request):** after finishing a change, Claude publishes the release itself: bump `gradle.properties` (patch for fixes and small changes, minor for new features, major only for a clear change across the whole repository OR on the owner's explicit command), add the `## <version>` section to `CHANGELOG.md` and push to master. Release notes are written for the user of the app, in English like the rest of the UI.
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: the "What's New" dialog once after an update.

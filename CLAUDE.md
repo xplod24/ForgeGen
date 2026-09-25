@@ -4,7 +4,9 @@ Android (Kotlin, Jetpack Compose) client for Stable Diffusion WebUI Forge.
 
 Read `MEMORY.md` before working: it holds the architecture notes and the owner's preferences.
 
-- The owner writes in Polish; answer in Polish.
+- The owner writes in Polish. Always answer in Polish (owner's explicit request): no English sentences or
+  headings, and Polish words instead of English jargon wherever a natural one exists. Code, file names, UI texts
+  and release notes stay in English.
 - Releasing is part of finishing a change: raise the version in `gradle.properties` (patch for fixes and small changes,
   minor for new features, major only for a clear change across the whole repository OR on the owner's explicit
   command), add a `## <version>` section to the top of `CHANGELOG.md`
