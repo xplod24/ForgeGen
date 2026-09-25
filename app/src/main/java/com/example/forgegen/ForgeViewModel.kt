@@ -5,6 +5,7 @@ import com.example.forgegen.ui.components.*
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +61,40 @@ class ForgeViewModel(
 
     fun markUnlocked() {
         unlocked.value = true
+    }
+
+    // --- WHAT'S NEW ---
+    // The changelog of the versions installed since the app was last opened (shown once, after an update).
+    private val _whatsNew = MutableStateFlow<String?>(null)
+    val whatsNew: StateFlow<String?> = _whatsNew.asStateFlow()
+
+    private val installedVersion get() = BuildConfig.VERSION_NAME.removeSuffix("-DEBUG")
+
+    private suspend fun checkWhatsNew() {
+        try {
+            val app = getApplication<Application>()
+            val settings = ForgeRepository.db.appSettingDao()
+            val lastSeen = settings.getSetting(WhatsNew.LAST_SEEN_KEY)?.value
+            if (lastSeen == installedVersion) return
+            val info = app.packageManager.getPackageInfo(app.packageName, 0)
+            val changelog = app.assets.open(WhatsNew.CHANGELOG_ASSET).bufferedReader().use { it.readText() }
+            val notes = WhatsNew.notesFor(changelog, installedVersion, lastSeen, wasUpdated = info.lastUpdateTime > info.firstInstallTime)
+            if (notes != null) {
+                _whatsNew.value = notes
+            } else {
+                // A fresh install: nothing to show now, but the next update shows what is new since this version.
+                settings.putSetting(AppSettingEntity(WhatsNew.LAST_SEEN_KEY, installedVersion))
+            }
+        } catch (e: Exception) {
+            Log.w("ForgeViewModel", "Cannot read the changelog", e)
+        }
+    }
+
+    fun dismissWhatsNew() {
+        _whatsNew.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(WhatsNew.LAST_SEEN_KEY, installedVersion))
+        }
     }
 
     // --- INITIALIZATION OF MANAGERS ---
@@ -125,6 +160,7 @@ class ForgeViewModel(
 
         // Check for updates (runs in background)
         updateManager.checkForUpdates(manual = false)
+        viewModelScope.launch(Dispatchers.IO) { checkWhatsNew() }
 
         // 4. Mark as Initialized
         ForgeSettingsManager.setInitialized()

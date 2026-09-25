@@ -739,6 +739,14 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
+                        // WHAT'S NEW after an update: once the app is unlocked and past the start animation.
+                        val whatsNew by viewModel.whatsNew.collectAsStateWithLifecycle()
+                        whatsNew?.let { notes ->
+                            if (!isLocked && currentRoute != null && currentRoute != "welcome") {
+                                WhatsNewDialog(markdown = notes, onDismiss = { viewModel.dismissWhatsNew() })
+                            }
+                        }
+
                         // APP LOCK: laid over the app instead of replacing it. The old lock removed the whole UI, so
                         // every unlock rebuilt the app from the start screen and lost the current screen and state.
                         // Its own window also keeps it above dialogs that were open when the app was left.

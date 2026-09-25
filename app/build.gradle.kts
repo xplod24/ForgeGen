@@ -40,17 +40,18 @@ android {
     }
 
     signingConfigs {
-        // Local debug builds only; GitHub releases are release builds signed with the release key below.
+        // The keystore is committed on purpose: the GitHub releases are debug builds, and Android Studio and the
+        // release workflow must sign with the same key, otherwise the phone refuses to install a release over the
+        // installed app.
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
-        // The release key is never committed. The release workflow decodes it from the RELEASE_KEYSTORE_BASE64
-        // secret; for a local release build set RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment
-        // or ~/.gradle/gradle.properties). Without them the release APK is built unsigned and cannot be installed.
-        // Every release must be signed with this same key, or phones refuse to update the installed app.
+        // Prepared for signed release builds (not published yet). The release key is never committed; set
+        // RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment or ~/.gradle/gradle.properties).
+        // Without them the release APK is built unsigned and cannot be installed.
         val releaseKeystore =
             providers
                 .environmentVariable("RELEASE_KEYSTORE_FILE")
@@ -72,8 +73,9 @@ android {
     }
 
     defaultConfig {
-        // Releases (from 1.1.0) are this package, signed with the release key. Debug builds add ".debug" and are
-        // a separate app; up to 1.0.2 the GitHub releases were such debug builds.
+        // Changed from com.example.forgegen: the GitHub builds are signed with the repository key, so they are
+        // a separate app and install next to builds signed with an Android Studio key instead of clashing.
+        // Release builds (not published yet) drop the ".debug" suffix and would be another separate app.
         applicationId = "io.github.xplod24.forgegen"
         minSdk = 31
         targetSdk = 37
@@ -112,6 +114,32 @@ android {
     testOptions {
         // Plain JVM unit tests: android.* calls (e.g. Log) return defaults instead of throwing "not mocked".
         unitTests.isReturnDefaultValues = true
+    }
+}
+
+// CHANGELOG.md goes into the app's assets for the "What's New" dialog shown after an update (WhatsNew.kt).
+abstract class CopyChangelogTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val changelog: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        changelog.get().asFile.copyTo(outputDir.file("CHANGELOG.md").get().asFile, overwrite = true)
+    }
+}
+
+val copyChangelog =
+    tasks.register<CopyChangelogTask>("copyChangelog") {
+        changelog.set(layout.projectDirectory.file("../CHANGELOG.md"))
+    }
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(copyChangelog, CopyChangelogTask::outputDir)
     }
 }
 

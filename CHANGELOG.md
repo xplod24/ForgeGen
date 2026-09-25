@@ -1,5 +1,5 @@
 ## 1.1.0
-- ForgeGen is now a proper release build. It installs as a new app next to the old one (1.0.2 and older were test builds): set it up once (server address, presets, wildcards), then uninstall the old ForgeGen. It keeps updating itself as before.
+- After an update the app shows what is new in a "What's New" window (this list).
 - The gallery grid shows small thumbnails made by the server instead of downloading every full-size image, so it loads much faster and uses a fraction of the data.
 - The full-screen viewer shows the thumbnail at once while the full image loads, and loads the next and previous images in advance.
 - The gallery index updates itself when you open the gallery: the server reads the generation data and sends only the text, a hundred images at a time, instead of the app downloading every image. Deleted images are removed from the index.
