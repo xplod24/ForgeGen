@@ -247,6 +247,7 @@ object ForgeSettingsManager {
             mainLorasExpanded = parsed?.mainLorasExpanded ?: false,
             autoSaveMode = parsed?.autoSaveMode ?: AUTO_SAVE_OFF,
             autoSaveSince = parsed?.autoSaveSince ?: "",
+            saveOomLogs = parsed?.saveOomLogs ?: false,
         )
     }
 

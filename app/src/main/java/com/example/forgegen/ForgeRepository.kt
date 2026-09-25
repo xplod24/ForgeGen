@@ -15,11 +15,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -192,7 +195,7 @@ object ForgeRepository {
     }
 
     suspend fun initializeApiClientAndData() {
-        ForgeSettingsManager.updateInitStatus("Connecting to Server...")
+        ForgeSettingsManager.updateInitStatus("Preparing API Clients...")
         rebuildForgeApi(config.value.apiUrl)
 
         // Models, samplers and LoRAs are fetched by ForgeNetworkManager when the connection comes up
@@ -203,7 +206,7 @@ object ForgeRepository {
         // The service reads the new value from the config itself, it only has to be poked.
         ForgeSettingsManager.onPersistentServiceChanged = { refreshServiceState() }
 
-        ForgeSettingsManager.updateInitStatus("Loading App Data...")
+        ForgeSettingsManager.updateInitStatus("Starting Background Service...")
         refreshServiceState()
 
         startBackgroundPing()
@@ -298,6 +301,15 @@ object ForgeRepository {
 
     private var pingJob: kotlinx.coroutines.Job? = null
     private const val MEMORY_STATS_EVERY = 5
+
+    // Finished pings, answered or not, so the start can wait for the server's first answer.
+    private val pingRounds = MutableStateFlow(0)
+
+    /** Waits (at most [timeoutMs]) until the server has been pinged once; true when it answered. */
+    suspend fun awaitServerCheck(timeoutMs: Long): Boolean {
+        withTimeoutOrNull(timeoutMs) { pingRounds.first { it > 0 } }
+        return _isConnected.value
+    }
 
     private fun connectionFailed(failCount: Int) {
         _isConnected.value = false
@@ -395,6 +407,7 @@ object ForgeRepository {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     connectionFailed(++failCount)
                 }
+                pingRounds.update { it + 1 }
 
                 val isForeground = _isAppInForeground.value
                 val isActivelyGenerating = ForgeQueueManager.isGenerating.value || _isServerBusy.value

@@ -118,9 +118,10 @@ object ForgeQueueManager {
         application = app
     }
 
-    fun start() {
-        startQueueWriter()
+    /** Returns once the saved queue is loaded; the writer, the worker and the reconnect watcher run from then on. */
+    suspend fun start() {
         loadQueueState()
+        startQueueWriter()
         startQueueWorker()
         startReconnectWatcher()
         cleanupSessionCache()
@@ -144,8 +145,8 @@ object ForgeQueueManager {
         _livePreviewImage.value = image
     }
 
-    private fun loadQueueState() {
-        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+    private suspend fun loadQueueState() {
+        withContext(Dispatchers.IO) {
             val json = ForgeRepository.db.appSettingDao().getSetting("saved_queue")?.value
             if (!json.isNullOrEmpty()) {
                 try {
@@ -410,6 +411,10 @@ object ForgeQueueManager {
                     _oomAlert.value = true
                     errorReason = "Server out of memory (OOM)."
                     isOom = true
+                    OomLogs.report(
+                        reason = "The server ran out of memory.",
+                        details = "${describeForReport(job)}\n\nServer answer (HTTP ${answer.code}):\n$errorBody",
+                    )
                 } else {
                     _statusText.value = "Error: HTTP ${answer.code}"
                     if (!config.overnightMode) {
@@ -440,6 +445,10 @@ object ForgeQueueManager {
             val reason = "The images were too large for the phone's memory. They are saved on the server."
             if (!ForgeRepository.config.value.overnightMode) pauseQueue(reason)
             errorReason = reason
+            OomLogs.report(
+                reason = "The app ran out of memory while reading the images.",
+                details = "${describeForReport(job)}\n\n${e.stackTraceToString()}",
+            )
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
             if (!ForgeRepository.config.value.overnightMode) {
@@ -458,6 +467,15 @@ object ForgeQueueManager {
             _currentEta.value = 0.0
         }
     }
+
+    /** The settings of [job] for an out-of-memory report; the prompts stay out of it. */
+    private fun describeForReport(job: QueuedGeneration): String =
+        with(job.payload) {
+            val hires = if (enable_hr) "x$hr_scale with $hr_upscaler, denoising $denoising_strength" else "off"
+            val model = override_settings.sdModelCheckpoint ?: "(current)"
+            "Job: ${width}x$height, batch size $batch_size, batch count $n_iter, steps $steps, " +
+                "sampler $sampler_name ($scheduler), hires fix $hires, model $model"
+        }
 
     /** What the server answered to a job. */
     private sealed interface Answer {

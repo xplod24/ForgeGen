@@ -296,7 +296,7 @@ fun SetupScreen(
             item {
                 TextPreference(
                     title = "Sync Models Now",
-                    subtitle = "Fetch missing thumbnails and trigger words from Civitai API",
+                    subtitle = "Fetch missing thumbnails and trigger words from Civitai API (the Forge server must be online)",
                     value = "",
                 ) {
                     viewModel.syncCivitaiModelsManual()
@@ -501,6 +501,25 @@ fun SetupScreen(
                         context.startActivity(intent)
                     }
                 }
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+            /* ==========================================================
+             * CATEGORY: PERMISSIONS
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Permissions", appState, viewModel) }
+            if ("Permissions" in appState.setupExpandedSections) {
+
+            item {
+                SwitchPreference(
+                    title = "Save Logs on Out of Memory",
+                    subtitle = "When the app or the server runs out of memory, save a report with the app's log to " +
+                        "Downloads (ForgeGen-OOM-date.txt). Android needs no storage permission for it.",
+                    checked = config.saveOomLogs,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(saveOomLogs = it)) },
+                )
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }

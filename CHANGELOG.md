@@ -1,3 +1,8 @@
+## 1.1.4
+- The start screen says "Ready" only when everything is ready to work: settings, wildcards, the saved queue, the gallery favorites and index, and the server with its model, sampler and LoRA lists. It shows each step on the way. If the server cannot be reached, the app still opens, and the start screen says "Server not reachable" instead of "Ready".
+- Civitai sync starts only while the Forge server answers with status 200. Otherwise it stops at once and says why: the server is unreachable, or which status it answered with.
+- New "Save Logs on Out of Memory" option in the new Permissions section of the settings: when the app or the server runs out of memory, the app saves a report with its log to Downloads (ForgeGen-OOM-date.txt). It stays off until you turn it on, and Android needs no storage permission for it.
+
 ## 1.1.3
 - Generated images are read from the server's answer one at a time and written straight to storage, so a big batch needs about a third of the memory it used to (8 large images: 28 MB instead of 96 MB) and no longer risks closing the app. If a batch is still too large, the queue pauses with an explanation.
 - The live preview is only downloaded while the app is on screen, which saves data and battery during long runs in the background.

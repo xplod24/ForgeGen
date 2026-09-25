@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 object ForgePromptManager {
     private val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -14,8 +15,9 @@ object ForgePromptManager {
     private val _wildcards = MutableStateFlow<List<WildcardEntity>>(emptyList())
     val wildcards: StateFlow<List<WildcardEntity>> = _wildcards.asStateFlow()
 
-    fun init() {
-        loadWildcards()
+    /** Returns once the wildcards are loaded, so the first job can already expand __name__ tokens. */
+    suspend fun init() {
+        _wildcards.value = withContext(Dispatchers.IO) { ForgeRepository.db.wildcardDao().getAllWildcards() }
     }
 
     private fun loadWildcards() {

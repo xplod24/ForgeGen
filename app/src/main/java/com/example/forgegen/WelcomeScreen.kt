@@ -24,10 +24,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
+
+// How long the final start status stays on screen when the start took longer than the intro.
+private const val FINAL_STATUS_SHOWN_MS = 600L
 
 @Composable
 fun WelcomeScreen(viewModel: ForgeViewModel, navController: NavHostController) {
@@ -53,7 +57,10 @@ fun WelcomeScreen(viewModel: ForgeViewModel, navController: NavHostController) {
 
         // Continue once both have finished. (This used to be a LaunchedEffect keyed on animationProgress.value,
         // which recomposed the whole screen and restarted the effect on every animation frame.)
-        initialization.join()
+        if (initialization.isActive) {
+            initialization.join()
+            delay(FINAL_STATUS_SHOWN_MS) // the final status ("Ready", or why not) stays readable for a moment
+        }
         if (navController.currentDestination?.route == "welcome") {
             navController.navigate("main") {
                 popUpTo("welcome") { inclusive = true }

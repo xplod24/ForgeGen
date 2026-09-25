@@ -238,12 +238,13 @@ object ForgeGalleryManager {
         networkManager = network
     }
 
-    fun start() {
+    /** Returns once the favorites and the index are loaded; the automatic saving to the phone runs from then on. */
+    suspend fun start() {
         if (!::getDb.isInitialized) {
             Log.e(TAG, "ForgeGalleryManager start called but getDb is not initialized!")
             return
         }
-        managerScope.launch {
+        withContext(Dispatchers.IO) {
             DeviceImages.clearSharedCopies(application)
             _showGalleryMetadata.value = getDb().appSettingDao().getSetting(SHOW_META_KEY)?.value?.toBoolean() ?: false
             migratePinnedToFavorites()

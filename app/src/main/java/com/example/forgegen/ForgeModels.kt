@@ -62,6 +62,8 @@ data class AppConfig(
     // With AUTO_SAVE_ALL only images newer than this (the server's "yyyy-MM-dd HH:mm:ss" format) are saved,
     // so switching it on does not download the whole existing gallery.
     var autoSaveSince: String = "",
+    // The user's consent to write a report with the app's log to Downloads when the app or the server runs out of memory.
+    var saveOomLogs: Boolean = false,
 )
 
 const val AUTO_SAVE_OFF = "Off"

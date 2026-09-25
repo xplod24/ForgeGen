@@ -12,7 +12,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -256,6 +260,23 @@ class ForgeNetworkManager(
 
     private var fetchJob: kotlinx.coroutines.Job? = null
 
+    // Completed fetches of the server lists (a fetch replaced by a newer one does not count), and whether the last
+    // one got the lists a generation needs: the models and the samplers.
+    private val fetchesDone = MutableStateFlow(0)
+
+    @Volatile private var lastFetchHadLists = false
+
+    /** How the first fetch of the server lists went. */
+    enum class ServerData { LOADED, INCOMPLETE, PENDING }
+
+    /** Waits (at most [timeoutMs]) for the first fetch of the server lists; PENDING when it has not finished yet. */
+    suspend fun awaitServerData(timeoutMs: Long): ServerData =
+        when {
+            withTimeoutOrNull(timeoutMs) { fetchesDone.first { it > 0 } } == null -> ServerData.PENDING
+            lastFetchHadLists -> ServerData.LOADED
+            else -> ServerData.INCOMPLETE
+        }
+
     /**
      * Main data fetch operation to pull server properties needed for UI setup (Checkpoints, Samplers, Schedulers, LoRAs).
      */
@@ -264,6 +285,8 @@ class ForgeNetworkManager(
         fetchJob =
             managerScope.launch(Dispatchers.IO) {
                 if (forgeApi == null) return@launch
+                // Counted when it completes, its children included, so the gallery prefix is also known by then.
+                coroutineContext.job.invokeOnCompletion { cause -> if (cause == null) fetchesDone.update { it + 1 } }
 
                 // Auto-detect the working directory and base prefix used by the gallery extension.
                 launch {
@@ -307,11 +330,13 @@ class ForgeNetworkManager(
                                     if (res?.isSuccessful == true) {
                                         _samplers.value = res.body()?.map { it.name } ?: emptyList()
                                     }
+                                    res?.isSuccessful == true
                                 } catch (
                                     e: Exception,
                                 ) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
                                     Log.e(TAG, "Failed samplers: $e")
+                                    false
                                 }
                             }
 
@@ -412,6 +437,7 @@ class ForgeNetworkManager(
                                     Log.e(TAG, "Custom API fetch failed: $e")
                                 }
 
+                                var fallbackSuccess = false
                                 if (!customApiSuccess) {
                                     try {
                                         val modelRes = forgeApi?.getSdModels()
@@ -419,6 +445,7 @@ class ForgeNetworkManager(
                                             _models.value =
                                                 modelRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
                                                     ?: emptyList()
+                                            fallbackSuccess = true
                                         }
 
                                         val loraRes = forgeApi?.getLoras()
@@ -432,6 +459,7 @@ class ForgeNetworkManager(
                                         Log.e(TAG, "Fallback API fetch failed: $e")
                                     }
                                 }
+                                customApiSuccess || fallbackSuccess
                             }
 
                         val defOpts =
@@ -450,16 +478,34 @@ class ForgeNetworkManager(
                             }
 
                         awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
+                        lastFetchHadLists = defSamplers.await() && defModelsAndLoras.await()
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     Log.e(TAG, "Failed to synchronize API definitions: $e")
+                    lastFetchHadLists = false
                 }
             }
     }
 
     /**
+     * Why the Forge server cannot be used for a Civitai sync right now, or null when it answers with HTTP 200.
+     * Asked directly rather than taken from the ping loop, which may not have noticed an outage yet.
+     */
+    private suspend fun serverNotReadyReason(): String? {
+        val api = forgeApi ?: return "No Forge server is set."
+        return try {
+            val code = api.getProgress(skipImage = true).code()
+            if (code == 200) null else "The Forge server answered HTTP $code instead of 200."
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            "The Forge server is not reachable."
+        }
+    }
+
+    /**
      * Manually triggers Civitai synchronization. Implements a rate-limiting delay to prevent IP bans.
+     * It only starts while the Forge server answers with HTTP 200: the models to look up come from the server.
      */
     fun syncCivitaiModelsManual() {
         if (_isCivitaiSyncing.value != IndicatorState.IDLE) return
@@ -470,9 +516,11 @@ class ForgeNetworkManager(
                     _isCivitaiSyncing.value = IndicatorState.LOADING
                     _civitaiSyncLastResult.value = null
 
-                    val customRes = forgeApi?.getCustomModelsHashes()
-                    if (customRes?.isSuccessful != true) {
-                        _civitaiSyncLastResult.value = "Error: No Custom API on Forge server."
+                    val notReady = serverNotReadyReason()
+                    val customRes = if (notReady == null) forgeApi?.getCustomModelsHashes() else null
+                    if (notReady != null || customRes?.code() != 200) {
+                        _civitaiSyncLastResult.value =
+                            "Error: " + (notReady ?: "No Custom API on Forge server (HTTP ${customRes?.code() ?: -1}).")
                         _isCivitaiSyncing.value = IndicatorState.ERROR
                         delay(3000)
                         _isCivitaiSyncing.value = IndicatorState.IDLE

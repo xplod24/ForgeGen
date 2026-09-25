@@ -8,7 +8,9 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -19,6 +21,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
 /* ============================================================================
@@ -105,6 +108,7 @@ class ForgeViewModel(
 
     init {
         ForgeNotifications.init(getApplication())
+        OomLogs.install(getApplication())
 
         // Create managers but do NOT start them yet.
         networkManager =
@@ -136,35 +140,82 @@ class ForgeViewModel(
         }
     }
 
+    // A welcome screen recreated meanwhile (e.g. rotation) waits for the same start instead of beginning a second one.
+    private var initialization: Deferred<Unit>? = null
+
+    /**
+     * Starts every part of the app and returns when all of them are ready to work; only then the status says
+     * "Ready". Each step returns once its data is loaded, the server last: its first answer and, when it is
+     * reachable, its lists (models, LoRAs, samplers...). An unreachable server does not stop the start (its
+     * address may be what needs changing), but the status then says so instead of "Ready".
+     */
     suspend fun initializeApp() {
-        if (ForgeSettingsManager.isInitialized.value) {
-            // The process outlived the previous activity (e.g. Back was pressed while the background service kept it
-            // alive). The app-wide managers still run; only this ViewModel's network manager is new and must start,
-            // otherwise model lists stay empty and the gallery has no API after reopening from the notification.
-            networkManager.start()
+        val running = initialization ?: viewModelScope.async { startApp() }.also { initialization = it }
+        running.await()
+    }
+
+    private suspend fun startApp() {
+        // The app-wide part runs once per process. When the process outlived the previous activity (e.g. Back was
+        // pressed while the background service kept it alive) it is done already, and only this ViewModel's network
+        // manager is new and must start, otherwise model lists stay empty and the gallery has no API.
+        val app = getApplication<Application>()
+        val appWide =
+            synchronized(Companion) {
+                appStart ?: ForgeRepository.repositoryScope.async { startAppWide(app) }.also { appStart = it }
+            }
+        appWide.await()
+        networkManager.start()
+
+        // In the background: not needed to work, and GitHub may answer slowly.
+        updateManager.checkForUpdates(manual = false)
+        withContext(Dispatchers.IO) { checkWhatsNew() }
+
+        // The server, then ready
+        awaitServer()
+        ForgeSettingsManager.setInitialized()
+    }
+
+    /** Database, settings, wildcards, API clients and the app-wide managers, each with its saved data loaded. */
+    private suspend fun startAppWide(app: Application) {
+        ForgeRepository.initializeDatabaseAndSettings(app)
+        ForgeSettingsManager.updateInitStatus("Loading Wildcards...")
+        ForgePromptManager.init()
+
+        ForgeRepository.initializeApiClientAndData() // API clients, the background service and the server ping
+
+        ForgeSettingsManager.updateInitStatus("Loading Queue...")
+        ForgeQueueManager.start()
+        ForgeSettingsManager.updateInitStatus("Loading Gallery...")
+        ForgeGalleryManager.start()
+    }
+
+    /** The last step of the start: the server's first answer and its lists. Sets the final status. */
+    private suspend fun awaitServer() {
+        ForgeSettingsManager.updateInitStatus("Connecting to Server...")
+        // The ping gives up after the connection timeout; the start does not wait longer than SERVER_CHECK_MAX_MS.
+        val checkTimeout = (ForgeRepository.config.value.timeout * 1000L).coerceAtMost(SERVER_CHECK_MAX_MS) + 1000L
+        if (!ForgeRepository.awaitServerCheck(checkTimeout)) {
+            ForgeSettingsManager.updateInitStatus("Server not reachable")
             return
         }
+        ForgeSettingsManager.updateInitStatus("Loading Models...")
+        val status =
+            when (networkManager.awaitServerData(SERVER_DATA_MAX_MS)) {
+                ForgeNetworkManager.ServerData.LOADED -> "Ready"
+                ForgeNetworkManager.ServerData.INCOMPLETE -> "Connected, but the model list failed to load"
+                ForgeNetworkManager.ServerData.PENDING -> "Connected, model lists still loading"
+            }
+        ForgeSettingsManager.updateInitStatus(status)
+    }
 
-        // 1. Init Database & Settings
-        ForgeRepository.initializeDatabaseAndSettings(getApplication())
-        ForgePromptManager.init() // wildcards must be loaded before the first job expands __name__ tokens
+    private companion object {
+        const val SERVER_CHECK_MAX_MS = 10_000L
+        const val SERVER_DATA_MAX_MS = 15_000L
 
-        // 2. Init API Clients
-        ForgeRepository.initializeApiClientAndData()
-
-        // 3. Start Managers
-        ForgeSettingsManager.updateInitStatus("Starting Managers...")
-        networkManager.start()
-        ForgeGalleryManager.start()
-        ForgeQueueManager.start()
-
-        // Check for updates (runs in background)
-        updateManager.checkForUpdates(manual = false)
-        viewModelScope.launch(Dispatchers.IO) { checkWhatsNew() }
-
-        // 4. Mark as Initialized
-        ForgeSettingsManager.setInitialized()
-        ForgeSettingsManager.updateInitStatus("Ready")
+        // Shared by every ViewModel of the process and run in a process-wide scope: a ViewModel cleared half-way
+        // (the start screen left with Back) must not leave the managers half-started, or let the next one start a
+        // second queue worker.
+        var appStart: Deferred<Unit>? = null
     }
 
     // --- DELEGATION OF STATE FROM FORGE REPOSITORY ---
