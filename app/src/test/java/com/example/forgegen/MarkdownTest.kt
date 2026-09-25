@@ -4,6 +4,7 @@ import com.example.forgegen.Markdown.Block
 import com.example.forgegen.Markdown.Span
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownTest {
@@ -80,8 +81,14 @@ class MarkdownTest {
     @Test
     fun `the whole changelog parses`() {
         val changelog = java.io.File("../CHANGELOG.md").takeIf { it.exists() } ?: return
-        val blocks = Markdown.parse(changelog.readText())
-        assertEquals("1.1.0", (blocks.first() as Block.Heading).text.single().text)
+        val text = changelog.readText()
+        val headings =
+            Markdown
+                .parse(text)
+                .filterIsInstance<Block.Heading>()
+                .map { heading -> heading.text.joinToString("") { it.text } }
+        assertEquals(text.lines().filter { it.startsWith("## ") }.map { it.removePrefix("## ").trim() }, headings)
+        assertTrue("newest section first: ${headings.first()}", Regex("""\d+\.\d+\.\d+""").matches(headings.first()))
     }
 }
 
