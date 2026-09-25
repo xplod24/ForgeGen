@@ -8,6 +8,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.File
 import java.util.Collections
@@ -17,7 +18,10 @@ import java.util.UUID
  * QUEUE MANAGER
  * Oversees the generation queue, handles Text2Img requests, manages OOM errors,
  * caches session images, and communicates with the Background Service.
- * Implements Resumable Queue features for connection loss handling.
+ *
+ * One worker sends the jobs, strictly one after another in queue order: it waits (without polling) until the
+ * first job may start, marks it GENERATING, and removes it when it is done. The GENERATING job cannot be removed
+ * or overtaken. The queue is saved by a single writer, so an older state can never overwrite a newer one.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeQueueManager {
@@ -83,15 +87,17 @@ object ForgeQueueManager {
     private val _currentBatchEndIndex = MutableStateFlow(-1)
     val currentBatchEndIndex: StateFlow<Int> = _currentBatchEndIndex.asStateFlow()
 
-    private var currentGenerationJob: Job? = null
+    // Save requests; conflated, so a burst of changes is written once, always with the latest queue.
+    private val saveRequests = Channel<Unit>(Channel.CONFLATED)
 
     fun init(app: Application) {
         application = app
     }
 
     fun start() {
+        startQueueWriter()
         loadQueueState()
-        startQueueLoop()
+        startQueueWorker()
         cleanupSessionCache()
     }
 
@@ -119,10 +125,12 @@ object ForgeQueueManager {
             if (!json.isNullOrEmpty()) {
                 try {
                     val type = object : TypeToken<List<QueuedGeneration>>() {}.type
-                    val q: List<QueuedGeneration> = gson.fromJson(json, type)
-                    if (q.isNotEmpty()) {
-                        _generationQueue.value = q
-                        _totalQueueSize.value = q.size
+                    // A job that was running when the app was closed starts again from the beginning.
+                    val saved = gson.fromJson<List<QueuedGeneration>>(json, type).map { it.copy(status = GenerationStatus.QUEUED) }
+                    if (saved.isNotEmpty()) {
+                        // Jobs added while the saved queue was being read are kept after it (they used to be lost).
+                        _generationQueue.update { current -> saved + current.filter { job -> saved.none { it.id == job.id } } }
+                        _totalQueueSize.value = _generationQueue.value.size
                         _completedQueueItems.value = 0
                     }
                 } catch (e: Exception) {
@@ -133,47 +141,62 @@ object ForgeQueueManager {
     }
 
     private fun saveQueueState() {
+        saveRequests.trySend(Unit)
+    }
+
+    /**
+     * The only writer of the saved queue. Each save used to be its own coroutine reading the queue at a random
+     * moment, so an older queue could be written after a newer one and come back after a restart.
+     */
+    private fun startQueueWriter() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            try {
-                ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity("saved_queue", gson.toJson(_generationQueue.value)))
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to save queue", e)
+            for (request in saveRequests) {
+                try {
+                    ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity("saved_queue", gson.toJson(_generationQueue.value)))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save queue", e)
+                }
             }
         }
     }
 
-    private fun startQueueLoop() {
+    /** The first job, as soon as one may start: queued, the queue not paused and the server not busy. */
+    private suspend fun nextJob(): QueuedGeneration =
+        combine(_generationQueue, _isQueuePaused, ForgeRepository.isServerBusy) { queue, paused, busy ->
+            queue.firstOrNull()?.takeIf { !paused && !busy }
+        }.filterNotNull().first()
+
+    /** Marks [job] GENERATING if it is still first in the queue (the user may have removed or moved it). */
+    private fun claim(job: QueuedGeneration): QueuedGeneration? {
+        var claimed: QueuedGeneration? = null
+        _generationQueue.update { queue ->
+            val first = queue.firstOrNull()
+            claimed = first?.takeIf { it.id == job.id }?.copy(status = GenerationStatus.GENERATING)
+            claimed?.let { listOf(it) + queue.drop(1) } ?: queue
+        }
+        return claimed
+    }
+
+    /**
+     * Sends the jobs one after another. It used to poll every 500 ms for as long as the app lived, and
+     * queueGeneration() could also start a job itself, guarded only by a flag.
+     */
+    private fun startQueueWorker() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             while (isActive) {
+                val job = claim(nextJob()) ?: continue
+                _isGenerating.value = true
+                saveQueueState()
                 try {
-                    val queue = _generationQueue.value
-                    val firstItem = queue.firstOrNull()
-
-                    if (firstItem != null &&
-                        !ForgeRepository.isServerBusy.value &&
-                        !_isQueuePaused.value &&
-                        _isGenerating.compareAndSet(false, true) // atomic claim: queueGeneration() may start the same item
-                    ) {
-                        // Resume suspended task if the queue is unpaused
-                        if (firstItem.status == GenerationStatus.SUSPENDED) {
-                            _generationQueue.update { q ->
-                                val list = q.toMutableList()
-                                if (list.isNotEmpty()) list[0] = list[0].copy(status = GenerationStatus.GENERATING)
-                                list
-                            }
-                        }
-
-                        currentGenerationJob =
-                            launch {
-                                executeGeneration(firstItem)
-                            }
-                        currentGenerationJob?.join()
-                    }
+                    executeGeneration(job)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    Log.e(TAG, "Queue Manager Exception", e)
+                    // executeGeneration handles its own errors; anything else must not end the queue for good.
+                    Log.e(TAG, "Unexpected error while running a job", e)
                     _isGenerating.value = false
+                    pauseQueue("Unexpected error: ${e.localizedMessage}")
                 }
-                delay(500)
             }
         }
     }
@@ -252,14 +275,11 @@ object ForgeQueueManager {
             _generationQueue.update { it + item }
             saveQueueState()
 
+            // The worker picks the job up by itself as soon as it may start.
             val qSize = _generationQueue.value.size
             if (qSize == 1) {
                 _totalQueueSize.value = 1
                 _completedQueueItems.value = 0
-
-                if (!ForgeRepository.isServerBusy.value && !_isQueuePaused.value && _isGenerating.compareAndSet(false, true)) {
-                    currentGenerationJob = launch { executeGeneration(item) }
-                }
             } else {
                 _totalQueueSize.update { it + 1 }
             }
@@ -305,7 +325,7 @@ object ForgeQueueManager {
         }
 
         try {
-            val response = ForgeRepository.forgeApi?.generateImage(job.payload)
+            val response = ForgeRepository.generationApi?.generateImage(job.payload)
             if (response?.isSuccessful == true) {
                 val txt2ImgData = response.body() ?: Txt2ImgResponseDto()
 
@@ -374,7 +394,7 @@ object ForgeQueueManager {
                 }
             }
         } catch (e: CancellationException) {
-            Log.d(TAG, "Generation cancelled or suspended")
+            Log.d(TAG, "Generation cancelled")
             throw e
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
@@ -383,50 +403,44 @@ object ForgeQueueManager {
                 errorReason = "Generation failed: ${e.localizedMessage}"
             }
         } finally {
-            val isSuspended =
-                _generationQueue.value.firstOrNull()?.id == job.id &&
-                    _generationQueue.value.firstOrNull()?.status == GenerationStatus.SUSPENDED
+            _generationQueue.update { q -> q.filter { it.id != job.id } }
+            _completedQueueItems.update { it + 1 }
 
-            if (!isSuspended) {
-                _generationQueue.update { q -> q.filter { it.id != job.id } }
-                _completedQueueItems.update { it + 1 }
+            val queueEmpty = _generationQueue.value.isEmpty()
+            if (queueEmpty) {
+                _totalQueueSize.value = 0
+                _completedQueueItems.value = 0
+                // Nothing left to hold back: a paused empty queue would silently swallow the next job.
+                _isQueuePaused.value = false
+                _queuePauseReason.value = null
+            }
 
-                val queueEmpty = _generationQueue.value.isEmpty()
-                if (queueEmpty) {
-                    _totalQueueSize.value = 0
-                    _completedQueueItems.value = 0
-                    // Nothing left to hold back: a paused empty queue would silently swallow the next job.
-                    _isQueuePaused.value = false
-                    _queuePauseReason.value = null
-                }
+            // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
+            // failed job only gets the error alert (it used to be reported as a completed queue).
+            val notifConfig = ForgeRepository.config.value
+            val failure = errorReason
+            when {
+                failure != null -> notifyGenerationError(failure, isOom, queuePaused = !queueEmpty)
+                queueEmpty && notifConfig.notifOnQueueFinish ->
+                    launchNotification(job.positivePrompt, isQueueFinished = true)
+                succeeded && notifConfig.notifOnBatchFinish ->
+                    launchNotification(job.positivePrompt, isQueueFinished = false)
+            }
 
-                // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
-                // failed job only gets the error alert (it used to be reported as a completed queue).
-                val notifConfig = ForgeRepository.config.value
-                val failure = errorReason
-                when {
-                    failure != null -> notifyGenerationError(failure, isOom, queuePaused = !queueEmpty)
-                    queueEmpty && notifConfig.notifOnQueueFinish ->
-                        launchNotification(job.positivePrompt, isQueueFinished = true)
-                    succeeded && notifConfig.notifOnBatchFinish ->
-                        launchNotification(job.positivePrompt, isQueueFinished = false)
-                }
-
-                // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
-                if (queueEmpty || _isQueuePaused.value) {
-                    try {
-                        val finishIntent =
-                            Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
-                        application.startService(finishIntent)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to notify service of queue finish", e)
-                    }
+            // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
+            if (queueEmpty || _isQueuePaused.value) {
+                try {
+                    val finishIntent =
+                        Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
+                    application.startService(finishIntent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to notify service of queue finish", e)
                 }
             }
 
             saveQueueState()
             _isGenerating.value = false
-            _progress.value = if (isSuspended) 0f else 1f
+            _progress.value = 1f
             _currentEta.value = 0.0
         }
     }
@@ -477,31 +491,6 @@ object ForgeQueueManager {
         ForgeNotifications.post(ForgeNotifications.ID_QUEUE_PAUSED, notification)
     }
 
-    fun suspendCurrentGeneration() {
-        if (!_isGenerating.value) return
-
-        _generationQueue.update { q ->
-            val list = q.toMutableList()
-            if (list.isNotEmpty()) {
-                list[0] = list[0].copy(status = GenerationStatus.SUSPENDED)
-            }
-            list
-        }
-        pauseQueue("Connection to the server was lost.")
-        _statusText.value = "Queue Suspended (Connection Lost)"
-
-        currentGenerationJob?.cancel()
-
-        try {
-            val finishIntent = Intent(application, GenerationService::class.java).apply { action = GenerationService.ACTION_QUEUE_FINISHED }
-            application.startService(finishIntent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to notify service of queue finish", e)
-        }
-
-        saveQueueState()
-    }
-
     fun updateQueueItem(
         id: String,
         positivePrompt: String,
@@ -524,28 +513,28 @@ object ForgeQueueManager {
 
     fun clearQueue() {
         ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
-        _generationQueue.value = emptyList()
-        _totalQueueSize.value = 0
+        // The running job stays: the server is already working on it and the worker removes it when it is done.
+        _generationQueue.update { q -> q.filter { it.status == GenerationStatus.GENERATING } }
+        _totalQueueSize.value = _generationQueue.value.size
         _completedQueueItems.value = 0
         saveQueueState()
     }
 
-    /** The first queue item is the one being sent to the server while a generation is running. */
+    /** The job being sent to the server; it stays first until it is done. */
     private fun isActiveItem(
         queue: List<QueuedGeneration>,
         index: Int,
-    ) = index == 0 && _isGenerating.value && queue.isNotEmpty()
+    ) = queue.getOrNull(index)?.status == GenerationStatus.GENERATING
 
     fun removeFromQueue(id: String) {
-        if (_isGenerating.value && _generationQueue.value.firstOrNull()?.id == id) return
+        var removed = false
         _generationQueue.update { currentQueue ->
-            val prevSize = currentQueue.size
-            val newQueue = currentQueue.filter { it.id != id }
-            if (newQueue.size < prevSize) {
-                _totalQueueSize.update { maxOf(_completedQueueItems.value, it - 1) }
-            }
+            // Decided inside the update, so the worker cannot claim the job between the check and the removal.
+            val newQueue = currentQueue.filter { it.id != id || it.status == GenerationStatus.GENERATING }
+            removed = newQueue.size < currentQueue.size
             newQueue
         }
+        if (removed) _totalQueueSize.update { maxOf(_completedQueueItems.value, it - 1) }
         saveQueueState()
     }
 

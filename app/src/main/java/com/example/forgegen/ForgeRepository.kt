@@ -98,6 +98,10 @@ object ForgeRepository {
     // RETROFIT APIS
     var forgeApi: ForgeApi? = null
 
+    // For txt2img only: its client never repeats a request by itself. OkHttp retries a request whose connection
+    // dropped, which for txt2img sent the same job to the server again (up to four times) without the queue knowing.
+    var generationApi: ForgeApi? = null
+
     val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private fun showSnackbar(message: String) = ForgeSettingsManager.showSnackbar(message)
@@ -154,6 +158,12 @@ object ForgeRepository {
                     .addConverterFactory(GsonConverterFactory.create(ForgeSettingsManager.gson))
                     .build()
             forgeApi = retrofitForge.create(ForgeApi::class.java)
+            generationApi =
+                retrofitForge
+                    .newBuilder()
+                    .client(client.newBuilder().retryOnConnectionFailure(false).build())
+                    .build()
+                    .create(ForgeApi::class.java)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize ForgeApi with URL: $cleanUrl", e)
         }

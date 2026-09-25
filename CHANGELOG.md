@@ -1,3 +1,10 @@
+## 1.1.1
+- The queue sends jobs strictly one after another, and a queued job starts right away. While idle the queue no longer checks for work twice a second, which saves battery.
+- When the connection dropped during a generation, the same job could be sent to the server again, up to four times. Each job is now sent once.
+- The running job shows as generating and can no longer be removed or overtaken; "Clear" keeps it, since the server is already working on it.
+- An older saved queue can no longer overwrite a newer one (finished jobs could come back after a restart), and a job added while the app starts is no longer lost.
+- An unexpected error pauses the queue with its reason instead of stopping it until the app restarts.
+
 ## 1.1.0
 - After an update the app shows what is new in a "What's New" window (this list).
 - The gallery grid shows small thumbnails made by the server instead of downloading every full-size image, so it loads much faster and uses a fraction of the data.

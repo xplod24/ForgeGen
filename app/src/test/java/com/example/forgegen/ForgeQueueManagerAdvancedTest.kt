@@ -12,7 +12,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.util.UUID
@@ -109,51 +108,57 @@ class ForgeQueueManagerAdvancedTest {
             verify { ForgeSettingsManager.saveToPromptHistory("A beautiful __weather__ day", "ugly") }
         }
 
+    private fun job(
+        prompt: String,
+        status: GenerationStatus = GenerationStatus.QUEUED,
+    ) = QueuedGeneration(
+        id = UUID.randomUUID().toString(),
+        positivePrompt = prompt,
+        payload =
+            Txt2ImgPayloadDto(
+                prompt = prompt,
+                negative_prompt = "",
+                steps = 20,
+                cfg_scale = 7f,
+                width = 512,
+                height = 512,
+                n_iter = 1,
+                batch_size = 1,
+                seed = -1L,
+                sampler_name = "Euler a",
+                scheduler = "Automatic",
+                override_settings = OverrideSettingsDto(1, null),
+                enable_hr = false,
+                hr_scale = 2f,
+                hr_upscaler = "Latent",
+                denoising_strength = 0.7f,
+            ),
+        status = status,
+    )
+
+    @Suppress("UNCHECKED_CAST")
+    private fun setQueue(jobs: List<QueuedGeneration>) {
+        val queueField = ForgeQueueManager::class.java.getDeclaredField("_generationQueue")
+        queueField.isAccessible = true
+        (queueField.get(ForgeQueueManager) as MutableStateFlow<List<QueuedGeneration>>).value = jobs
+    }
+
     @Test
-    fun `test suspendCurrentGeneration alters status to SUSPENDED`() =
-        runBlocking {
-            // Arrange
-            val queueField = ForgeQueueManager::class.java.getDeclaredField("_generationQueue")
-            queueField.isAccessible = true
-            val mockItem =
-                QueuedGeneration(
-                    id = UUID.randomUUID().toString(),
-                    positivePrompt = "Test",
-                    payload =
-                        Txt2ImgPayloadDto(
-                            prompt = "Test",
-                            negative_prompt = "",
-                            steps = 20,
-                            cfg_scale = 7f,
-                            width = 512,
-                            height = 512,
-                            n_iter = 1,
-                            batch_size = 1,
-                            seed = -1L,
-                            sampler_name = "Euler a",
-                            scheduler = "Automatic",
-                            override_settings = OverrideSettingsDto(1, null),
-                            enable_hr = false,
-                            hr_scale = 2f,
-                            hr_upscaler = "Latent",
-                            denoising_strength = 0.7f,
-                        ),
-                    status = GenerationStatus.GENERATING,
-                )
-            (queueField.get(ForgeQueueManager) as MutableStateFlow<List<QueuedGeneration>>).value = listOf(mockItem)
+    fun `the running job can be neither removed, overtaken nor cleared`() {
+        val running = job("running", GenerationStatus.GENERATING)
+        val next = job("next")
+        val last = job("last")
+        setQueue(listOf(running, next, last))
 
-            val isGeneratingField = ForgeQueueManager::class.java.getDeclaredField("_isGenerating")
-            isGeneratingField.isAccessible = true
-            (isGeneratingField.get(ForgeQueueManager) as MutableStateFlow<Boolean>).value = true
+        ForgeQueueManager.removeFromQueue(running.id)
+        ForgeQueueManager.moveQueueItemUp(next.id)
+        assertEquals(listOf("running", "next", "last"), ForgeQueueManager.generationQueue.value.map { it.positivePrompt })
 
-            // Act
-            ForgeQueueManager.suspendCurrentGeneration()
-            delay(200) // let IO coroutine finish
+        ForgeQueueManager.moveQueueItemUp(last.id)
+        ForgeQueueManager.removeFromQueue(next.id)
+        assertEquals(listOf("running", "last"), ForgeQueueManager.generationQueue.value.map { it.positivePrompt })
 
-            // Assert
-            val currentQueue = ForgeQueueManager.generationQueue.value
-            assertEquals(GenerationStatus.SUSPENDED, currentQueue.first().status)
-            assertTrue("Queue should be paused", ForgeQueueManager.isQueuePaused.value)
-            assertEquals("Queue Suspended (Connection Lost)", ForgeQueueManager.statusText.value)
-        }
+        ForgeQueueManager.clearQueue()
+        assertEquals(listOf("running"), ForgeQueueManager.generationQueue.value.map { it.positivePrompt })
+    }
 }
