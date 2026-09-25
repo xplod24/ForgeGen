@@ -10,6 +10,7 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import retrofit2.Response
 import java.io.File
 import java.util.Collections
 import java.util.UUID
@@ -22,6 +23,10 @@ import java.util.UUID
  * One worker sends the jobs, strictly one after another in queue order: it waits (without polling) until the
  * first job may start, marks it GENERATING, and removes it when it is done. The GENERATING job cannot be removed
  * or overtaken. The queue is saved by a single writer, so an older state can never overwrite a newer one.
+ *
+ * Losing the connection never costs a job: nothing is sent while the server is unreachable, and a job whose
+ * connection drops stays first in the queue (SUSPENDED). The queue pauses and continues by itself once the server
+ * is back and idle, at most MAX_AUTO_RETRIES times per job; after that the user resumes it.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeQueueManager {
@@ -66,6 +71,25 @@ object ForgeQueueManager {
         _isQueuePaused.value = true
     }
 
+    const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
+    private const val MAX_AUTO_RETRIES = 3
+    private const val AUTO_RETRY_DELAY_MS = 5_000L
+
+    // After an outage during a generation, a server that stays idle this long no longer works on our request:
+    // its answer is lost with the dropped connection (a phone's socket can hang for the whole read timeout).
+    private const val ORPHANED_REQUEST_IDLE_MS = 10_000L
+
+    // How often each job lost its connection, for the automatic retries.
+    private val connectionLosses = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
+    /** Thrown into the txt2img call when the watchdog finds it orphaned. */
+    private class OrphanedRequest : CancellationException("The request was lost in an outage")
+
+    /** The connection broke while a job was being sent; unlike other errors the job itself did not fail. */
+    private class ConnectionLost(
+        cause: Throwable,
+    ) : Exception(cause.message, cause)
+
     private val _totalQueueSize = MutableStateFlow(0)
     val totalQueueSize: StateFlow<Int> = _totalQueueSize.asStateFlow()
 
@@ -98,6 +122,7 @@ object ForgeQueueManager {
         startQueueWriter()
         loadQueueState()
         startQueueWorker()
+        startReconnectWatcher()
         cleanupSessionCache()
     }
 
@@ -160,11 +185,37 @@ object ForgeQueueManager {
         }
     }
 
-    /** The first job, as soon as one may start: queued, the queue not paused and the server not busy. */
+    /**
+     * The first job, as soon as one may start: queued, the queue not paused, the server reachable and not busy.
+     * Jobs used to be sent while the server was unreachable, each failing at once.
+     */
     private suspend fun nextJob(): QueuedGeneration =
-        combine(_generationQueue, _isQueuePaused, ForgeRepository.isServerBusy) { queue, paused, busy ->
-            queue.firstOrNull()?.takeIf { !paused && !busy }
+        combine(
+            _generationQueue,
+            _isQueuePaused,
+            ForgeRepository.isServerBusy,
+            ForgeRepository.isConnected,
+        ) { queue, paused, busy, connected ->
+            queue.firstOrNull()?.takeIf { !paused && !busy && connected }
         }.filterNotNull().first()
+
+    /** Continues a queue paused by a lost connection once the server is back and idle (with a short delay). */
+    private fun startReconnectWatcher() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            combine(_queuePauseReason, ForgeRepository.isConnected, ForgeRepository.isServerBusy) { reason, connected, busy ->
+                reason == CONNECTION_LOST_REASON && connected && !busy
+            }.distinctUntilChanged().collectLatest { serverBack ->
+                if (!serverBack) return@collectLatest
+                delay(AUTO_RETRY_DELAY_MS)
+                if (_queuePauseReason.value == CONNECTION_LOST_REASON) {
+                    ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
+                    _queuePauseReason.value = null
+                    _isQueuePaused.value = false
+                    _statusText.value = "Connection restored, continuing the queue"
+                }
+            }
+        }
+    }
 
     /** Marks [job] GENERATING if it is still first in the queue (the user may have removed or moved it). */
     private fun claim(job: QueuedGeneration): QueuedGeneration? {
@@ -324,8 +375,9 @@ object ForgeQueueManager {
             Log.e(TAG, "Failed to start foreground service", e)
         }
 
+        var connectionLost = false
         try {
-            val response = ForgeRepository.generationApi?.generateImage(job.payload)
+            val response = requestWithWatchdog(job)
             if (response?.isSuccessful == true) {
                 val txt2ImgData = response.body() ?: Txt2ImgResponseDto()
 
@@ -396,6 +448,19 @@ object ForgeQueueManager {
         } catch (e: CancellationException) {
             Log.d(TAG, "Generation cancelled")
             throw e
+        } catch (e: ConnectionLost) {
+            // The connection broke (refused, reset, timed out): the job stays, also in overnight mode, where every
+            // following job used to fail at once and the whole queue was thrown away.
+            connectionLost = true
+            val losses = connectionLosses.merge(job.id, 1, Int::plus) ?: 1
+            if (losses <= MAX_AUTO_RETRIES) {
+                pauseQueue(CONNECTION_LOST_REASON)
+                _statusText.value = "Connection lost. The job is sent again when the server is back."
+            } else {
+                pauseQueue("The connection was lost $losses times while sending this job. Resume the queue to try again.")
+                _statusText.value = "Connection lost"
+            }
+            errorReason = _queuePauseReason.value
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
             if (!ForgeRepository.config.value.overnightMode) {
@@ -403,45 +468,121 @@ object ForgeQueueManager {
                 errorReason = "Generation failed: ${e.localizedMessage}"
             }
         } finally {
-            _generationQueue.update { q -> q.filter { it.id != job.id } }
-            _completedQueueItems.update { it + 1 }
-
-            val queueEmpty = _generationQueue.value.isEmpty()
-            if (queueEmpty) {
-                _totalQueueSize.value = 0
-                _completedQueueItems.value = 0
-                // Nothing left to hold back: a paused empty queue would silently swallow the next job.
-                _isQueuePaused.value = false
-                _queuePauseReason.value = null
+            if (connectionLost) {
+                keepForRetry(job, errorReason ?: CONNECTION_LOST_REASON)
+            } else {
+                finishJob(job, succeeded, errorReason, isOom)
             }
-
-            // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
-            // failed job only gets the error alert (it used to be reported as a completed queue).
-            val notifConfig = ForgeRepository.config.value
-            val failure = errorReason
-            when {
-                failure != null -> notifyGenerationError(failure, isOom, queuePaused = !queueEmpty)
-                queueEmpty && notifConfig.notifOnQueueFinish ->
-                    launchNotification(job.positivePrompt, isQueueFinished = true)
-                succeeded && notifConfig.notifOnBatchFinish ->
-                    launchNotification(job.positivePrompt, isQueueFinished = false)
-            }
-
-            // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
-            if (queueEmpty || _isQueuePaused.value) {
-                try {
-                    val finishIntent =
-                        Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
-                    application.startService(finishIntent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to notify service of queue finish", e)
-                }
-            }
-
             saveQueueState()
             _isGenerating.value = false
-            _progress.value = 1f
+            _progress.value = if (connectionLost) 0f else 1f
             _currentEta.value = 0.0
+        }
+    }
+
+    /**
+     * Sends [job], while a watchdog looks for a request orphaned by an outage: the connection was lost, and since
+     * it is back the server stays idle, so no answer will come on the old connection.
+     */
+    private suspend fun requestWithWatchdog(job: QueuedGeneration): Response<Txt2ImgResponseDto>? =
+        coroutineScope {
+            val call =
+                async {
+                    try {
+                        ForgeRepository.generationApi?.generateImage(job.payload)
+                    } catch (e: java.io.IOException) {
+                        throw ConnectionLost(e)
+                    }
+                }
+            val watchdog =
+                launch {
+                    var outageSeen = false
+                    var idleSince = 0L
+                    while (true) {
+                        delay(1000)
+                        val connected = ForgeRepository.isConnected.value
+                        val busy = ForgeRepository.isServerBusy.value
+                        when {
+                            !connected -> {
+                                outageSeen = true
+                                idleSince = 0L
+                                _statusText.value = "Connection lost, waiting for the server..."
+                            }
+                            outageSeen && !busy -> {
+                                if (idleSince == 0L) idleSince = System.currentTimeMillis()
+                                if (System.currentTimeMillis() - idleSince >= ORPHANED_REQUEST_IDLE_MS) {
+                                    call.cancel(OrphanedRequest())
+                                    return@launch
+                                }
+                            }
+                            else -> idleSince = 0L
+                        }
+                    }
+                }
+            try {
+                call.await()
+            } catch (e: OrphanedRequest) {
+                ensureActive() // only the watchdog cancels with OrphanedRequest; a stopped worker stays stopped
+                throw ConnectionLost(e)
+            } finally {
+                watchdog.cancel()
+            }
+        }
+
+    /** A job whose connection broke stays first in the queue, waiting to be sent again. */
+    private fun keepForRetry(
+        job: QueuedGeneration,
+        reason: String,
+    ) {
+        _generationQueue.update { q -> q.map { if (it.id == job.id) it.copy(status = GenerationStatus.SUSPENDED) else it } }
+        notifyGenerationError(reason, isOom = false, queuePaused = true)
+        try {
+            application.startService(Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED))
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to notify service of the paused queue", e)
+        }
+    }
+
+    /** Removes a finished (or failed) job and posts at most one notification for it. */
+    private fun finishJob(
+        job: QueuedGeneration,
+        succeeded: Boolean,
+        errorReason: String?,
+        isOom: Boolean,
+    ) {
+        connectionLosses.remove(job.id)
+        _generationQueue.update { q -> q.filter { it.id != job.id } }
+        _completedQueueItems.update { it + 1 }
+
+        val queueEmpty = _generationQueue.value.isEmpty()
+        if (queueEmpty) {
+            _totalQueueSize.value = 0
+            _completedQueueItems.value = 0
+            // Nothing left to hold back: a paused empty queue would silently swallow the next job.
+            _isQueuePaused.value = false
+            _queuePauseReason.value = null
+        }
+
+        // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
+        // failed job only gets the error alert (it used to be reported as a completed queue).
+        val notifConfig = ForgeRepository.config.value
+        when {
+            errorReason != null -> notifyGenerationError(errorReason, isOom, queuePaused = !queueEmpty)
+            queueEmpty && notifConfig.notifOnQueueFinish ->
+                launchNotification(job.positivePrompt, isQueueFinished = true)
+            succeeded && notifConfig.notifOnBatchFinish ->
+                launchNotification(job.positivePrompt, isQueueFinished = false)
+        }
+
+        // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
+        if (queueEmpty || _isQueuePaused.value) {
+            try {
+                val finishIntent =
+                    Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
+                application.startService(finishIntent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to notify service of queue finish", e)
+            }
         }
     }
 
@@ -487,6 +628,7 @@ object ForgeQueueManager {
                 .setContentText(text)
                 .setColor(0xFFFF0000.toInt())
                 .setAutoCancel(true)
+                .setOnlyAlertOnce(true) // repeated connection losses update the alert without sounding again
                 .build()
         ForgeNotifications.post(ForgeNotifications.ID_QUEUE_PAUSED, notification)
     }
@@ -567,6 +709,8 @@ object ForgeQueueManager {
     }
 
     fun resumeQueue() {
+        // A manual resume also gives a job whose connection kept failing its automatic retries back.
+        _generationQueue.value.firstOrNull()?.let { connectionLosses.remove(it.id) }
         ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
         _isQueuePaused.value = false
         _queuePauseReason.value = null

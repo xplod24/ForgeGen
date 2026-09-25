@@ -298,6 +298,17 @@ object ForgeRepository {
 
     private var pingJob: kotlinx.coroutines.Job? = null
 
+    private fun connectionFailed(failCount: Int) {
+        _isConnected.value = false
+        _isServerBusy.value = false
+        _vramUsage.value = null
+        // A running job shows its own status (it waits for the server); otherwise say it now. It used to appear
+        // only after as many failed pings as the timeout had seconds, which with the backoff took about 8 minutes.
+        if (failCount >= 1 && !ForgeQueueManager.isGenerating.value) {
+            ForgeQueueManager.updateStatusText("Connection lost")
+        }
+    }
+
     fun resetPingJob() {
         startBackgroundPing()
     }
@@ -350,7 +361,9 @@ object ForgeRepository {
                             failCount = 0
                             ForgeQueueManager.updateStatusText("Authentication Required.")
                         } else {
-                            failCount++
+                            // E.g. a proxy answering 502 while Forge is down: as unreachable as no answer at all
+                            // (the app used to stay "connected" and the queue kept sending jobs).
+                            connectionFailed(++failCount)
                         }
 
                         if (failCount == 0) {
@@ -373,14 +386,9 @@ object ForgeRepository {
                             }
                         }
                     }
-                } catch (_: Exception) {
-                    _isConnected.value = false
-                    _isServerBusy.value = false
-                    _vramUsage.value = null
-                    failCount++
-                    if (failCount >= config.value.timeout && !ForgeQueueManager.isGenerating.value) {
-                        ForgeQueueManager.updateStatusText("Connection Lost (Timeout)")
-                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    connectionFailed(++failCount)
                 }
 
                 val isForeground = _isAppInForeground.value

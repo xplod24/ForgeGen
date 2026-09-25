@@ -1,3 +1,11 @@
+## 1.1.2
+- When the connection to the server drops, the job stays in the queue and is sent again once the server is back; the queue continues by itself (up to three times per job, then it waits for you to resume it). The job used to be lost, and in overnight mode the whole queue was thrown away within seconds.
+- No job is sent while the server is unreachable: queued jobs wait for the connection.
+- During an outage the status says "Connection lost, waiting for the server..." instead of the last percentage, and "Connection lost" appears at once instead of after several minutes.
+- A job whose answer was lost with the connection no longer holds up the queue for up to two hours: once the server is back and idle, it is sent again after 10 seconds.
+- A server behind a proxy that answers with an error counts as unreachable.
+- Repeated connection alerts update the notification quietly instead of sounding each time.
+
 ## 1.1.1
 - The queue sends jobs strictly one after another, and a queued job starts right away. While idle the queue no longer checks for work twice a second, which saves battery.
 - When the connection dropped during a generation, the same job could be sent to the server again, up to four times. Each job is now sent once.
