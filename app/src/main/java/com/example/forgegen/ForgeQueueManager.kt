@@ -10,10 +10,10 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
-import retrofit2.Response
 import java.io.File
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 /* ============================================================================
  * QUEUE MANAGER
@@ -377,39 +377,12 @@ object ForgeQueueManager {
 
         var connectionLost = false
         try {
-            val response = requestWithWatchdog(job)
-            if (response?.isSuccessful == true) {
-                val txt2ImgData = response.body() ?: Txt2ImgResponseDto()
-
-                if (txt2ImgData.images.isNotEmpty()) {
+            val answer = requestWithWatchdog(job, shouldSaveToDevice)
+            if (answer is Answer.Images) {
+                if (answer.files.isNotEmpty()) {
                     val currentList = _sessionImages.value.toMutableList()
                     val startIndex = currentList.size
-                    val cachePath = application.cacheDir.absolutePath
-
-                    for ((i, b64) in txt2ImgData.images.withIndex()) {
-                        val bytes = Base64.decode(b64, Base64.DEFAULT)
-                        val file = File("$cachePath/gen_${System.currentTimeMillis()}_$i.png")
-                        file.writeBytes(bytes)
-                        currentList.add(file.absolutePath)
-
-                        // Save the very first image of the batch as the local fallback "last generated image"
-                        if (i == 0) {
-                            try {
-                                val lastGenFile = File(cachePath, "last_generated_image.png")
-                                lastGenFile.writeBytes(bytes)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to cache local last generated image", e)
-                            }
-                        }
-
-                        if (shouldSaveToDevice) {
-                            try {
-                                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}_$i.png") { it.write(bytes) }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to save generated image directly to device", e)
-                            }
-                        }
-                    }
+                    currentList += answer.files.map { it.absolutePath }
 
                     val endIndex = currentList.size - 1
                     _sessionImages.value = currentList
@@ -419,14 +392,14 @@ object ForgeQueueManager {
                     _statusText.value = "Generation Complete"
                     _livePreviewImage.value = null
 
-                    if (config.showGridAfterGeneration && txt2ImgData.images.size > 1) {
+                    if (config.showGridAfterGeneration && answer.files.size > 1) {
                         _isShowingGridPreview.value = true
                     }
 
                     succeeded = true
                 }
-            } else {
-                val errorBody = response?.errorBody()?.string() ?: ""
+            } else if (answer is Answer.Failed) {
+                val errorBody = answer.body
                 // Forge answers most failures (bad sampler, missing model, ...) with HTTP 500, so the status code
                 // alone must not raise the out-of-memory alarm.
                 if (errorBody.contains("OutOfMemoryError", true) ||
@@ -438,10 +411,10 @@ object ForgeQueueManager {
                     errorReason = "Server out of memory (OOM)."
                     isOom = true
                 } else {
-                    _statusText.value = "Error: HTTP ${response?.code()}"
+                    _statusText.value = "Error: HTTP ${answer.code}"
                     if (!config.overnightMode) {
-                        pauseQueue("The server returned HTTP ${response?.code()}.")
-                        errorReason = "The server returned HTTP ${response?.code()}."
+                        pauseQueue("The server returned HTTP ${answer.code}.")
+                        errorReason = "The server returned HTTP ${answer.code}."
                     }
                 }
             }
@@ -461,6 +434,12 @@ object ForgeQueueManager {
                 _statusText.value = "Connection lost"
             }
             errorReason = _queuePauseReason.value
+        } catch (e: OutOfMemoryError) {
+            // The images are on the server anyway; the app (and the queue) must survive a batch too big to decode.
+            _statusText.value = "The images are too large for the phone's memory"
+            val reason = "The images were too large for the phone's memory. They are saved on the server."
+            if (!ForgeRepository.config.value.overnightMode) pauseQueue(reason)
+            errorReason = reason
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
             if (!ForgeRepository.config.value.overnightMode) {
@@ -480,16 +459,47 @@ object ForgeQueueManager {
         }
     }
 
+    /** What the server answered to a job. */
+    private sealed interface Answer {
+        data class Images(
+            val files: List<File>,
+        ) : Answer
+
+        data class Failed(
+            val code: Int,
+            val body: String,
+        ) : Answer
+    }
+
+    /** Writing an image to the phone failed; not a network error, so the job is not sent again. */
+    private class SaveFailed(
+        cause: Throwable,
+    ) : Exception(cause.message, cause)
+
     /**
      * Sends [job], while a watchdog looks for a request orphaned by an outage: the connection was lost, and since
-     * it is back the server stays idle, so no answer will come on the old connection.
+     * it is back the server stays idle, so no answer will come on the old connection. The watchdog stops once the
+     * server has answered, so a slow download of the images is never taken for an orphaned request.
      */
-    private suspend fun requestWithWatchdog(job: QueuedGeneration): Response<Txt2ImgResponseDto>? =
+    private suspend fun requestWithWatchdog(
+        job: QueuedGeneration,
+        saveToDevice: Boolean,
+    ): Answer =
         coroutineScope {
+            val answered = AtomicBoolean(false)
             val call =
                 async {
                     try {
-                        ForgeRepository.generationApi?.generateImage(job.payload)
+                        val api = ForgeRepository.generationApi ?: throw java.io.IOException("Not connected to the server")
+                        val response = api.generateImage(job.payload)
+                        answered.set(true)
+                        if (response.isSuccessful) {
+                            Answer.Images(response.body()?.use { readImages(it, saveToDevice) }.orEmpty())
+                        } else {
+                            Answer.Failed(response.code(), response.errorBody()?.string().orEmpty())
+                        }
+                    } catch (e: com.google.gson.stream.MalformedJsonException) {
+                        throw e // a broken answer, not a broken connection
                     } catch (e: java.io.IOException) {
                         throw ConnectionLost(e)
                     }
@@ -498,11 +508,12 @@ object ForgeQueueManager {
                 launch {
                     var outageSeen = false
                     var idleSince = 0L
-                    while (true) {
+                    while (!answered.get()) {
                         delay(1000)
                         val connected = ForgeRepository.isConnected.value
                         val busy = ForgeRepository.isServerBusy.value
                         when {
+                            answered.get() -> return@launch
                             !connected -> {
                                 outageSeen = true
                                 idleSince = 0L
@@ -528,6 +539,67 @@ object ForgeQueueManager {
                 watchdog.cancel()
             }
         }
+
+    /**
+     * Reads the images from the answer one at a time and writes each to the cache as soon as it is read: the
+     * whole batch used to be held in memory as base64 text (several times its size), enough to crash the app with
+     * big images. Other fields of the answer are skipped without being read into memory.
+     */
+    private fun readImages(
+        body: okhttp3.ResponseBody,
+        saveToDevice: Boolean,
+    ): List<File> {
+        val files = mutableListOf<File>()
+        com.google.gson.stream.JsonReader(body.charStream()).use { reader ->
+            reader.beginObject()
+            while (reader.hasNext()) {
+                if (reader.nextName() != "images") {
+                    reader.skipValue()
+                    continue
+                }
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    val base64 = reader.nextString()
+                    files +=
+                        try {
+                            saveGeneratedImage(base64, files.size, saveToDevice)
+                        } catch (e: java.io.IOException) {
+                            throw SaveFailed(e)
+                        }
+                }
+                reader.endArray()
+            }
+            reader.endObject()
+        }
+        return files
+    }
+
+    private fun saveGeneratedImage(
+        base64: String,
+        index: Int,
+        saveToDevice: Boolean,
+    ): File {
+        val bytes = Base64.decode(base64, Base64.DEFAULT)
+        val file = File(application.cacheDir, "gen_${System.currentTimeMillis()}_$index.png")
+        file.writeBytes(bytes)
+
+        // The first image of the batch is the local fallback "last generated image".
+        if (index == 0) {
+            try {
+                file.copyTo(File(application.cacheDir, "last_generated_image.png"), overwrite = true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to cache local last generated image", e)
+            }
+        }
+        if (saveToDevice) {
+            try {
+                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}_$index.png") { it.write(bytes) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save generated image directly to device", e)
+            }
+        }
+        return file
+    }
 
     /** A job whose connection broke stays first in the queue, waiting to be sent again. */
     private fun keepForRetry(

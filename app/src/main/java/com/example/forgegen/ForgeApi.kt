@@ -23,10 +23,13 @@ import java.util.concurrent.TimeUnit
  * or 403 Forbidden) and retrieve custom error bodies without throwing exceptions during network calls.
  * ============================================================================ */
 interface ForgeApi {
+    // Streamed: the answer holds every image as one large base64 string, so it is read one image at a time
+    // instead of the whole batch being parsed into memory at once.
+    @Streaming
     @POST("sdapi/v1/txt2img")
     suspend fun generateImage(
         @Body payload: Txt2ImgPayloadDto,
-    ): Response<Txt2ImgResponseDto>
+    ): Response<ResponseBody>
 
     @POST("sdapi/v1/interrupt")
     suspend fun interruptGeneration(): Response<Unit>

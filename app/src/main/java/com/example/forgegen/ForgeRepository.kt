@@ -297,6 +297,7 @@ object ForgeRepository {
     }
 
     private var pingJob: kotlinx.coroutines.Job? = null
+    private const val MEMORY_STATS_EVERY = 5
 
     private fun connectionFailed(failCount: Int) {
         _isConnected.value = false
@@ -317,11 +318,14 @@ object ForgeRepository {
         pingJob?.cancel()
         pingJob = repositoryScope.launch(Dispatchers.IO) {
             var failCount = 0
+            var pingCount = 0
             while (isActive) {
                 try {
                     if (forgeApi != null) {
                         val start = System.currentTimeMillis()
-                        val response = forgeApi?.getProgress(false)
+                        // The live preview (a base64 image, sent with every answer while generating) is only shown
+                        // on screen, so in the background it is not requested at all.
+                        val response = forgeApi?.getProgress(skipImage = !_isAppInForeground.value)
 
                         if (response?.isSuccessful == true) {
                             _pingMs.value = System.currentTimeMillis() - start
@@ -366,7 +370,8 @@ object ForgeRepository {
                             connectionFailed(++failCount)
                         }
 
-                        if (failCount == 0) {
+                        // RAM/VRAM change slowly: every 5th ping instead of a second request each second.
+                        if (failCount == 0 && pingCount++ % MEMORY_STATS_EVERY == 0) {
                             try {
                                 val memRes = forgeApi?.getMemoryStats()
                                 if (memRes?.isSuccessful == true) {

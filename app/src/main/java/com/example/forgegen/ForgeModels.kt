@@ -322,12 +322,6 @@ data class ProgressResponseDto(
     @SerializedName("current_image") val currentImage: String? = null,
 )
 
-data class Txt2ImgResponseDto(
-    val images: List<String> = emptyList(),
-    val info: String = "",
-    val parameters: Map<String, Any>? = null,
-)
-
 data class OptionsPayloadDto(
     @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String,
 )

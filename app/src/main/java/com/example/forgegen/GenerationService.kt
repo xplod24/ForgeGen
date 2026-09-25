@@ -16,6 +16,9 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.roundToInt
 
 /* ============================================================================
@@ -83,43 +86,59 @@ class GenerationService : Service() {
             var lastText = ""
             var lastJobNo = -1
 
-            while (isActive) {
-                val config = ForgeRepository.config.value
-                val isActivelyGenerating = ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value
-                val progInt = (ForgeQueueManager.progress.value * 100).toInt()
-                val text = ForgeQueueManager.statusText.value
-                val mode = config.notificationMode
-                val jobNo = ForgeRepository.currentJobNo.value
+            // Reacts to changes of the generation state instead of waking up every second for as long as the
+            // service lives (all day with "Run in Background"); at most one notification update per second.
+            combine(
+                ForgeQueueManager.isGenerating,
+                ForgeRepository.isServerBusy,
+                ForgeQueueManager.progress,
+                ForgeQueueManager.statusText,
+                ForgeRepository.currentJobNo,
+            ) { generating, busy, progress, text, jobNo ->
+                ServiceState(generating || busy, (progress * 100).toInt(), text, jobNo)
+            }.distinctUntilChanged()
+                .conflate()
+                .collect { state ->
+                    val config = ForgeRepository.config.value
+                    val mode = config.notificationMode
 
-                if (isActivelyGenerating && !wasGenerating) {
-                    wasGenerating = true
-                    acquireWakeLock()
-                } else if (!isActivelyGenerating && wasGenerating) {
-                    wasGenerating = false
-                    releaseWakeLock()
-                    lastProgress = -1
-                    // Without this an external job (or a paused queue) left the last progress on screen forever.
-                    val queueStopped = ForgeQueueManager.generationQueue.value.isEmpty() || ForgeQueueManager.isQueuePaused.value
-                    if (config.enablePersistentService && queueStopped) {
+                    if (state.active && !wasGenerating) {
+                        wasGenerating = true
+                        acquireWakeLock()
+                    } else if (!state.active && wasGenerating) {
+                        wasGenerating = false
+                        releaseWakeLock()
+                        lastProgress = -1
+                        // Without this an external job (or a paused queue) left the last progress on screen forever.
+                        val queueStopped = ForgeQueueManager.generationQueue.value.isEmpty() || ForgeQueueManager.isQueuePaused.value
+                        if (config.enablePersistentService && queueStopped) {
+                            ForgeNotifications.post(notificationId, buildCurrentNotification())
+                        }
+                    }
+
+                    val shouldUpdate =
+                        state.progress != lastProgress || state.text != lastText || state.jobNo != lastJobNo || isNotificationDismissed
+
+                    // "Disabled" keeps the static notification the foreground service needs and never refreshes it.
+                    if (shouldUpdate && state.active && mode != "Disabled") {
+                        lastProgress = state.progress
+                        lastText = state.text
+                        lastJobNo = state.jobNo
+                        isNotificationDismissed = false
                         ForgeNotifications.post(notificationId, buildCurrentNotification())
                     }
+
+                    delay(1000)
                 }
-
-                val shouldUpdate = (progInt != lastProgress) || (text != lastText) || (jobNo != lastJobNo) || isNotificationDismissed
-
-                // "Disabled" keeps the static notification the foreground service needs and never refreshes it.
-                if (shouldUpdate && isActivelyGenerating && mode != "Disabled") {
-                    lastProgress = progInt
-                    lastText = text
-                    lastJobNo = jobNo
-                    isNotificationDismissed = false
-                    ForgeNotifications.post(notificationId, buildCurrentNotification())
-                }
-
-                delay(1000)
-            }
         }
     }
+
+    private data class ServiceState(
+        val active: Boolean,
+        val progress: Int,
+        val text: String,
+        val jobNo: Int,
+    )
 
     override fun onStartCommand(
         intent: Intent?,

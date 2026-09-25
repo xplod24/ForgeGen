@@ -1,3 +1,9 @@
+## 1.1.3
+- Generated images are read from the server's answer one at a time and written straight to storage, so a big batch needs about a third of the memory it used to (8 large images: 28 MB instead of 96 MB) and no longer risks closing the app. If a batch is still too large, the queue pauses with an explanation.
+- The live preview is only downloaded while the app is on screen, which saves data and battery during long runs in the background.
+- The server's memory statistics are asked for every 5 seconds instead of every second.
+- The background service no longer wakes up every second while nothing changes.
+
 ## 1.1.2
 - When the connection to the server drops, the job stays in the queue and is sent again once the server is back; the queue continues by itself (up to three times per job, then it waits for you to resume it). The job used to be lost, and in overnight mode the whole queue was thrown away within seconds.
 - No job is sent while the server is unreachable: queued jobs wait for the connection.
