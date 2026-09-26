@@ -64,6 +64,8 @@ data class AppConfig(
     var autoSaveSince: String = "",
     // The user's consent to write a report with the app's log to Downloads when the app or the server runs out of memory.
     var saveOomLogs: Boolean = false,
+    // Samsung One UI 8+: the generation progress as a Live Update in the Now Bar of the lock screen (opt-in).
+    var nowBarProgress: Boolean = false,
 )
 
 const val THEME_SYSTEM = "System"

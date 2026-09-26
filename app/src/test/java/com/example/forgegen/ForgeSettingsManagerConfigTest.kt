@@ -38,6 +38,7 @@ class ForgeSettingsManagerConfigTest {
                 autoSaveMode = AUTO_SAVE_FAVORITES,
                 autoSaveSince = "2026-09-24 10:00:00",
                 saveOomLogs = true,
+                nowBarProgress = true,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))

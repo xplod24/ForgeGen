@@ -246,6 +246,7 @@ class GenerationService : Service() {
             progress = ForgeQueueManager.progress.value,
             etaSeconds = ForgeQueueManager.currentEta.value,
             notificationMode = ForgeRepository.config.value.notificationMode,
+            inNowBar = NowBar.shouldPromote(this, ForgeRepository.config.value),
             jobNo = ForgeRepository.currentJobNo.value,
             jobCount = ForgeRepository.currentJobCount.value,
             batchSize =
@@ -260,6 +261,7 @@ class GenerationService : Service() {
         progress: Float,
         etaSeconds: Double,
         notificationMode: String,
+        inNowBar: Boolean,
         jobNo: Int,
         jobCount: Int,
         batchSize: Int,
@@ -290,9 +292,11 @@ class GenerationService : Service() {
                 .Builder(this, ForgeNotifications.CHANNEL_PROGRESS)
                 .setSmallIcon(R.mipmap.ic_launcher_foreground)
                 .setContentIntent(openIntent)
-                .setOngoing(false) // Allow dismissal
+                .setOngoing(inNowBar) // otherwise it can be swiped away; a Live Update has to be ongoing
                 .setDeleteIntent(deleteIntent)
                 .setOnlyAlertOnce(true)
+        // "Show Progress in Now Bar": a Live Update, which Samsung shows in the pill at the bottom of the lock screen.
+        if (inNowBar) builder.setRequestPromotedOngoing(true)
 
         if (isActivelyGenerating) {
             builder.color = 0xFF005BFF.toInt()
@@ -304,7 +308,7 @@ class GenerationService : Service() {
             // The values must match the options offered in SetupScreen: "Simple", "Verbose", "Disabled".
             when (notificationMode) {
                 "Verbose" -> {
-                    builder.setProgress(100, progInt, progInt == 0)
+                    builder.showProgress(progInt, inNowBar)
                     builder.setContentTitle("$image | Batch size: $batchSize")
                     builder.setContentText("Progress: $progInt%$eta")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Open App", openIntent)
@@ -313,7 +317,7 @@ class GenerationService : Service() {
                     builder.setContentTitle("Generating in background")
                 }
                 else -> { // "Simple"
-                    builder.setProgress(100, progInt, progInt == 0)
+                    builder.showProgress(progInt, inNowBar)
                     builder.setContentTitle(image)
                     builder.setContentText("Progress: $progInt%$eta")
                 }
@@ -334,6 +338,19 @@ class GenerationService : Service() {
         builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
 
         return builder.build()
+    }
+
+    /** A progress bar; in the Now Bar the progress style (its bar) and a short text for the status bar chip. */
+    private fun NotificationCompat.Builder.showProgress(
+        percent: Int,
+        inNowBar: Boolean,
+    ) {
+        if (inNowBar) {
+            setStyle(NotificationCompat.ProgressStyle().setProgress(percent).setProgressIndeterminate(percent == 0))
+            if (percent > 0) setShortCriticalText("$percent%")
+        } else {
+            setProgress(100, percent, percent == 0)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

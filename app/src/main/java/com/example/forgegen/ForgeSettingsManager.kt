@@ -291,6 +291,7 @@ object ForgeSettingsManager {
             autoSaveMode = parsed?.autoSaveMode ?: AUTO_SAVE_OFF,
             autoSaveSince = parsed?.autoSaveSince ?: "",
             saveOomLogs = parsed?.saveOomLogs ?: false,
+            nowBarProgress = parsed?.nowBarProgress ?: false,
         )
     }
 

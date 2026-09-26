@@ -167,13 +167,18 @@ fun SetupScreen(
     val pm = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isIgnoringBattery by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
 
-    // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION REFRESH ---
+    // Samsung Now Bar: offered on One UI 8+ only; the system can also turn live notifications off for the app.
+    val isNowBarSupported = remember { NowBar.isSupported(context) }
+    var isNowBarAllowed by remember { mutableStateOf(NowBar.isAllowedBySystem(context)) }
+
+    // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION AND LIVE NOTIFICATION REFRESH ---
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer =
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
                     isIgnoringBattery = pm.isIgnoringBatteryOptimizations(context.packageName)
+                    isNowBarAllowed = NowBar.isAllowedBySystem(context)
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -475,6 +480,32 @@ fun SetupScreen(
                     subtitle = "Current: ${config.notificationMode} - $modeDesc",
                 ) {
                     showNotificationModeDialog = true
+                }
+            }
+            item {
+                // Off until the user turns it on; greyed out on phones without Samsung's One UI 8 or newer.
+                SwitchPreference(
+                    title = "Show Progress in Now Bar",
+                    subtitle =
+                        when {
+                            !isNowBarSupported -> "Samsung phones with One UI 8 or newer only"
+                            config.notificationMode == "Disabled" -> "Needs a Progress Notification Mode other than Disabled"
+                            else -> "Show the generation progress in the pill at the bottom of the lock screen (Samsung Now Bar)"
+                        },
+                    checked = isNowBarSupported && config.nowBarProgress,
+                    enabled = isNowBarSupported,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(nowBarProgress = it)) },
+                )
+            }
+            if (isNowBarSupported && config.nowBarProgress && !isNowBarAllowed) {
+                item {
+                    TextPreference(
+                        title = "Live Notifications Are Off",
+                        subtitle = "The system settings do not let ForgeGen show live notifications. Tap to open them.",
+                        value = "",
+                    ) {
+                        NowBar.openSystemSettings(context)
+                    }
                 }
             }
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
