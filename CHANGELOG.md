@@ -1,3 +1,6 @@
+## 1.2.1
+- Version number only: the app is the same as 1.2.0.
+
 ## 1.2.0
 - New "Show Progress in Now Bar" option in the Push Notifications settings, for Samsung phones with One UI 8 or newer: the generation progress appears in the pill at the bottom of the lock screen and as a short percentage in the status bar. It stays off until you turn it on, and it is greyed out on other phones. While it is on, the progress notification cannot be swiped away during a generation.
 - If the system does not allow ForgeGen to show live notifications, the settings say so and open the right system page.
