@@ -136,21 +136,53 @@ object OomLogs {
             appendLine("Details:")
             appendLine(details)
             appendLine()
-            appendLine("Log of the app:")
+            appendLine("Log of the app (without the content of HTTP requests and answers, which can hold prompts):")
         }
     }
 
-    /** The app's own log (logcat), streamed straight into the file instead of being held in memory. */
+    // OkHttp's request/response logging ("Enable Logging"): bodies with prompts and generation data.
+    private const val HTTP_LOG_TAG = " okhttp.OkHttpClient: "
+
+    // The app's logs of failed API calls carry the answer's body, which can repeat the prompt.
+    private const val API_ERROR = "API ERROR ["
+
+    /** The app's own log (logcat), streamed line by line into the file instead of being held in memory. */
     private fun copyLog(out: OutputStream) {
         try {
             val process =
                 ProcessBuilder("logcat", "-d", "-v", "threadtime", "--pid=${android.os.Process.myPid()}")
                     .redirectErrorStream(true)
                     .start()
-            process.inputStream.use { it.copyTo(out) }
+            val writer = out.bufferedWriter()
+            process.inputStream.bufferedReader().useLines { lines -> filterLog(lines).forEach { writer.appendLine(it) } }
+            writer.flush()
             process.waitFor()
         } catch (e: Exception) {
             out.write("The log could not be read: $e\n".toByteArray())
+        }
+    }
+
+    /**
+     * [lines] of `logcat -v threadtime` without HTTP content. A message logged with line breaks comes out as several
+     * lines with the same header (time, process, thread, level, tag), so an API error's body is skipped by header.
+     */
+    fun filterLog(lines: Sequence<String>): Sequence<String> {
+        var skippedHeader: String? = null
+        return lines.filter { line ->
+            val tagEnd = line.indexOf(": ")
+            val header = if (tagEnd > 0) line.substring(0, tagEnd) else line
+            when {
+                HTTP_LOG_TAG in line -> false
+                API_ERROR in line -> {
+                    skippedHeader = header
+                    false
+                }
+                header == skippedHeader -> false
+                else -> {
+                    skippedHeader = null
+                    true
+                }
+            }
         }
     }
 }

@@ -292,6 +292,12 @@ object ForgeSettingsManager {
             autoSaveSince = parsed?.autoSaveSince ?: "",
             saveOomLogs = parsed?.saveOomLogs ?: false,
             nowBarProgress = parsed?.nowBarProgress ?: false,
+            contentMode = parsed?.contentMode?.takeIf { it in listOf(CONTENT_SFW, CONTENT_NSFW, CONTENT_UNRESTRICTED) } ?: CONTENT_SFW,
+            hidePromptsInNotifications = parsed?.hidePromptsInNotifications ?: true,
+            hideInRecents = parsed?.hideInRecents ?: false,
+            blockScreenshots = parsed?.blockScreenshots ?: false,
+            savePrivately = parsed?.savePrivately ?: false,
+            shareWithoutMetadata = parsed?.shareWithoutMetadata ?: false,
         )
     }
 

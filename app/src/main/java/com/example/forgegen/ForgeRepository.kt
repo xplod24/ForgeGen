@@ -170,6 +170,16 @@ object ForgeRepository {
         }
     }
 
+    // 1.3.0: Civitai's image ratings and the model's NSFW and real-person flags.
+    val MIGRATION_10_11 =
+        object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `previewImages` TEXT")
+                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `nsfw` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `realPerson` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
     val MIGRATION_9_10 = object : Migration(9, 10) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
@@ -183,7 +193,7 @@ object ForgeRepository {
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-                .addMigrations(MIGRATION_9_10)
+                .addMigrations(MIGRATION_9_10, MIGRATION_10_11)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 

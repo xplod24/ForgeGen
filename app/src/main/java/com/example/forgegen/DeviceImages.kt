@@ -13,12 +13,22 @@ import java.io.OutputStream
 
 /* ============================================================================
  * DEVICE IMAGES
- * Images saved on the phone go to Pictures/ForgeGen, the "ForgeGen" album of the phone's gallery.
- * Shared images are temporary copies in the app's cache, so sharing no longer leaves files behind.
+ * Images saved on the phone go to Pictures/ForgeGen, the "ForgeGen" album of the phone's gallery, or with "Save to
+ * Phone Privately" to the app's own folder, which gallery apps and their cloud backup do not see (it is removed with
+ * the app). Shared images are temporary copies in the app's cache, so sharing no longer leaves files behind.
  * ============================================================================ */
 object DeviceImages {
     private val RELATIVE_PATH = Environment.DIRECTORY_PICTURES + "/ForgeGen/"
     private const val SHARED_DIR = "shared" // must match res/xml/filepaths.xml
+
+    private val savesPrivately get() = ForgeSettingsManager.config.value.savePrivately
+
+    /** Where saved images go, for messages to the user. */
+    fun locationName(private: Boolean = savesPrivately) = if (private) "the app's private folder" else "Pictures/ForgeGen"
+
+    /** The app's own folder for "Save to Phone Privately" (Android/data/<app>/files/Pictures/ForgeGen). */
+    private fun privateDir(context: Context) =
+        File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir, "ForgeGen").apply { mkdirs() }
 
     fun mimeType(name: String): String =
         when (name.substringAfterLast('.', "").lowercase()) {
@@ -42,6 +52,7 @@ object DeviceImages {
 
     /** Names of the images in Pictures/ForgeGen saved by this app (others' files need a permission we do not ask for). */
     fun savedNames(context: Context): Set<String> {
+        if (savesPrivately) return privateDir(context).list()?.toSet().orEmpty()
         val names = mutableSetOf<String>()
         context.contentResolver
             .query(
@@ -62,6 +73,7 @@ object DeviceImages {
         displayName: String,
         write: (OutputStream) -> Unit,
     ): Uri {
+        if (savesPrivately) return savePrivately(context, displayName, write)
         val resolver = context.contentResolver
         val values =
             ContentValues().apply {
@@ -84,6 +96,25 @@ object DeviceImages {
         }
     }
 
+    /** Into the app's own folder; written under a temporary name, so a failed write leaves no half image. */
+    private fun savePrivately(
+        context: Context,
+        displayName: String,
+        write: (OutputStream) -> Unit,
+    ): Uri {
+        val dir = privateDir(context)
+        val file = File(dir, displayName.substringAfterLast('/').substringAfterLast('\\'))
+        val partial = File(dir, ".${file.name}.part")
+        try {
+            partial.outputStream().use(write)
+            if (!partial.renameTo(file)) throw IOException("Cannot save ${file.name}")
+            return Uri.fromFile(file)
+        } catch (e: Exception) {
+            partial.delete()
+            throw e
+        }
+    }
+
     /** A share sheet for a temporary copy of an image; [write] fills the copy. */
     fun shareIntent(
         context: Context,
@@ -93,6 +124,8 @@ object DeviceImages {
         val dir = File(context.cacheDir, SHARED_DIR).apply { mkdirs() }
         val file = File(dir, name.substringAfterLast('/').substringAfterLast('\\'))
         file.outputStream().use(write)
+        // "Share Without Generation Data": the prompt and settings stay behind, the picture is untouched.
+        if (ForgeSettingsManager.config.value.shareWithoutMetadata) file.writeBytes(MetadataStripper.strip(file.readBytes()))
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val send =
             Intent(Intent.ACTION_SEND).apply {

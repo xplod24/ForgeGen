@@ -14,6 +14,14 @@ object ForgeModelManager {
     private val _selectedModel = MutableStateFlow("")
     val selectedModel: StateFlow<String> = _selectedModel.asStateFlow()
 
+    // LoRAs (their names in prompts) that Civitai marks as a real person; set with the model lists.
+    private val _realPersonLoras = MutableStateFlow<Set<String>>(emptySet())
+    val realPersonLoras: StateFlow<Set<String>> = _realPersonLoras.asStateFlow()
+
+    fun setRealPersonLoras(names: Set<String>) {
+        _realPersonLoras.value = names
+    }
+
     suspend fun getTagsForLora(hash: String): List<String> =
         withContext(Dispatchers.IO) {
             val model = ForgeRepository.db.civitaiModelDao().getModelByHash(hash)

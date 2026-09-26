@@ -1,6 +1,7 @@
 @file:Suppress("unused")
 package com.example.forgegen
 
+import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
@@ -66,7 +67,21 @@ data class AppConfig(
     var saveOomLogs: Boolean = false,
     // Samsung One UI 8+: the generation progress as a Live Update in the Now Bar of the lock screen (opt-in).
     var nowBarProgress: Boolean = false,
+    // Content & Privacy (1.3.0). CONTENT_SFW, CONTENT_NSFW or CONTENT_UNRESTRICTED, see ContentFilter.
+    var contentMode: String = CONTENT_SFW,
+    var hidePromptsInNotifications: Boolean = true,
+    var hideInRecents: Boolean = false,
+    var blockScreenshots: Boolean = false,
+    // Images saved to the phone go to the app's own folder instead of the phone's gallery (and its cloud backup).
+    var savePrivately: Boolean = false,
+    // Shared images leave without their generation data (prompt, seed, model).
+    var shareWithoutMetadata: Boolean = false,
 )
+
+// Content modes (ContentFilter): SFW is the default, the other two only after the user confirms being an adult.
+const val CONTENT_SFW = "SFW"
+const val CONTENT_NSFW = "NSFW"
+const val CONTENT_UNRESTRICTED = "Unrestricted"
 
 const val THEME_SYSTEM = "System"
 const val THEME_LIGHT = "Light"
@@ -135,6 +150,10 @@ data class ApiResource(
     val path: String,
     val name: String,
     val hash: String? = null,
+    // Civitai's rating of the preview in [path] (1 PG ... 16 XXX), 0 when it is not from Civitai (content unknown).
+    val previewLevel: Int = 0,
+    val nsfw: Boolean = false,
+    val realPerson: Boolean = false,
 )
 
 /** An app update offered by the latest GitHub release. */
@@ -179,7 +198,13 @@ data class CivitaiModelEntity(
     val type: String,
     val name: String,
     val trainedWords: String,
+    // The safe (PG) sample image, or before 1.3.0 simply the first one.
     val previewImage: String?,
+    // Civitai's sample images with their ratings (JSON list of CivitaiImage); null until synced by 1.3.0 or later.
+    val previewImages: String? = null,
+    @ColumnInfo(defaultValue = "0") val nsfw: Boolean = false,
+    // Civitai marks models of a real person ("poi"); with nudity or sex they are never sent (ContentFilter).
+    @ColumnInfo(defaultValue = "0") val realPerson: Boolean = false,
 )
 
 @Dao
@@ -275,7 +300,7 @@ interface AppSettingDao {
         GalleryImageEntity::class,
         AppSettingEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
@@ -416,10 +441,14 @@ data class CivitaiVersionResponseDto(
 
 data class CivitaiBaseModelDto(
     val name: String?,
+    val nsfw: Boolean? = null,
+    val poi: Boolean? = null,
 )
 
 data class CivitaiImageDto(
     val url: String?,
+    val nsfwLevel: Int? = null,
+    val minor: Boolean? = null,
 )
 
 // New DTO for memory and global settings queries

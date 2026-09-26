@@ -9,6 +9,8 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -134,6 +136,9 @@ fun SetupScreen(
 
     var showNotificationModeDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showContentModeDialog by remember { mutableStateOf(false) }
+    // A more permissive content mode waits here for the adult confirmation.
+    var pendingContentMode by remember { mutableStateOf<String?>(null) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
@@ -317,6 +322,72 @@ fun SetupScreen(
                 ) {
                     viewModel.syncCivitaiModelsManual()
                 }
+            }
+
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
+            /* ==========================================================
+             * CATEGORY: CONTENT & PRIVACY
+             * ========================================================== */            }
+
+            item { ExpandableCategoryHeader("Content & Privacy", appState, viewModel) }
+            if ("Content & Privacy" in appState.setupExpandedSections) {
+
+            item {
+                TextPreference(
+                    title = "Content Mode",
+                    value = "",
+                    subtitle = "Current: ${config.contentMode} - ${contentModeDescription(config.contentMode)}",
+                ) {
+                    showContentModeDialog = true
+                }
+            }
+            item {
+                SwitchPreference(
+                    title = "Hide Prompts in Notifications",
+                    subtitle = "Finished-batch notifications do not show the prompt (never on the lock screen anyway)",
+                    checked = config.hidePromptsInNotifications,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(hidePromptsInNotifications = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Hide App in Recents",
+                    subtitle =
+                        if (config.useNativeSecurity) {
+                            "Always on while the App Lock is on"
+                        } else {
+                            "The recent apps screen shows no picture of the app (Android 13 and newer)"
+                        },
+                    checked = config.hideInRecents || config.useNativeSecurity,
+                    enabled = !config.useNativeSecurity,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(hideInRecents = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Block Screenshots",
+                    subtitle = "No screenshots or screen recordings of the app",
+                    checked = config.blockScreenshots,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(blockScreenshots = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Save to Phone Privately",
+                    subtitle = "Saved images go to the app's own folder instead of the phone's gallery, so gallery apps " +
+                        "and their cloud backup do not see them. They are deleted when the app is uninstalled.",
+                    checked = config.savePrivately,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(savePrivately = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
+                    title = "Share Without Generation Data",
+                    subtitle = "Shared images leave without their prompt, seed and model",
+                    checked = config.shareWithoutMetadata,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(shareWithoutMetadata = it)) },
+                )
             }
 
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
@@ -728,6 +799,69 @@ fun SetupScreen(
 
         // The download progress dialog is shown globally by MainActivity.
 
+        if (showContentModeDialog) {
+            AlertDialog(
+                onDismissRequest = { showContentModeDialog = false },
+                title = { Text("Content Mode") },
+                text = {
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        listOf(CONTENT_SFW, CONTENT_NSFW, CONTENT_UNRESTRICTED).forEach { mode ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showContentModeDialog = false
+                                            if (contentModeRank(mode) > contentModeRank(config.contentMode)) {
+                                                pendingContentMode = mode
+                                            } else {
+                                                viewModel.saveConfig(config.copy(contentMode = mode))
+                                            }
+                                        }.padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = config.contentMode == mode, onClick = null)
+                                Spacer(Modifier.width(16.dp))
+                                Column {
+                                    Text(mode, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                    Text(contentModeDescription(mode), fontSize = 12.sp, color = Color.Gray)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "In every mode, sexual content with a minor, and nudity or sex with the LoRA of a real person, " +
+                                "are never sent. The mode is a safeguard in this app: the server itself accepts anything.",
+                            fontSize = 11.sp,
+                            color = Color.Gray,
+                        )
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showContentModeDialog = false }) { Text("Close") } },
+            )
+        }
+
+        pendingContentMode?.let { mode ->
+            AlertDialog(
+                onDismissRequest = { pendingContentMode = null },
+                title = { Text("Allow Adult Content?") },
+                text = {
+                    Text(
+                        "The $mode mode lets the app send and show sexual content" +
+                            (if (mode == CONTENT_UNRESTRICTED) ", including extreme content. " else ". ") +
+                            "Turn it on only if you are 18 or older and such content is legal where you are.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.saveConfig(config.copy(contentMode = mode))
+                        pendingContentMode = null
+                    }) { Text("I Am 18 or Older") }
+                },
+                dismissButton = { TextButton(onClick = { pendingContentMode = null }) { Text("Cancel") } },
+            )
+        }
+
         if (showThemeDialog) {
             AlertDialog(
                 onDismissRequest = { showThemeDialog = false },
@@ -974,3 +1108,23 @@ fun ExpandableCategoryHeader(title: String, appState: AppState, viewModel: Forge
         HorizontalDivider(modifier = Modifier.weight(1f))
     }
 }
+
+/** What a content mode does, for the settings. */
+private fun contentModeDescription(mode: String): String =
+    when (mode) {
+        CONTENT_NSFW ->
+            "Adult content is allowed. Extreme tags (non-consent, gore, bestiality and the like) are not sent, and images " +
+                "made with them are blurred. Civitai previews up to X."
+        CONTENT_UNRESTRICTED -> "Nothing is blocked or blurred. Civitai previews: all except those Civitai itself blocks."
+        else ->
+            "Tags with nudity, sex or other adult content are not sent and are hidden, and every image is blurred until " +
+                "you tap it. Civitai previews: safe ones only."
+    }
+
+/** How permissive a mode is; moving to a higher one asks for the adult confirmation. */
+private fun contentModeRank(mode: String) =
+    when (mode) {
+        CONTENT_UNRESTRICTED -> 2
+        CONTENT_NSFW -> 1
+        else -> 0
+    }

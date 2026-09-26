@@ -1,3 +1,21 @@
+## 1.3.0
+- New **Content Mode** in the new Content & Privacy section of the settings. It is your choice; the app starts in SFW:
+  - **SFW**: prompts with nudity, sex or other adult tags are not sent, such tags are hidden in the tag editor and in texts, and every image is blurred until you tap "Show image" (a safe prompt does not guarantee a safe image).
+  - **NSFW**: adult content is allowed. Only extreme tags (non-consent, gore, bestiality and the like) are not sent, and images made with them are blurred.
+  - **Unrestricted**: nothing is blocked or blurred.
+  - Switching to NSFW or Unrestricted asks you to confirm that you are 18 or older.
+- In every mode, also Unrestricted, two things are never sent: sexual content with a minor, and nudity or sex with the LoRA of a real person. An image whose prompt has sexual content with a minor stays blurred and cannot be shown.
+- A refused prompt is not queued; a message names the tags that stopped it. Wildcards are checked after they are filled in.
+- Civitai: previews follow the content mode, using Civitai's own rating of each image (SFW shows safe previews only, and blurs previews of unknown rating). Models Civitai marks as NSFW or as a real person get a label. The sync uses civitai.com in SFW and civitai.red in the other modes.
+- The next Civitai sync downloads the data of the models synced before once more, to get the ratings. If it fails, what was stored before is kept.
+- **Hide Prompts in Notifications** (on by default): "Batch Completed" notifications no longer show the prompt, and they never show it on the lock screen.
+- **Hide App in Recents**: the recent apps screen shows no picture of the app (Android 13 and newer; always on with the App Lock).
+- **Block Screenshots**: no screenshots or screen recordings of the app.
+- **Save to Phone Privately**: saved images go to the app's own folder instead of the phone's gallery, so gallery apps and their cloud backup do not see them.
+- **Share Without Generation Data**: shared images leave without their prompt, seed and model.
+- The out-of-memory report no longer includes the content of requests to the server, which could hold prompts.
+- Two quick taps on Generate with different prompts now always queue both jobs in order, each with its own prompt.
+
 ## 1.2.1
 - Version number only: the app is the same as 1.2.0.
 

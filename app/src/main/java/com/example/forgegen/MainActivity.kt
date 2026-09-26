@@ -339,10 +339,18 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(isLocked) {
                 if (isLocked) lifecycleOwner.lifecycle.withResumed { requestUnlock() }
             }
-            // With the lock on, keep the app's content out of the Recents preview (Android 13+).
-            LaunchedEffect(config.useNativeSecurity) {
+            // With the lock on, or "Hide App in Recents", keep the app's content out of the Recents preview (Android 13+).
+            LaunchedEffect(config.useNativeSecurity, config.hideInRecents) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    activity.setRecentsScreenshotEnabled(!config.useNativeSecurity)
+                    activity.setRecentsScreenshotEnabled(!(config.useNativeSecurity || config.hideInRecents))
+                }
+            }
+            // "Block Screenshots": no screenshots or screen recordings of the app (and a blank Recents preview).
+            LaunchedEffect(config.blockScreenshots) {
+                if (config.blockScreenshots) {
+                    activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                 }
             }
 

@@ -3,6 +3,7 @@ package com.example.forgegen
 import com.example.forgegen.ui.components.*
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -51,7 +52,13 @@ class ForgeNetworkManager(
         managerScope.launch(Dispatchers.IO) {
             var currentUrl = ""
             var currentTimeout = -1
+            var currentMode: String? = null
             ForgeRepository.config.collect { config ->
+                // The model previews depend on the content mode, so the lists are rebuilt when it changes.
+                if (currentMode != null && currentMode != config.contentMode && ForgeRepository.isConnected.value) {
+                    fetchApiData()
+                }
+                currentMode = config.contentMode
                 val timeoutChanged = currentTimeout != config.timeout
                 if (timeoutChanged) {
                     currentTimeout = config.timeout
@@ -87,7 +94,7 @@ class ForgeNetworkManager(
         }
     }
 
-    val civitaiApi: CivitaiApi by lazy {
+    private val civitaiClient: OkHttpClient by lazy {
         val loggingInterceptor =
             HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
@@ -100,21 +107,42 @@ class ForgeNetworkManager(
                     loggingInterceptor.intercept(chain)
                 }
             }
-        val civitaiClient =
-            OkHttpClient
-                .Builder()
-                .addInterceptor(conditionalCivitaiLogger)
-                .connectTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
-                .readTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
-                .build()
-
-        Retrofit
+        OkHttpClient
             .Builder()
-            .baseUrl("https://civitai.com/")
-            .client(civitaiClient)
-            .addConverterFactory(GsonConverterFactory.create(gson))
+            .addInterceptor(conditionalCivitaiLogger)
+            .connectTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
+            .readTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
             .build()
-            .create(CivitaiApi::class.java)
+    }
+
+    private val civitaiApis = java.util.concurrent.ConcurrentHashMap<String, CivitaiApi>()
+
+    /** Civitai's API on the domain of the content mode: civitai.com (safe content only) or civitai.red (all). */
+    private fun civitaiApi(mode: String): CivitaiApi =
+        civitaiApis.getOrPut(ContentFilter.civitaiBaseUrl(mode)) {
+            Retrofit
+                .Builder()
+                .baseUrl(ContentFilter.civitaiBaseUrl(mode))
+                .client(civitaiClient)
+                .addConverterFactory(GsonConverterFactory.create(gson))
+                .build()
+                .create(CivitaiApi::class.java)
+        }
+
+    /** The preview of a synced model allowed in [mode]; a model synced before 1.3.0 has one of unknown rating. */
+    private fun civitaiPreview(
+        entity: CivitaiModelEntity,
+        mode: String,
+    ): CivitaiImage? {
+        val images =
+            entity.previewImages?.let {
+                try {
+                    gson.fromJson<List<CivitaiImage>>(it, object : TypeToken<List<CivitaiImage>>() {}.type)
+                } catch (e: Exception) {
+                    null
+                }
+            } ?: return entity.previewImage?.let { CivitaiImage(it, level = 0) }
+        return ContentFilter.pickCivitaiPreview(images, mode)
     }
 
     // --- STATIC CACHE STATES (Model list, Samplers, Schedulers) ---
@@ -402,34 +430,38 @@ class ForgeNetworkManager(
 
                                         val updatedDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
+                                        // The preview Civitai allows in the content mode, else the server's own (rating unknown).
+                                        val mode = getConfig().contentMode
+
+                                        fun resource(cam: CustomApiModelDto): ApiResource {
+                                            val dbEntity = updatedDbModels[cam.sha256]
+                                            val preview = dbEntity?.let { civitaiPreview(it, mode) }
+                                            return ApiResource(
+                                                title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                                name = cam.name ?: "Unknown",
+                                                path = preview?.url ?: cam.filename ?: "",
+                                                hash = cam.sha256,
+                                                previewLevel = preview?.level ?: 0,
+                                                nsfw = dbEntity?.nsfw == true,
+                                                realPerson = dbEntity?.realPerson == true,
+                                            )
+                                        }
+
                                         val checkpoints =
                                             parsedApiModels
                                                 .filter { it.type == "checkpoint" }
-                                                .map { cam ->
-                                                    val dbEntity = updatedDbModels[cam.sha256]
-                                                    ApiResource(
-                                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                                        name = cam.name ?: "Unknown",
-                                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                                        hash = cam.sha256,
-                                                    )
-                                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                                .map(::resource)
+                                                .sortedBy { it.title.lowercase(Locale.getDefault()) }
 
                                         val loras =
                                             parsedApiModels
                                                 .filter { it.type == "lora" }
-                                                .map { cam ->
-                                                    val dbEntity = updatedDbModels[cam.sha256]
-                                                    ApiResource(
-                                                        title = dbEntity?.name ?: cam.name ?: "Unknown",
-                                                        name = cam.name ?: "Unknown",
-                                                        path = dbEntity?.previewImage ?: cam.filename ?: "",
-                                                        hash = cam.sha256,
-                                                    )
-                                                }.sortedBy { it.title.lowercase(Locale.getDefault()) }
+                                                .map(::resource)
+                                                .sortedBy { it.title.lowercase(Locale.getDefault()) }
 
                                         _models.value = checkpoints
                                         _availableLoras.value = loras
+                                        ForgeModelManager.setRealPersonLoras(loras.filter { it.realPerson }.map { it.name }.toSet())
                                         customApiSuccess = true
                                     }
                                 } catch (e: Exception) {
@@ -522,7 +554,9 @@ class ForgeNetworkManager(
                         modelsList.filter { item ->
                             val sha = item.sha256 ?: return@filter false
                             val entity = localDbModels[sha]
-                            entity == null || (entity.previewImage == null && entity.trainedWords.isEmpty())
+                            // previewImages is stored by every successful download since 1.3.0; without it the model
+                            // failed before, or was synced before 1.3.0 (without Civitai's image ratings and flags).
+                            entity == null || entity.previewImages == null
                         }
 
                     if (missingOrIncomplete.isEmpty()) {
@@ -545,12 +579,17 @@ class ForgeNetworkManager(
                         val sha256 = cam.sha256 ?: continue
                         var trainedWords = ""
                         var previewImage: String? = null
+                        var previewImages: String? = null
+                        var nsfw = false
+                        var realPerson = false
+                        val mode = getConfig().contentMode
 
-                        _civitaiSyncCurrentModel.value = civName
+                        // Model names can be explicit too: shown with the words the content mode hides masked.
+                        _civitaiSyncCurrentModel.value = ContentFilter.mask(civName, mode)
                         _civitaiSyncProgress.value = index to missingOrIncomplete.size
                         notifyCivitaiSync(
                             title = "Syncing Civitai models (${index + 1}/${missingOrIncomplete.size})",
-                            text = civName,
+                            text = ContentFilter.mask(civName, mode),
                             progress = index to missingOrIncomplete.size,
                         )
 
@@ -562,18 +601,24 @@ class ForgeNetworkManager(
                         }
 
                         try {
-                            val civRes = civitaiApi.getModelByHash(sha256)
+                            val civRes = civitaiApi(mode).getModelByHash(sha256)
                             if (civRes.isSuccessful) {
                                 val civBody = civRes.body()
                                 if (civBody?.model != null) civName = civBody.model.name ?: civName
                                 trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
-                                if (!civBody?.images.isNullOrEmpty()) {
-                                    previewImage =
-                                        civBody.images
-                                            .firstOrNull()
-                                            ?.url
-                                            ?.replace("original=true", "original=false")
-                                }
+                                // Every sample image with Civitai's rating; which one is shown depends on the content
+                                // mode at the time (ContentFilter.pickCivitaiPreview), so all of them are kept.
+                                val images =
+                                    civBody?.images.orEmpty().mapNotNull { image ->
+                                        image.url?.let {
+                                            val url = it.replace("original=true", "original=false")
+                                            CivitaiImage(url, image.nsfwLevel ?: 0, image.minor == true)
+                                        }
+                                    }
+                                previewImages = gson.toJson(images)
+                                previewImage = ContentFilter.pickCivitaiPreview(images, CONTENT_SFW)?.url
+                                nsfw = civBody?.model?.nsfw == true
+                                realPerson = civBody?.model?.poi == true
                                 _civitaiSyncLastResult.value = "Downloaded successfully"
                             } else {
                                 _civitaiSyncLastResult.value = "Error: HTTP ${civRes.code()}"
@@ -587,8 +632,13 @@ class ForgeNetworkManager(
                             failedCount++
                         }
 
-                        val updatedEntity = CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage)
-                        getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
+                        // A failed download keeps what an earlier sync stored (a model synced before 1.3.0 is
+                        // downloaded again, and its trigger words must not be lost to a network error).
+                        if (previewImages != null || localDbModels[sha256] == null) {
+                            val updatedEntity =
+                                CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage, previewImages, nsfw, realPerson)
+                            getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
+                        }
                         _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
                         doneCount++
                     }

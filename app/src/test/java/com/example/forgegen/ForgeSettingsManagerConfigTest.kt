@@ -39,6 +39,12 @@ class ForgeSettingsManagerConfigTest {
                 autoSaveSince = "2026-09-24 10:00:00",
                 saveOomLogs = true,
                 nowBarProgress = true,
+                contentMode = CONTENT_UNRESTRICTED,
+                hidePromptsInNotifications = false,
+                hideInRecents = true,
+                blockScreenshots = true,
+                savePrivately = true,
+                shareWithoutMetadata = true,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))
@@ -54,6 +60,14 @@ class ForgeSettingsManagerConfigTest {
         assertEquals(THEME_SYSTEM, ForgeSettingsManager.loadConfig("""{"themeMode":"Purple"}""").themeMode)
         assertEquals(THEME_LIGHT, ForgeSettingsManager.loadConfig("""{"themeMode":"Light","isDarkMode":true}""").themeMode)
         assertEquals("fresh install", THEME_SYSTEM, ForgeSettingsManager.loadConfig(null).themeMode)
+    }
+
+    @Test
+    fun `the content mode is SFW unless one of the three modes was chosen`() {
+        assertEquals("fresh install", CONTENT_SFW, ForgeSettingsManager.loadConfig(null).contentMode)
+        assertEquals("a config from before 1.3.0", CONTENT_SFW, ForgeSettingsManager.loadConfig("""{"timeout":10}""").contentMode)
+        assertEquals(CONTENT_SFW, ForgeSettingsManager.loadConfig("""{"contentMode":"Anything"}""").contentMode)
+        assertEquals(CONTENT_NSFW, ForgeSettingsManager.loadConfig("""{"contentMode":"NSFW"}""").contentMode)
     }
 
     @Test

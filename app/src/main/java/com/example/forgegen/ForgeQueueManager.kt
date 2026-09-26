@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Intent
 import android.util.Base64
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
@@ -121,6 +122,10 @@ object ForgeQueueManager {
 
     private val _sessionImages = MutableStateFlow<List<String>>(emptyList())
     val sessionImages: StateFlow<List<String>> = _sessionImages.asStateFlow()
+
+    // The prompt of each generated image of the session, for the content mode's blur (ContentFilter.rate).
+    private val _sessionImagePrompts = MutableStateFlow<Map<String, String>>(emptyMap())
+    val sessionImagePrompts: StateFlow<Map<String, String>> = _sessionImagePrompts.asStateFlow()
 
     private val _currentSessionIndex = MutableStateFlow(-1)
     val currentSessionIndex: StateFlow<Int> = _currentSessionIndex.asStateFlow()
@@ -317,14 +322,26 @@ object ForgeQueueManager {
         return result
     }
 
-    fun queueGeneration() {
-        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
-            val state = ForgeRepository.appState.value
-            val currentModel = ForgeRepository.selectedModel.value.ifEmpty { null }
-            val wildcards = ForgePromptManager.wildcards.value
+    // Jobs are added one at a time, in the order they were asked for.
+    private val queueingDispatcher = Dispatchers.IO.limitedParallelism(1)
 
+    fun queueGeneration() {
+        // Read when the button is pressed: the prompt may already be edited again when the job is built.
+        val state = ForgeRepository.appState.value
+        val currentModel = ForgeRepository.selectedModel.value.ifEmpty { null }
+        val wildcards = ForgePromptManager.wildcards.value
+        val contentMode = ForgeRepository.config.value.contentMode
+        val realPersonLoras = ForgeModelManager.realPersonLoras.value
+        ForgeRepository.repositoryScope.launch(queueingDispatcher) {
             val finalPositive = applyWildcards(state.positivePrompt, wildcards)
             val finalNegative = applyWildcards(state.negativePrompt, wildcards)
+
+            // The content mode (after the wildcards, which may add words): a refused prompt is not queued.
+            val verdict = ContentFilter.check(finalPositive, contentMode, realPersonLoras)
+            if (verdict != null) {
+                ForgeRepository.showToast("Not sent. ${verdict.reason} (${verdict.terms.joinToString(", ")})")
+                return@launch
+            }
 
             val payload =
                 Txt2ImgPayloadDto(
@@ -421,6 +438,7 @@ object ForgeQueueManager {
                     val currentList = _sessionImages.value.toMutableList()
                     val startIndex = currentList.size
                     currentList += answer.files.map { it.absolutePath }
+                    _sessionImagePrompts.update { prompts -> prompts + answer.files.associate { it.absolutePath to job.positivePrompt } }
 
                     val endIndex = currentList.size - 1
                     _sessionImages.value = currentList
@@ -766,16 +784,27 @@ object ForgeQueueManager {
         prompt: String,
         isQueueFinished: Boolean,
     ) {
+        val config = ForgeRepository.config.value
         val title = if (isQueueFinished) "Queue Completed" else "Batch Completed"
-        val text = if (isQueueFinished) "All generation jobs have finished." else "Finished: ${prompt.take(35)}..."
+        // The prompt only when the user wants it ("Hide Prompts in Notifications" off), with the words the content
+        // mode hides masked, and never on the lock screen (the public version there has no prompt).
+        val showPrompt = !isQueueFinished && !config.hidePromptsInNotifications
+        val generic = if (isQueueFinished) "All generation jobs have finished." else "A batch has finished."
+        val text = if (showPrompt) "Finished: ${ContentFilter.mask(prompt.take(35), config.contentMode)}..." else generic
         val builder = ForgeNotifications.builder(ForgeNotifications.CHANNEL_RESULTS) ?: return
-        val notification =
-            builder
-                .setContentTitle(title)
-                .setContentText(text)
-                .setAutoCancel(true)
-                .build()
-        ForgeNotifications.post(System.currentTimeMillis().toInt(), notification)
+        val lockScreen =
+            ForgeNotifications
+                .builder(ForgeNotifications.CHANNEL_RESULTS)
+                ?.setContentTitle(title)
+                ?.setContentText(generic)
+                ?.build()
+        builder
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        if (lockScreen != null) builder.setPublicVersion(lockScreen)
+        ForgeNotifications.post(System.currentTimeMillis().toInt(), builder.build())
     }
 
     /** A failed job needs the user, who may not be looking at the app; one alert, replaced by the next. */
@@ -976,7 +1005,7 @@ object ForgeQueueManager {
                 DeviceImages.save(application, "Gen_${System.currentTimeMillis()}.png") { out ->
                     file.inputStream().use { it.copyTo(out) }
                 }
-                ForgeRepository.showToast("Saved to Pictures/ForgeGen")
+                ForgeRepository.showToast("Saved to ${DeviceImages.locationName()}")
             } catch (e: Exception) {
                 ForgeRepository.showToast("Download Failed: ${e.message}")
             }

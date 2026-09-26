@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
@@ -114,6 +115,18 @@ object ForgeGalleryManager {
     val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
 
     private val indexedImages = MutableStateFlow<List<GalleryImageEntity>>(emptyList())
+
+    // Prompts of the indexed images, for the content mode's blur; images without generation data are left out.
+    val galleryPrompts: StateFlow<Map<String, String>> =
+        indexedImages
+            .map { images -> images.filter { it.positivePrompt.isNotBlank() }.associate { it.fullpath to it.positivePrompt } }
+            .stateIn(managerScope, SharingStarted.Eagerly, emptyMap())
+
+    // Images (server paths or session files) the user chose to show although the content mode blurs them.
+    private val _revealedImages = MutableStateFlow<Set<String>>(emptySet())
+    val revealedImages: StateFlow<Set<String>> = _revealedImages.asStateFlow()
+
+    fun revealImage(path: String) = _revealedImages.update { it + path }
 
     private val _indexedImageCount = MutableStateFlow(0)
     val indexedImageCount: StateFlow<Int> = _indexedImageCount.asStateFlow()
@@ -968,11 +981,11 @@ object ForgeGalleryManager {
         try {
             val name = DeviceImages.nameFor(item.fullpath)
             if (name in DeviceImages.savedNames(application)) {
-                if (!quietIfSaved) ForgeRepository.showToast("Already saved in Pictures/ForgeGen")
+                if (!quietIfSaved) ForgeRepository.showToast("Already saved in ${DeviceImages.locationName()}")
                 return
             }
             saveServerImage(item, name)
-            ForgeRepository.showToast("Saved to Pictures/ForgeGen")
+            ForgeRepository.showToast("Saved to ${DeviceImages.locationName()}")
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             ForgeRepository.showToast("Download Failed: ${e.message}")
