@@ -18,11 +18,9 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /* ============================================================================
  * NETWORK MANAGER
@@ -38,9 +36,9 @@ class ForgeNetworkManager(
     private val TAG = "ForgeNetworkManager"
     private val gson = Gson()
 
-    // --- HTTP CLIENTS AND RETROFIT APIS ---
-    var client: OkHttpClient = OkHttpClient()
-        private set
+    // --- HTTP CLIENT AND RETROFIT API ---
+    // The app's one client (ForgeSettingsManager.createClient), shared with the queue and the image loader.
+    val client: OkHttpClient get() = ForgeSettingsManager.client
 
     var forgeApi: ForgeApi? = null
         private set
@@ -52,11 +50,9 @@ class ForgeNetworkManager(
             var currentUrl = ""
             var currentTimeout = -1
             ForgeRepository.config.collect { config ->
+                // ForgeSettingsManager replaces the client before it publishes a new timeout.
                 val timeoutChanged = currentTimeout != config.timeout
-                if (timeoutChanged) {
-                    currentTimeout = config.timeout
-                    initClient(currentTimeout)
-                }
+                if (timeoutChanged) currentTimeout = config.timeout
                 if (currentUrl != config.apiUrl) {
                     currentUrl = config.apiUrl
                     rebuildForgeApi(currentUrl)
@@ -109,67 +105,6 @@ class ForgeNetworkManager(
 
     private val _galleryApiPrefix = MutableStateFlow("infinite_image_browsing")
     val galleryApiPrefix: StateFlow<String> = _galleryApiPrefix.asStateFlow()
-
-    fun initClient(timeoutSeconds: Int) {
-        val logging =
-            HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            }
-        // Image downloads are logged without their body: logging a body buffers all of it, so reading only the
-        // start of a PNG (gallery metadata) downloaded the whole file while logging was on.
-        val headerLogging =
-            HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.HEADERS
-            }
-        val conditionalLogger =
-            okhttp3.Interceptor { chain ->
-                val request = chain.request()
-                val path = request.url.encodedPath
-                val skipLogging = path.contains("progress") || path.contains("memory") || !getConfig().enableLogging
-                val isImage = path.endsWith("/file") || path.endsWith("/image-thumbnail")
-                when {
-                    skipLogging -> chain.proceed(request)
-                    isImage -> headerLogging.intercept(chain)
-                    else -> logging.intercept(chain)
-                }
-            }
-
-        client =
-            OkHttpClient
-                .Builder()
-                .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
-                .addInterceptor(conditionalLogger)
-                .addInterceptor { chain ->
-                    val originalRequest = chain.request()
-                    val requestBuilder = originalRequest.newBuilder()
-
-                    val path = originalRequest.url.encodedPath
-                    val isGalleryCall =
-                        path.contains("infinite_image_browsing") ||
-                            path.contains("inifinite-image-gallery") ||
-                            path.contains("infinite-image-gallery")
-
-                    if (isGalleryCall) {
-                        requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                    }
-                    try {
-                        val response = chain.proceed(requestBuilder.build())
-                        if (!response.isSuccessful) {
-                            try {
-                                val bodyStr = response.peekBody(Long.MAX_VALUE).string()
-                                Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url}\nBody: $bodyStr")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url} (Could not read body)")
-                            }
-                        }
-                        response
-                    } catch (e: Exception) {
-                        Log.e(TAG, "API CALL FAILED: ${e.message}", e)
-                        throw e
-                    }
-                }.build()
-    }
 
     fun rebuildForgeApi(url: String) {
         var cleanUrl = url.trimEnd('/')

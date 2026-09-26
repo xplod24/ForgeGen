@@ -9,11 +9,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -68,6 +69,13 @@ suspend fun Call.awaitResponse(): Response =
             }
         }
     }
+
+/**
+ * The app and the server: CONNECTED, SEARCHING (the server stopped answering or never answered; the app tries every
+ * 2 s for a minute) or OFFLINE (the minute passed; nothing is sent until the user asks for another try, the app
+ * returns to the screen or the phone's network comes back). An active queue never goes OFFLINE: it keeps trying.
+ */
+enum class ServerConnection { CONNECTED, SEARCHING, OFFLINE }
 
 data class ActiveLora(
     val name: String,
@@ -125,6 +133,13 @@ object ForgeRepository {
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
     private val _isAppInForeground = MutableStateFlow(true)
+
+    private val _connection = MutableStateFlow(ServerConnection.SEARCHING)
+    val connection: StateFlow<ServerConnection> = _connection.asStateFlow()
+
+    // When the current search gives up (ms since 1970), for the countdown on screen.
+    private val _searchEndsAt = MutableStateFlow(0L)
+    val searchEndsAt: StateFlow<Long> = _searchEndsAt.asStateFlow()
 
     private val _pingMs = MutableStateFlow(0L)
     val pingMs: StateFlow<Long> = _pingMs.asStateFlow()
@@ -224,6 +239,12 @@ object ForgeRepository {
 
     fun setAppForegroundState(isForeground: Boolean) {
         _isAppInForeground.value = isForeground
+        if (isForeground) {
+            reconnect() // back on screen: the server may be back too (a new minute of tries when it is not connected)
+            wakePing.trySend(Unit)
+        } else {
+            ForgeSettingsManager.flushState()
+        }
     }
 
     fun loadPreset(name: String) = ForgeSettingsManager.loadPreset(name)
@@ -300,6 +321,14 @@ object ForgeRepository {
     private var pingJob: kotlinx.coroutines.Job? = null
     private const val MEMORY_STATS_EVERY = 5
 
+    // How long the app looks for a server that does not answer, and how often it asks meanwhile (shorter in tests).
+    @Volatile internal var searchWindowMs = 60_000L
+
+    @Volatile internal var searchPingMs = 2_000L
+
+    // Ends a wait between pings early (back on screen, another try asked for).
+    private val wakePing = Channel<Unit>(Channel.CONFLATED)
+
     // Finished pings, answered or not, so the start can wait for the server's first answer.
     private val pingRounds = MutableStateFlow(0)
 
@@ -309,10 +338,30 @@ object ForgeRepository {
         return _isConnected.value
     }
 
+    /** Another minute of tries: after "Retry", a new address, a return to the screen or the network coming back. */
+    fun reconnect() {
+        if (_isConnected.value) return
+        startSearch()
+        wakePing.trySend(Unit)
+    }
+
+    private fun startSearch() {
+        _searchEndsAt.value = System.currentTimeMillis() + searchWindowMs
+        _connection.value = ServerConnection.SEARCHING
+    }
+
+    /** Jobs are waiting or running: the queue needs the server, so it is never given up. */
+    private fun queueNeedsServer() = ForgeQueueManager.isQueueActive.value
+
     private fun connectionFailed(failCount: Int) {
         _isConnected.value = false
         _isServerBusy.value = false
         _vramUsage.value = null
+        when {
+            _connection.value == ServerConnection.CONNECTED -> startSearch() // lost: a minute of tries starts now
+            System.currentTimeMillis() >= _searchEndsAt.value && !queueNeedsServer() ->
+                _connection.value = ServerConnection.OFFLINE
+        }
         // A running job shows its own status (it waits for the server); otherwise say it now. It used to appear
         // only after as many failed pings as the timeout had seconds, which with the backoff took about 8 minutes.
         if (failCount >= 1 && !ForgeQueueManager.isGenerating.value) {
@@ -324,12 +373,31 @@ object ForgeRepository {
         startBackgroundPing()
     }
 
+    /**
+     * Waits until a ping is useful: not OFFLINE (unless the queue needs the server), and on screen or with work
+     * going on. In the background with nothing to do the app asked the server every 10 s for as long as it lived.
+     */
+    private suspend fun awaitPingNeeded() {
+        combine(
+            _connection,
+            _isAppInForeground,
+            ForgeQueueManager.isQueueActive,
+            ForgeQueueManager.isGenerating,
+            _isServerBusy,
+        ) { connection, foreground, queueActive, generating, busy ->
+            val working = queueActive || generating || busy
+            (connection != ServerConnection.OFFLINE || working) && (foreground || working)
+        }.first { it }
+    }
+
     private fun startBackgroundPing() {
         pingJob?.cancel()
+        if (!_isConnected.value) startSearch()
         pingJob = repositoryScope.launch(Dispatchers.IO) {
             var failCount = 0
             var pingCount = 0
             while (isActive) {
+                awaitPingNeeded()
                 try {
                     if (forgeApi != null) {
                         val start = System.currentTimeMillis()
@@ -340,6 +408,7 @@ object ForgeRepository {
                         if (response?.isSuccessful == true) {
                             _pingMs.value = System.currentTimeMillis() - start
                             _isConnected.value = true
+                            _connection.value = ServerConnection.CONNECTED
                             failCount = 0
 
                             val progressData = response.body() ?: ProgressResponseDto()
@@ -370,9 +439,7 @@ object ForgeRepository {
                                 ForgeQueueManager.updateStatusText("Ready")
                             }
                         } else if (response?.code() == 401 || response?.code() == 403) {
-                            _isConnected.value = false
-                            _isServerBusy.value = false
-                            failCount = 0
+                            connectionFailed(failCount) // reachable, but of no use without access; not backed off
                             ForgeQueueManager.updateStatusText("Authentication Required.")
                         } else {
                             // E.g. a proxy answering 502 while Forge is down: as unreachable as no answer at all
@@ -381,7 +448,7 @@ object ForgeRepository {
                         }
 
                         // RAM/VRAM change slowly: every 5th ping instead of a second request each second.
-                        if (failCount == 0 && pingCount++ % MEMORY_STATS_EVERY == 0) {
+                        if (failCount == 0 && _isConnected.value && pingCount++ % MEMORY_STATS_EVERY == 0) {
                             try {
                                 val memRes = forgeApi?.getMemoryStats()
                                 if (memRes?.isSuccessful == true) {
@@ -407,28 +474,44 @@ object ForgeRepository {
                 }
                 pingRounds.update { it + 1 }
 
-                val isForeground = _isAppInForeground.value
-                val isActivelyGenerating = ForgeQueueManager.isGenerating.value || _isServerBusy.value
-
-                val baseInterval = if (isForeground || isActivelyGenerating) 1000L else 10000L
-                val finalDelay =
-                    if (failCount > 0) {
-                        val backoff =
-                            when (failCount) {
-                                1 -> 5000L
-                                2 -> 10000L
-                                3 -> 30000L
-                                else -> 60000L
-                            }
-                        maxOf(baseInterval, backoff)
-                    } else {
-                        baseInterval
-                    }
-
-                delay(finalDelay)
+                val delayMs =
+                    pingDelay(
+                        connected = _isConnected.value,
+                        foreground = _isAppInForeground.value,
+                        generating = ForgeQueueManager.isGenerating.value || _isServerBusy.value,
+                        searching = System.currentTimeMillis() < _searchEndsAt.value,
+                        failCount = failCount,
+                    )
+                withTimeoutOrNull(delayMs) { wakePing.receive() }
             }
         }
     }
+
+    /**
+     * The wait before the next ping. Connected: every second while images are generated (progress and preview),
+     * every 2 s on screen, every 10 s in the background (only while the queue works). Not connected: every
+     * [searchPingMs] during the minute of tries, then (only an active queue keeps trying) 5 s, 10 s, 30 s, 1 min.
+     */
+    internal fun pingDelay(
+        connected: Boolean,
+        foreground: Boolean,
+        generating: Boolean,
+        searching: Boolean,
+        failCount: Int,
+    ): Long =
+        when {
+            connected && generating -> 1_000L
+            connected && foreground -> 2_000L
+            connected -> 10_000L
+            searching -> searchPingMs
+            else ->
+                when (failCount) {
+                    0, 1 -> 5_000L
+                    2 -> 10_000L
+                    3 -> 30_000L
+                    else -> 60_000L
+                }
+        }
 
     fun appendLora(name: String) {
         val current = appState.value.positivePrompt

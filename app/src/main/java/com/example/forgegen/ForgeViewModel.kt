@@ -199,18 +199,30 @@ class ForgeViewModel(
         }
     }
 
-    // A welcome screen recreated meanwhile (e.g. rotation) waits for the same start instead of beginning a second one.
+    // A screen recreated meanwhile (e.g. rotation) waits for the same start instead of beginning a second one.
     private var initialization: Deferred<Unit>? = null
 
+    // The server's part of the start (its first answer and its lists), which the screen does not wait for.
+    private var serverCheck: Deferred<Unit>? = null
+
+    /** True once the app's own data is loaded (settings, queue, gallery index); the splash stays until then. */
+    val isStarted: StateFlow<Boolean> = ForgeSettingsManager.isInitialized
+
     /**
-     * Starts every part of the app and returns when all of them are ready to work; only then the status says
-     * "Ready". Each step returns once its data is loaded, the server last: its first answer and, when it is
-     * reachable, its lists (models, LoRAs, samplers...). An unreachable server does not stop the start (its
-     * address may be what needs changing), but the status then says so instead of "Ready".
+     * Starts every part of the app and returns when the phone's part is ready to work: database, settings,
+     * wildcards, queue and gallery index. The server is checked after that without holding the start (since 2.0.0
+     * the main screen shows at once and the top bar tells how the connection goes); its status ends with "Ready"
+     * once its lists (models, LoRAs, samplers...) are loaded, or says why not.
      */
     suspend fun initializeApp() {
         val running = initialization ?: viewModelScope.async { startApp() }.also { initialization = it }
         running.await()
+    }
+
+    /** Returns once the server's part of the start has finished too (its final status is set). */
+    suspend fun awaitServerCheck() {
+        initializeApp()
+        serverCheck?.await()
     }
 
     private suspend fun startApp() {
@@ -229,9 +241,8 @@ class ForgeViewModel(
         updateManager.checkForUpdates(manual = false)
         withContext(Dispatchers.IO) { checkWhatsNew() }
 
-        // The server, then ready
-        awaitServer()
         ForgeSettingsManager.setInitialized()
+        serverCheck = viewModelScope.async { awaitServer() }
     }
 
     /** Database, settings, wildcards, API clients and the app-wide managers, each with its saved data loaded. */
@@ -288,6 +299,11 @@ class ForgeViewModel(
 
     val isConnected: StateFlow<Boolean> = ForgeRepository.isConnected
     val pingMs: StateFlow<Long> = ForgeRepository.pingMs
+    val connection: StateFlow<ServerConnection> = ForgeRepository.connection
+    val searchEndsAt: StateFlow<Long> = ForgeRepository.searchEndsAt
+
+    /** Another minute of tries to reach the server ("Retry", the network is back). */
+    fun reconnect() = ForgeRepository.reconnect()
 
     val isServerBusy: StateFlow<Boolean> = ForgeRepository.isServerBusy
     val vramUsage: StateFlow<String?> = ForgeRepository.vramUsage
@@ -342,7 +358,7 @@ class ForgeViewModel(
     val completedQueueItems: StateFlow<Int> = ForgeQueueManager.completedQueueItems
     val sessionImages: StateFlow<List<String>> = ForgeQueueManager.sessionImages
     val currentSessionIndex: StateFlow<Int> = ForgeQueueManager.currentSessionIndex
-    val livePreviewImage: StateFlow<String?> = ForgeQueueManager.livePreviewImage
+    val livePreviewImage: StateFlow<LivePreview?> = ForgeQueueManager.livePreviewImage
     val isShowingGridPreview: StateFlow<Boolean> = ForgeQueueManager.isShowingGridPreview
     val currentBatchStartIndex: StateFlow<Int> = ForgeQueueManager.currentBatchStartIndex
     val currentBatchEndIndex: StateFlow<Int> = ForgeQueueManager.currentBatchEndIndex

@@ -57,7 +57,7 @@ fun MainScreen(
 
     val sessionImages by viewModel.sessionImages.collectAsStateWithLifecycle()
     val currentSessionIndex by viewModel.currentSessionIndex.collectAsStateWithLifecycle()
-    val livePreviewBase64 by viewModel.livePreviewImage.collectAsStateWithLifecycle()
+    val livePreview by viewModel.livePreviewImage.collectAsStateWithLifecycle()
     val isShowingGridPreview by viewModel.isShowingGridPreview.collectAsStateWithLifecycle()
 
     val batchStart by viewModel.currentBatchStartIndex.collectAsStateWithLifecycle()
@@ -219,7 +219,7 @@ fun MainScreen(
                     PreviewSection(
                         isGenerating = isGenerating,
 
-                        livePreviewBase64 = livePreviewBase64,
+                        livePreview = livePreview,
                         isShowingGridPreview = isShowingGridPreview,
                         sessionImages = sessionImages,
                         batchStart = batchStart,

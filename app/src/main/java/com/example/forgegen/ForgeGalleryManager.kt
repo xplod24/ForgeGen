@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.Uri
-import android.util.Base64
 import android.util.Log
 import com.example.forgegen.ui.components.IndicatorState
 import com.google.gson.Gson
@@ -1088,15 +1087,10 @@ object ForgeGalleryManager {
                     val imageUrl = getGalleryImageUrl(item)
                     if (imageUrl.isEmpty()) throw Exception("Invalid URL")
 
-                    val imgReq = Request.Builder().url(imageUrl).build()
-                    val bytes =
-                        networkManager.client.newCall(imgReq).awaitResponse().use { res ->
-                            if (!res.isSuccessful) throw Exception("No data")
-                            res.body.bytes()
-                        }
-                    val infoStr = bytes.inputStream().use { extractPngParameters(it) }
+                    val file = downloadToCache(item) ?: throw Exception("No data")
+                    val infoStr = file.inputStream().use { extractPngParameters(it) }
 
-                    ForgeQueueManager.saveRecoveredImageToCache(bytes)
+                    ForgeQueueManager.showRecoveredImage(file)
                     withContext(Dispatchers.Main) { parseAndApplyPngInfo(infoStr) }
                     _isRestoringPrompt.value = IndicatorState.SUCCESS
                 } catch (e: Exception) {
@@ -1109,7 +1103,28 @@ object ForgeGalleryManager {
             }
     }
 
-    private suspend fun fetchLastGeneratedImageInfo(): String? {
+    /**
+     * Streams [item] from the server into a new cache file (the whole image used to be held in memory, and
+     * encoded again as text to be shown); null when the server did not send it.
+     */
+    private suspend fun downloadToCache(item: GalleryItem): java.io.File? {
+        val imageUrl = getGalleryImageUrl(item)
+        if (imageUrl.isEmpty()) return null
+        val file = ForgeQueueManager.newRecoveredImageFile()
+        networkManager.client.newCall(Request.Builder().url(imageUrl).build()).awaitResponse().use { res ->
+            if (!res.isSuccessful) return null
+            try {
+                file.outputStream().use { out -> res.body.byteStream().use { it.copyTo(out) } }
+            } catch (e: Exception) {
+                file.delete()
+                throw e
+            }
+        }
+        return file
+    }
+
+    /** The newest image in the gallery (today's folder, else the newest folder with images, else the top folder). */
+    private suspend fun findLastGeneratedImage(): GalleryItem? {
         val rootPath = ForgeRepository.config.value.galleryPath
 
         suspend fun fetchFiles(folder: String): List<GalleryItem> {
@@ -1151,31 +1166,23 @@ object ForgeGalleryManager {
         }
         if (candidateImages.isEmpty()) candidateImages.addAll(rootItems.filter { !it.isDir })
 
-        val targetFile =
-            candidateImages.maxWithOrNull(
-                compareBy<GalleryItem> { item ->
-                    val match = "^(\\d+)-".toRegex().find(item.name)
-                    match?.groupValues?.get(1)?.toLongOrNull() ?: -1L
-                }.thenBy { item ->
-                    item.createdTime?.toDoubleOrNull() ?: item.date?.toDoubleOrNull() ?: 0.0
-                },
-            )
-        if (targetFile != null) {
-            val imageUrl = getGalleryImageUrl(targetFile)
-            if (imageUrl.isNotEmpty()) {
-                val imgReq = Request.Builder().url(imageUrl).build()
-                val bytes =
-                    networkManager.client.newCall(imgReq).awaitResponse().use { res ->
-                        if (res.isSuccessful) res.body.bytes() else null
-                    }
-                if (bytes != null) {
-                    val infoStr = bytes.inputStream().use { extractPngParameters(it) }
-                    ForgeQueueManager.saveRecoveredImageToCache(bytes)
-                    return infoStr
-                }
-            }
-        }
-        return null
+        return candidateImages.maxWithOrNull(
+            compareBy<GalleryItem> { item ->
+                val match = "^(\\d+)-".toRegex().find(item.name)
+                match?.groupValues?.get(1)?.toLongOrNull() ?: -1L
+            }.thenBy { item ->
+                item.createdTime?.toDoubleOrNull() ?: item.date?.toDoubleOrNull() ?: 0.0
+            },
+        )
+    }
+
+    /** The generation data of the newest gallery image, which is also shown as the session. */
+    private suspend fun fetchLastGeneratedImageInfo(): String? {
+        val target = findLastGeneratedImage() ?: return null
+        val file = downloadToCache(target) ?: return null
+        val infoStr = file.inputStream().use { extractPngParameters(it) }
+        ForgeQueueManager.showRecoveredImage(file)
+        return infoStr
     }
 
     fun recoverLastPrompt() {
@@ -1191,12 +1198,6 @@ object ForgeGalleryManager {
                     // 1. Fetch from server gallery
                     val galleryInfoStr = fetchLastGeneratedImageInfo()
                     if (!galleryInfoStr.isNullOrBlank()) {
-                        val sessionImage = ForgeQueueManager.sessionImages.value.firstOrNull()
-                        if (sessionImage != null) {
-                            val bytes = java.io.File(sessionImage).readBytes()
-                            val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                            ForgeQueueManager.setLivePreviewImage(base64Str)
-                        }
                         withContext(Dispatchers.Main) { parseAndApplyPngInfo(galleryInfoStr) }
                         _isRestoringPrompt.value = IndicatorState.SUCCESS
                         return@launch
@@ -1207,10 +1208,9 @@ object ForgeGalleryManager {
                     val localImgFile = java.io.File(application.cacheDir, "last_generated_image.png")
 
                     if (localInfoStr != null && localImgFile.exists()) {
-                        val bytes = localImgFile.readBytes()
-                        ForgeQueueManager.saveRecoveredImageToCache(bytes)
-                        val base64Str = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        ForgeQueueManager.setLivePreviewImage(base64Str)
+                        val copy = ForgeQueueManager.newRecoveredImageFile()
+                        localImgFile.copyTo(copy, overwrite = true)
+                        ForgeQueueManager.showRecoveredImage(copy)
                         withContext(Dispatchers.Main) { parseAndApplyPngInfo(localInfoStr) }
                         _isRestoringPrompt.value = IndicatorState.SUCCESS
                         return@launch
@@ -1264,7 +1264,12 @@ object ForgeGalleryManager {
     fun recoverLastSeed() {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
-                val infoStr = fetchLastGeneratedImageInfo()
+                // The server reads the seed from the image; only an old gallery extension needs the image itself.
+                val target = findLastGeneratedImage()
+                val infoStr =
+                    target?.let { item ->
+                        serverGenInfo(item.fullpath) ?: infoFromImageFile(item)
+                    }
                 if (infoStr != null) {
                     val foundSeed = Infotext.parse(infoStr).seed.toLongOrNull()
                     if (foundSeed != null) {

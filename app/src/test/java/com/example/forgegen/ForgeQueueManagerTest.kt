@@ -1,6 +1,7 @@
 package com.example.forgegen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 /**
@@ -13,15 +14,21 @@ class ForgeQueueManagerTest {
         // Arrange
         val expectedProgress = 0.85f
         val expectedEta = 5.2
-        val expectedImage = "fake_base64_image_data"
+        val imageBytes = byteArrayOf(1, 2, 3, 4, 5)
+        val expectedImage = java.util.Base64.getEncoder().encodeToString(imageBytes)
 
         // Act
         ForgeQueueManager.updateExternalProgress(expectedProgress, expectedEta, expectedImage)
+        val preview = ForgeQueueManager.livePreviewImage.value
 
         // Assert
         assertEquals("Progress should match the updated value", expectedProgress, ForgeQueueManager.progress.value)
         assertEquals("ETA should match the updated value", expectedEta, ForgeQueueManager.currentEta.value, 0.0)
-        assertEquals("Live preview image should match", expectedImage, ForgeQueueManager.livePreviewImage.value)
+        assertEquals("Live preview image should be decoded", imageBytes.toList(), preview?.bytes?.toList())
+
+        // The same image sent again is not decoded again.
+        ForgeQueueManager.updateExternalProgress(0.9f, 4.0, expectedImage)
+        assertSame(preview, ForgeQueueManager.livePreviewImage.value)
     }
 
     @Test

@@ -11,6 +11,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -95,6 +98,13 @@ object ForgeSettingsManager {
     private val _appState = MutableStateFlow(AppState())
     val appState: StateFlow<AppState> = _appState.asStateFlow()
 
+    // The screen's state changes with every typed character and slider step; it is written once the changes pause
+    // (and when the app leaves the screen, see flushState) instead of once per change.
+    private const val STATE_SAVE_DELAY_MS = 500L
+    private val stateSaves = Channel<Unit>(Channel.CONFLATED)
+
+    @Volatile private var stateDirty = false
+
     // --- Prompt history ---
     private val _promptHistory = MutableStateFlow<List<PromptHistoryItem>>(emptyList())
     val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
@@ -150,6 +160,7 @@ object ForgeSettingsManager {
         _pinnedImages.value = loadedPinnedImages
 
         client = createClient(loadedConfig.timeout)
+        startStateWriter()
 
         return Triple(loadedConfig, loadedState, loadedHistory)
     }
@@ -159,27 +170,56 @@ object ForgeSettingsManager {
     // (default 10 s) must not apply to it. Connection loss is still detected by connectTimeout and the ping loop.
     private const val GENERATION_READ_TIMEOUT_MINUTES = 120L
 
-    fun createClient(timeoutSeconds: Int): OkHttpClient =
-        OkHttpClient
+    // The ping gives up on an unreachable server quickly, so it can try every 2 s; other calls keep the user's timeout.
+    private const val PING_CONNECT_TIMEOUT_SECONDS = 3
+
+    // An error answer is logged up to this size; a bigger one used to be read into memory whole.
+    private const val MAX_LOGGED_ERROR_BYTES = 64L * 1024
+
+    // Calls to the gallery extension (Infinite Image Browsing) under each name it was published with.
+    private val GALLERY_PREFIXES = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
+
+    fun isPingPath(path: String) = path.endsWith("sdapi/v1/progress") || path.endsWith("sdapi/v1/memory")
+
+    /**
+     * The one HTTP client of the app (its pool and threads are shared by every API, the image loader included):
+     * timeouts, the gallery cookie, the optional HTTP log ("HTTP Logging" in the debug panel) and error logging.
+     */
+    fun createClient(timeoutSeconds: Int): OkHttpClient {
+        val bodyLogging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
+        // Images and generations are logged without their body: logging a body buffers all of it (a batch of
+        // images as text), and reading only the start of a PNG (gallery metadata) would download the whole file.
+        val headerLogging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.HEADERS }
+        return OkHttpClient
             .Builder()
             .connectTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .readTimeout(timeoutSeconds.toLong(), TimeUnit.SECONDS)
             .addInterceptor { chain ->
                 val request = chain.request()
-                if (request.url.encodedPath.endsWith("sdapi/v1/txt2img")) {
-                    chain
-                        .withReadTimeout(GENERATION_READ_TIMEOUT_MINUTES.toInt(), TimeUnit.MINUTES)
-                        .proceed(request)
-                } else {
-                    chain.proceed(request)
+                val path = request.url.encodedPath
+                when {
+                    path.endsWith("sdapi/v1/txt2img") ->
+                        chain.withReadTimeout(GENERATION_READ_TIMEOUT_MINUTES.toInt(), TimeUnit.MINUTES).proceed(request)
+                    isPingPath(path) ->
+                        chain
+                            .withConnectTimeout(minOf(timeoutSeconds, PING_CONNECT_TIMEOUT_SECONDS), TimeUnit.SECONDS)
+                            .proceed(request)
+                    else -> chain.proceed(request)
+                }
+            }.addInterceptor { chain ->
+                val request = chain.request()
+                val path = request.url.encodedPath
+                val isImage = path.endsWith("/file") || path.endsWith("/image-thumbnail") || path.endsWith("sdapi/v1/txt2img")
+                when {
+                    !_config.value.enableLogging || isPingPath(path) -> chain.proceed(request)
+                    isImage -> headerLogging.intercept(chain)
+                    else -> bodyLogging.intercept(chain)
                 }
             }.addInterceptor { chain ->
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
-
-                val isGalleryCall = originalRequest.url.encodedPath.contains("infinite_image_browsing")
-
-                if (isGalleryCall) {
+                val path = originalRequest.url.encodedPath
+                if (GALLERY_PREFIXES.any { path.contains(it) }) {
                     requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
                 }
 
@@ -187,7 +227,7 @@ object ForgeSettingsManager {
                     val response = chain.proceed(requestBuilder.build())
                     if (!response.isSuccessful) {
                         try {
-                            val bodyStr = response.peekBody(Long.MAX_VALUE).string()
+                            val bodyStr = response.peekBody(MAX_LOGGED_ERROR_BYTES).string()
                             Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url}\nBody: $bodyStr")
                         } catch (e: Exception) {
                             Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url} (Could not read body)")
@@ -199,6 +239,7 @@ object ForgeSettingsManager {
                     throw e
                 }
             }.build()
+    }
 
     // --- Theme ---
     // The theme is also kept in SharedPreferences, which can be read at once: the settings come from the database
@@ -311,19 +352,22 @@ object ForgeSettingsManager {
                 timeout = newConfig.timeout.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS),
             )
 
+        // Before the new config is published: whoever rebuilds its API on a timeout change must get the new client.
+        if (updatedConfig.timeout != oldTimeout) {
+            client =
+                client
+                    .newBuilder()
+                    .connectTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
+                    .readTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
+                    .build()
+        }
+
         _config.value = updatedConfig
         cacheThemeMode(updatedConfig.themeMode)
 
         settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(CONFIG_KEY, gson.toJson(updatedConfig)))
         }
-
-        client =
-            client
-                .newBuilder()
-                .connectTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
-                .readTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
-                .build()
 
         if (cleanUrl != oldUrl || updatedConfig.timeout != oldTimeout) {
             onApiUrlChanged?.invoke(cleanUrl)
@@ -351,11 +395,34 @@ object ForgeSettingsManager {
     }
 
     fun updateState(update: (AppState) -> AppState) {
-        val newState = update(_appState.value)
-        _appState.value = newState
+        _appState.value = update(_appState.value)
+        requestStateSave()
+    }
+
+    private fun requestStateSave() {
+        stateDirty = true
+        stateSaves.trySend(Unit)
+    }
+
+    private fun startStateWriter() {
         settingsScope.launch(dbWriteDispatcher) {
-            db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(newState)))
+            for (request in stateSaves) {
+                delay(STATE_SAVE_DELAY_MS)
+                writeState()
+            }
         }
+    }
+
+    /** Writes a state change that is still waiting; called when the app leaves the screen. */
+    fun flushState() {
+        if (!::db.isInitialized || !stateDirty) return
+        settingsScope.launch(dbWriteDispatcher) { writeState() }
+    }
+
+    private suspend fun writeState() {
+        if (!stateDirty) return
+        stateDirty = false // before reading the state: a change made meanwhile marks it again and is written after
+        db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
     }
 
     // --- Defaults ---
@@ -383,9 +450,7 @@ object ForgeSettingsManager {
 
     fun resetToDefaults() {
         _appState.value = _config.value.defaultState.copy()
-        settingsScope.launch(dbWriteDispatcher) {
-            db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
-        }
+        requestStateSave()
         showSnackbar("Reset to Defaults")
     }
 
@@ -450,9 +515,7 @@ object ForgeSettingsManager {
                 } else {
                     preset.state.copy(positivePrompt = current.positivePrompt, negativePrompt = current.negativePrompt)
                 }
-            settingsScope.launch(dbWriteDispatcher) {
-                db.appSettingDao().putSetting(AppSettingEntity(STATE_KEY, gson.toJson(_appState.value)))
-            }
+            requestStateSave()
             showSnackbar("Loaded: $name")
         }
     }

@@ -6,7 +6,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -52,6 +51,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -698,7 +698,7 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
 @Composable
 fun PreviewSection(
     isGenerating: Boolean,
-    livePreviewBase64: String?,
+    livePreview: LivePreview?,
     isShowingGridPreview: Boolean,
     sessionImages: List<String>,
     batchStart: Int,
@@ -725,23 +725,32 @@ fun PreviewSection(
         val blurModifier = if (isBlurred) Modifier.blur(25.dp) else Modifier
 
         Box(modifier = Modifier.fillMaxSize().then(blurModifier)) {
-            if (isGenerating && livePreviewBase64.isNullOrEmpty()) {
+            if (isGenerating && livePreview == null) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text("Generating...", color = Color.LightGray, fontSize = 12.sp)
                 }
-            } else if (isGenerating && !livePreviewBase64.isNullOrEmpty()) {
-                val previewBitmap by produceState<Bitmap?>(initialValue = null, livePreviewBase64) {
-                    value =
+            } else if (isGenerating && livePreview != null) {
+                // Decoded no bigger than this box (the server may send the preview in full size); the previous
+                // image stays until the next one is ready, so the preview does not flicker.
+                val boxPx = with(LocalDensity.current) { 240.dp.roundToPx() }
+                var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
+                LaunchedEffect(livePreview) {
+                    val preview = livePreview
+                    previewBitmap =
                         withContext(Dispatchers.Default) {
                             try {
-                                val bytes = Base64.decode(livePreviewBase64, Base64.DEFAULT)
-                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                                BitmapFactory.decodeByteArray(preview.bytes, 0, preview.bytes.size, bounds)
+                                var sample = 1
+                                while (bounds.outHeight / (sample * 2) >= boxPx && bounds.outWidth / (sample * 2) >= boxPx) sample *= 2
+                                val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                                BitmapFactory.decodeByteArray(preview.bytes, 0, preview.bytes.size, options)
                             } catch (_: Exception) {
                                 null
                             }
-                        }
+                        } ?: previewBitmap
                 }
                 previewBitmap?.let { bitmap ->
                     Image(

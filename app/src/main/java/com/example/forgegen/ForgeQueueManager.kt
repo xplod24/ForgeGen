@@ -3,7 +3,6 @@ package com.example.forgegen
 import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Intent
-import android.util.Base64
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.gson.Gson
@@ -16,6 +15,11 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+
+/** One live preview image of the running job, decoded from the server's base64; a new image is a new object. */
+class LivePreview(
+    val bytes: ByteArray,
+)
 
 /* ============================================================================
  * QUEUE MANAGER
@@ -56,8 +60,12 @@ object ForgeQueueManager {
     private val _statusText = MutableStateFlow("Ready")
     val statusText: StateFlow<String> = _statusText.asStateFlow()
 
-    private val _livePreviewImage = MutableStateFlow<String?>(null)
-    val livePreviewImage: StateFlow<String?> = _livePreviewImage.asStateFlow()
+    // The server's live preview of the running job, decoded once here (the screen used to decode the base64 text of
+    // every answer itself); the same image sent again is not decoded again.
+    private val _livePreviewImage = MutableStateFlow<LivePreview?>(null)
+    val livePreviewImage: StateFlow<LivePreview?> = _livePreviewImage.asStateFlow()
+
+    @Volatile private var lastPreviewText: String? = null
 
     private val _generationQueue = MutableStateFlow<List<QueuedGeneration>>(emptyList())
     val generationQueue: StateFlow<List<QueuedGeneration>> = _generationQueue.asStateFlow()
@@ -285,15 +293,29 @@ object ForgeQueueManager {
     ) {
         _progress.value = progress
         _currentEta.value = eta
-        if (image != null) _livePreviewImage.value = image
+        if (image != null) setLivePreviewImage(image)
     }
 
     fun updateStatusText(text: String) {
         _statusText.value = text
     }
 
+    /** The server's live preview as base64 text (null clears it). */
     fun setLivePreviewImage(image: String?) {
-        _livePreviewImage.value = image
+        if (image == null) {
+            lastPreviewText = null
+            _livePreviewImage.value = null
+            return
+        }
+        if (image == lastPreviewText) return
+        val bytes =
+            try {
+                java.util.Base64.getMimeDecoder().decode(image.substringAfter("base64,"))
+            } catch (e: IllegalArgumentException) {
+                return
+            }
+        lastPreviewText = image
+        _livePreviewImage.value = LivePreview(bytes)
     }
 
     private suspend fun loadQueueState() {
@@ -505,6 +527,7 @@ object ForgeQueueManager {
             }
 
             ForgeSettingsManager.saveToPromptHistory(state.positivePrompt, state.negativePrompt)
+            ForgeRepository.reconnect() // a job waits for the server: look for it again if it was given up
 
             if (ForgeRepository.isServerBusy.value && qSize > 1) {
                 ForgeRepository.showToast("External generation active. Added to queue.")
@@ -528,7 +551,7 @@ object ForgeQueueManager {
 
         _progress.value = 0f
         _currentEta.value = 0.0
-        _livePreviewImage.value = null
+        setLivePreviewImage(null)
         _isShowingGridPreview.value = false
 
         val previewText = job.positivePrompt.take(30).replace("\n", " ")
@@ -551,17 +574,9 @@ object ForgeQueueManager {
             val answer = requestWithWatchdog(job, shouldSaveToDevice)
             if (answer is Answer.Images) {
                 if (answer.files.isNotEmpty()) {
-                    val currentList = _sessionImages.value.toMutableList()
-                    val startIndex = currentList.size
-                    currentList += answer.files.map { it.absolutePath }
-
-                    val endIndex = currentList.size - 1
-                    _sessionImages.value = currentList
-                    _currentBatchStartIndex.value = startIndex
-                    _currentBatchEndIndex.value = endIndex
-                    _currentSessionIndex.value = endIndex
+                    addSessionBatch(answer.files.map { it.absolutePath })
                     _statusText.value = "Generation Complete"
-                    _livePreviewImage.value = null
+                    setLivePreviewImage(null)
 
                     if (config.showGridAfterGeneration && answer.files.size > 1) {
                         _isShowingGridPreview.value = true
@@ -747,47 +762,46 @@ object ForgeQueueManager {
         }
 
     /**
-     * Reads the images from the answer one at a time and writes each to the cache as soon as it is read: the
-     * whole batch used to be held in memory as base64 text (several times its size), enough to crash the app with
-     * big images. Other fields of the answer are skipped without being read into memory.
+     * Reads the images from the answer one at a time and writes each to the cache while it arrives (Txt2ImgImages):
+     * the whole batch used to be held in memory as base64 text, enough to crash the app with big images, and later
+     * each image still was. Other fields of the answer are skipped without being read into memory.
      */
     private fun readImages(
         body: okhttp3.ResponseBody,
         saveToDevice: Boolean,
     ): List<File> {
         val files = mutableListOf<File>()
-        com.google.gson.stream.JsonReader(body.charStream()).use { reader ->
-            reader.beginObject()
-            while (reader.hasNext()) {
-                if (reader.nextName() != "images") {
-                    reader.skipValue()
-                    continue
-                }
-                reader.beginArray()
-                while (reader.hasNext()) {
-                    val base64 = reader.nextString()
-                    files +=
-                        try {
-                            saveGeneratedImage(base64, files.size, saveToDevice)
-                        } catch (e: java.io.IOException) {
-                            throw SaveFailed(e)
-                        }
-                }
-                reader.endArray()
-            }
-            reader.endObject()
+        body.charStream().use { reader ->
+            Txt2ImgImages.read(reader) { index, image -> files += saveGeneratedImage(image, index, saveToDevice) }
         }
         return files
     }
 
+    /** Writes one image to the cache; only failures to write (not to read the answer) are [SaveFailed]. */
     private fun saveGeneratedImage(
-        base64: String,
+        image: java.io.InputStream,
         index: Int,
         saveToDevice: Boolean,
     ): File {
-        val bytes = Base64.decode(base64, Base64.DEFAULT)
         val file = File(application.cacheDir, "gen_${System.currentTimeMillis()}_$index.png")
-        file.writeBytes(bytes)
+        val out =
+            try {
+                file.outputStream()
+            } catch (e: java.io.IOException) {
+                throw SaveFailed(e)
+            }
+        out.use {
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val n = image.read(buffer)
+                if (n < 0) break
+                try {
+                    it.write(buffer, 0, n)
+                } catch (e: java.io.IOException) {
+                    throw SaveFailed(e)
+                }
+            }
+        }
 
         // The first image of the batch is the local fallback "last generated image".
         if (index == 0) {
@@ -799,12 +813,30 @@ object ForgeQueueManager {
         }
         if (saveToDevice) {
             try {
-                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}_$index.png") { it.write(bytes) }
+                DeviceImages.save(application, "Gen_${System.currentTimeMillis()}_$index.png") { device ->
+                    file.inputStream().use { it.copyTo(device) }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save generated image directly to device", e)
             }
         }
         return file
+    }
+
+    // The session keeps this many images in the cache (they stay on the server); a long queue used to fill the
+    // cache with every image it made until the next start.
+    private const val MAX_SESSION_IMAGES = 100
+
+    /** Adds a finished batch to the session and shows it; the oldest images beyond the limit are deleted. */
+    private fun addSessionBatch(paths: List<String>) {
+        val all = _sessionImages.value + paths
+        val drop = (all.size - MAX_SESSION_IMAGES).coerceIn(0, all.size - paths.size) // never the new batch
+        all.take(drop).forEach { File(it).delete() }
+        val kept = all.drop(drop)
+        _sessionImages.value = kept
+        _currentBatchStartIndex.value = kept.size - paths.size
+        _currentBatchEndIndex.value = kept.lastIndex
+        _currentSessionIndex.value = kept.lastIndex
     }
 
     /** A job whose connection broke stays first in the queue, waiting to be sent again. */
@@ -1070,26 +1102,23 @@ object ForgeQueueManager {
         }
     }
 
-    suspend fun saveRecoveredImageToCache(bytes: ByteArray) {
-        withContext(Dispatchers.IO) {
-            try {
-                if (bytes.isEmpty()) {
-                    Log.e(TAG, "Cannot cache empty recovered image bytes.")
-                    return@withContext
-                }
+    /** A new file in the cache for an image restored from the gallery (see [showRecoveredImage]). */
+    fun newRecoveredImageFile() = File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
 
-                val file = File(application.cacheDir, "recovered_${System.currentTimeMillis()}.png")
-                file.writeBytes(bytes)
-
-                _sessionImages.value = listOf(file.absolutePath)
-                _currentSessionIndex.value = 0
-                _currentBatchStartIndex.value = 0
-                _currentBatchEndIndex.value = 0
-                _isShowingGridPreview.value = false
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to cache recovered image", e)
-            }
+    /** Shows [file] (an image restored from the gallery) as the session; the previous session's files are deleted. */
+    fun showRecoveredImage(file: File) {
+        if (!file.exists() || file.length() == 0L) {
+            Log.e(TAG, "Cannot show an empty recovered image.")
+            file.delete()
+            return
         }
+        val previous = _sessionImages.value
+        _sessionImages.value = listOf(file.absolutePath)
+        _currentSessionIndex.value = 0
+        _currentBatchStartIndex.value = 0
+        _currentBatchEndIndex.value = 0
+        _isShowingGridPreview.value = false
+        previous.filter { it != file.absolutePath }.forEach { File(it).delete() }
     }
 
     /**

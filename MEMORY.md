@@ -71,12 +71,20 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   9. Quick Settings tile with the queue's progress; a tap pauses or resumes it.
   10. Take shared text as a prompt (`ACTION_SEND` `text/plain`; today only `image/*`).
   11. Export and import of settings, presets, wildcards and server profiles to a file.
-- **2.0.0 optimization plan (found in the review after 1.6.2; waiting for the owner's approval and three decisions:
-  release build type, whether the start waits for the server, the new start animation):**
-  - Build: releases are debuggable debug builds without R8 (APK 68 MB, ~65 MB of it dex, mostly
-    material-icons-extended); Compose runs much slower when debuggable. Proposal: a non-debuggable, R8-minified build
-    signed with the same debug.keystore, same `.debug` app id, still published as `app-debug.apk` (Gson DTOs need keep
-    rules).
+- **2.0.0 optimization plan (review after 1.6.2; approved by the owner, in progress). Owner's decisions:**
+  - The release build type stays as it is for now (postponed): releases are debuggable debug builds without R8
+    (APK 68 MB, ~65 MB of it dex, mostly material-icons-extended; Compose runs much slower when debuggable). The
+    proposal for later: a non-debuggable, R8-minified build signed with the same debug.keystore, same `.debug` app id,
+    still published as `app-debug.apk` (Gson DTOs need keep rules).
+  - The start no longer waits for the server. After the splash the main screen shows at once; the app pings every
+    2 s for 1 minute ("Connecting... 0:42" in the top bar, tap = quick server settings: address, profiles, Test),
+    then stops pinging and shows a closable modal "No connection to the server" (address, profiles, Retry, Settings,
+    Close; closed -> "Offline" in the top bar, tap reopens it). The same after every loss of connection. A new minute
+    starts by itself when the app returns to the foreground or the phone's network comes back. An active queue is the
+    exception: it keeps pinging (backoff up to 60 s), so overnight mode survives outages. Pings get a short connect
+    timeout (the user's timeout stays for other calls).
+  - The start animation: accepted as proposed (below).
+  - The owner wants a progress report right before the version bump to 2.0.0 is pushed to master.
   - Background: `ForgeSettingsManager.updateState` writes AppState to Room on every keystroke / slider step (LoRA
     strength too) -> debounced writer; the ping runs every 10 s forever in the background -> stop when nothing runs,
     2-3 s when idle on screen; the live preview is a base64 String flow decoded by the UI each second -> decode once,
