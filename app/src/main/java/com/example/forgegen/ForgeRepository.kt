@@ -2,7 +2,6 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
-import android.content.Intent
 import android.util.Log
 import androidx.room.Room
 import androidx.room.migration.Migration
@@ -95,7 +94,6 @@ fun parseActiveLoras(prompt: String): List<ActiveLora> =
 object ForgeRepository {
     private const val TAG = "ForgeAPI"
 
-    private lateinit var application: Application
     lateinit var db: ForgeDatabase
 
     // RETROFIT APIS
@@ -180,7 +178,6 @@ object ForgeRepository {
 
     suspend fun initializeDatabaseAndSettings(app: Application) {
         if (ForgeSettingsManager.isInitialized.value) return
-        application = app
 
         ForgeSettingsManager.updateInitStatus("Initializing Database...")
         db =
@@ -203,25 +200,8 @@ object ForgeRepository {
         ForgeSettingsManager.onApiUrlChanged = { newUrl ->
             rebuildForgeApi(newUrl)
         }
-        // The service reads the new value from the config itself, it only has to be poked.
-        ForgeSettingsManager.onPersistentServiceChanged = { refreshServiceState() }
-
-        ForgeSettingsManager.updateInitStatus("Starting Background Service...")
-        refreshServiceState()
 
         startBackgroundPing()
-    }
-
-    private fun refreshServiceState() {
-        val serviceIntent =
-            Intent(application, GenerationService::class.java).apply {
-                action = GenerationService.ACTION_UPDATE_PERSISTENCE
-            }
-        try {
-            application.startService(serviceIntent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start service", e)
-        }
     }
 
     fun setAppForegroundState(isForeground: Boolean) {

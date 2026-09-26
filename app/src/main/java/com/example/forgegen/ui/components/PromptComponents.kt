@@ -168,6 +168,7 @@ fun HybridPromptEditor(
     disabledTags: Set<String>,
     onDisabledTagsChange: (Set<String>) -> Unit,
     label: String,
+    showTagEditor: Boolean = true,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         UndoRedoTextField(
@@ -183,7 +184,8 @@ fun HybridPromptEditor(
         // Split tags respecting nesting using a custom Tokenizer
         val activeTags = remember(prompt) { parseTags(prompt) }
 
-        if (activeTags.isNotEmpty() || disabledTags.isNotEmpty()) {
+        // "Show Active Tags UI" in the settings hides the row (the setting used to change nothing).
+        if (showTagEditor && (activeTags.isNotEmpty() || disabledTags.isNotEmpty())) {
             var isExpanded by remember { mutableStateOf(false) }
 
             Row(
@@ -608,8 +610,44 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
     val isQueuePaused by viewModel.isQueuePaused.collectAsStateWithLifecycle()
     val queue by viewModel.generationQueue.collectAsStateWithLifecycle()
     val pauseReason by viewModel.queuePauseReason.collectAsStateWithLifecycle()
+    val waiting = queue.count { it.status != GenerationStatus.FAILED }
+    val failed = queue.size - waiting
     // Every pause with jobs left needs a Resume button, not only the out-of-memory one.
-    val hasPausedJobs = isQueuePaused && queue.isNotEmpty()
+    val hasPausedJobs = isQueuePaused && waiting > 0
+    // Jobs set aside by overnight mode, once nothing else is going on.
+    val showFailed = failed > 0 && !oomAlert && !hasPausedJobs && waiting == 0
+    AnimatedVisibility(visible = showFailed) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        ) {
+            Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("SOME JOBS FAILED", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text(
+                    "$failed failed ${if (failed == 1) "job was" else "jobs were"} set aside. The queue shows why.",
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { viewModel.removeFailedJobs() }) {
+                        Text("Remove", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                    Button(
+                        onClick = { viewModel.retryFailed() },
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.onErrorContainer,
+                                contentColor = MaterialTheme.colorScheme.errorContainer,
+                            ),
+                    ) {
+                        Text("Retry All")
+                    }
+                }
+            }
+        }
+    }
     AnimatedVisibility(visible = oomAlert || hasPausedJobs) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -631,9 +669,9 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
                 Text(
                     if (oomAlert) {
                         "The server ran out of GPU memory and the failed prompt was skipped." +
-                            if (hasPausedJobs) " The queue is paused (${queue.size} waiting)." else ""
+                            if (hasPausedJobs) " The queue is paused ($waiting waiting)." else ""
                     } else {
-                        "${pauseReason ?: "The last generation failed."} Jobs waiting: ${queue.size}."
+                        "${pauseReason ?: "The last generation failed."} Jobs waiting: $waiting."
                     },
                     fontSize = 12.sp,
                     textAlign = TextAlign.Center,
@@ -883,6 +921,7 @@ fun PromptsSection(
                 disabledTags = disabledPosTags,
                 onDisabledTagsChange = { disabledPosTags = it },
                 label = "Positive Prompt",
+                showTagEditor = config.showActiveTagsUI,
             )
 
             Row(
@@ -916,6 +955,7 @@ fun PromptsSection(
                 disabledTags = disabledNegTags,
                 onDisabledTagsChange = { disabledNegTags = it },
                 label = "Negative Prompt",
+                showTagEditor = config.showActiveTagsUI,
             )
 
             Row(

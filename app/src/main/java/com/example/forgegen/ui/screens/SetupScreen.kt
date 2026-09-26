@@ -3,6 +3,7 @@ package com.example.forgegen
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
@@ -132,6 +133,7 @@ fun SetupScreen(
     var showProfilesDialog by remember { mutableStateOf(false) }
 
     var showNotificationModeDialog by remember { mutableStateOf(false) }
+    var showThemeDialog by remember { mutableStateOf(false) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
@@ -375,11 +377,13 @@ fun SetupScreen(
             if ("Appearance & UI" in appState.setupExpandedSections) {
 
             item {
-                SwitchPreference(
-                    title = "Enable Dark Mode",
-                    checked = config.isDarkMode,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(isDarkMode = it)) },
-                )
+                TextPreference(
+                    title = "Theme",
+                    value = "",
+                    subtitle = if (config.themeMode == THEME_SYSTEM) "System default" else config.themeMode,
+                ) {
+                    showThemeDialog = true
+                }
             }
             item {
                 SwitchPreference(
@@ -393,7 +397,7 @@ fun SetupScreen(
             item {
                 SwitchPreference(
                     title = "Show Active Tags UI",
-                    subtitle = "Show a quick edit button to visually reorder tags in prompt",
+                    subtitle = "Show the \"Edit Tags\" row under the prompts to switch tags off and reorder them",
                     checked = config.showActiveTagsUI,
                     onCheckedChange = { viewModel.saveConfig(config.copy(showActiveTagsUI = it)) },
                 )
@@ -401,7 +405,7 @@ fun SetupScreen(
             item {
                 SwitchPreference(
                     title = "Show Grid After Batch",
-                    subtitle = "Temporarily show a grid of images when a batch generation finishes",
+                    subtitle = "Show all images of a batch as a grid when it finishes, until you open one or the next job starts",
                     checked = config.showGridAfterGeneration,
                     onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) },
                 )
@@ -409,7 +413,7 @@ fun SetupScreen(
             item {
                 SwitchPreference(
                     title = "Keep Screen On",
-                    subtitle = "Prevents phone sleep while rendering",
+                    subtitle = "Keep the screen on while images are being generated and the app is open",
                     checked = config.keepScreenOn,
                     onCheckedChange = { viewModel.saveConfig(config.copy(keepScreenOn = it)) },
                 )
@@ -476,24 +480,17 @@ fun SetupScreen(
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
 
             /* ==========================================================
-             * CATEGORY: BACKGROUND SERVICE & ADVANCED
+             * CATEGORY: BACKGROUND & OVERNIGHT
              * ========================================================== */            }
 
-            item { ExpandableCategoryHeader("Background Service & Advanced", appState, viewModel) }
-            if ("Background Service & Advanced" in appState.setupExpandedSections) {
+            item { ExpandableCategoryHeader("Background & Overnight", appState, viewModel) }
+            if ("Background & Overnight" in appState.setupExpandedSections) {
 
-            item {
-                SwitchPreference(
-                    title = "Run in Background",
-                    subtitle = "Keep the app alive with a persistent notification",
-                    checked = config.enablePersistentService,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(enablePersistentService = it)) },
-                )
-            }
             item {
                 SwitchPreference(
                     title = "Overnight Batch Mode",
-                    subtitle = "Ignores minor errors to keep batch running",
+                    subtitle = "A failed job is set aside and the queue goes on; a lost connection is retried until " +
+                        "the server is back. A summary at the end tells what failed.",
                     checked = config.overnightMode,
                     onCheckedChange = { viewModel.saveConfig(config.copy(overnightMode = it)) },
                 )
@@ -503,11 +500,17 @@ fun SetupScreen(
                 item {
                     TextPreference(
                         title = "Remove Battery Restrictions",
-                        subtitle = "Allow background tasks to run uninhibited (Recommended for Overnight Mode)",
+                        subtitle = "Let the queue run with the screen off (recommended for Overnight Batch Mode)",
                         value = "",
                     ) {
-                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                        context.startActivity(intent)
+                        // Asks for this app directly; the list of all apps is the fallback where the dialog is missing.
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
+                            )
+                        } catch (e: android.content.ActivityNotFoundException) {
+                            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
                     }
                 }
             }
@@ -693,6 +696,40 @@ fun SetupScreen(
         }
 
         // The download progress dialog is shown globally by MainActivity.
+
+        if (showThemeDialog) {
+            AlertDialog(
+                onDismissRequest = { showThemeDialog = false },
+                title = { Text("Theme") },
+                text = {
+                    Column {
+                        listOf(
+                            THEME_SYSTEM to "System default",
+                            THEME_LIGHT to "Light",
+                            THEME_DARK to "Dark",
+                        ).forEach { (mode, name) ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            viewModel.saveConfig(config.copy(themeMode = mode))
+                                            showThemeDialog = false
+                                        }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = config.themeMode == mode, onClick = null)
+                                Spacer(Modifier.width(16.dp))
+                                Text(name, fontSize = 16.sp)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showThemeDialog = false }) { Text("Close") }
+                },
+            )
+        }
 
         if (showNotificationModeDialog) {
             AlertDialog(

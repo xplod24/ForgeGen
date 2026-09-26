@@ -206,7 +206,7 @@ fun MainScreen(
                 BottomControlsSection(
                     viewModel = viewModel,
                     state = state,
-                    generationQueueSize = generationQueue.size,
+                    generationQueueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
                     isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
                     progress = progress,
                     currentEta = currentEta,

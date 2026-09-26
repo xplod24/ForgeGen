@@ -7,7 +7,9 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
         tools:ignore="ForegroundServicesPolicy" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The app is not distributed through Google Play: the direct "ignore battery optimizations" dialog is fine. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -39,10 +41,15 @@
             </intent-filter>
         </activity>
 
+        <!-- specialUse: dataSync stops after 6 hours a day on Android 15+, which ended long overnight queues. -->
         <service
             android:name=".GenerationService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Sends the user's queued image generation jobs to their own Stable Diffusion server and receives the images, which can take hours." />
+        </service>
 
         <provider
             android:name="androidx.core.content.FileProvider"

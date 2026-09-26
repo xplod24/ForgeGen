@@ -23,27 +23,36 @@ import kotlin.math.roundToInt
 
 /* ============================================================================
  * FOREGROUND GENERATION SERVICE
- * Maintains the application's lifecycle during active background generation
- * or when the user explicitly enables the persistent background mode.
- * Handles live notification updates and wake locks for critical alerts.
+ * Keeps the app alive while the queue works (ForgeQueueManager.isQueueActive): a job runs, or jobs wait to be sent,
+ * also while the queue waits for a lost connection. It holds a wake lock for that time and stops by itself when the
+ * queue stops. Its type is specialUse, which has no daily time limit (dataSync stops after 6 hours a day on
+ * Android 15+).
  * ============================================================================ */
 
 class GenerationService : Service() {
     companion object {
         const val ACTION_START_GENERATION = "ACTION_START_GENERATION"
-        const val ACTION_UPDATE_PERSISTENCE = "ACTION_UPDATE_PERSISTENCE"
-
-        /** The queue stopped: it is empty or paused after an error, so nothing is being generated. */
-        const val ACTION_QUEUE_FINISHED = "ACTION_QUEUE_FINISHED"
         const val ACTION_EXIT_APP = "ACTION_EXIT_APP"
         private const val ACTION_NOTIFICATION_DISMISSED = "ACTION_NOTIFICATION_DISMISSED"
         private const val TAG = "GenerationService"
+
+        // Taken with a timeout (in case the service dies without releasing it) and renewed while the queue works;
+        // it used to expire after 10 minutes of generation and was not taken again.
+        private const val WAKE_LOCK_TIMEOUT_MS = 10 * 60 * 1000L
+        private const val WAKE_LOCK_RENEW_MS = 5 * 60 * 1000L
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val notificationId = ForgeNotifications.ID_SERVICE
 
-    private var wasGenerating = false
+    private var wasActive = false
+    private var wakeLockKeeper: Job? = null
+
+    // Stopping before startForeground() (which must follow startForegroundService()) would crash the app.
+    @Volatile private var isInForeground = false
+
+    // The latest start: stopping with it does nothing if a newer job started the service meanwhile.
+    @Volatile private var lastStartId = 0
 
     @Volatile private var isNotificationDismissed = false
 
@@ -63,12 +72,15 @@ class GenerationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // The system can restart this service without the UI (START_STICKY), so it sets up the channels itself too.
-        ForgeNotifications.init(this)
+        ForgeNotifications.init(this) // the channels must exist before the first notification
 
         try {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
-            partialWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ForgeGen::GenerationWakeLock")
+            // Not reference-counted: each acquire(timeout) renews the one lock instead of stacking another.
+            partialWakeLock =
+                pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ForgeGen::GenerationWakeLock").apply {
+                    setReferenceCounted(false)
+                }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to init WakeLock", e)
         }
@@ -86,41 +98,42 @@ class GenerationService : Service() {
             var lastText = ""
             var lastJobNo = -1
 
-            // Reacts to changes of the generation state instead of waking up every second for as long as the
-            // service lives (all day with "Run in Background"); at most one notification update per second.
+            // Reacts to changes of the generation state instead of waking up every second; at most one
+            // notification update per second.
             combine(
-                ForgeQueueManager.isGenerating,
-                ForgeRepository.isServerBusy,
+                combine(
+                    ForgeQueueManager.isQueueActive,
+                    ForgeQueueManager.isGenerating,
+                    ForgeRepository.isServerBusy,
+                ) { queueActive, generating, busy ->
+                    (queueActive || busy) to (generating || busy)
+                },
                 ForgeQueueManager.progress,
                 ForgeQueueManager.statusText,
                 ForgeRepository.currentJobNo,
-            ) { generating, busy, progress, text, jobNo ->
-                ServiceState(generating || busy, (progress * 100).toInt(), text, jobNo)
+            ) { (active, generating), progress, text, jobNo ->
+                ServiceState(active, generating, (progress * 100).toInt(), text, jobNo)
             }.distinctUntilChanged()
                 .conflate()
                 .collect { state ->
-                    val config = ForgeRepository.config.value
-                    val mode = config.notificationMode
-
-                    if (state.active && !wasGenerating) {
-                        wasGenerating = true
-                        acquireWakeLock()
-                    } else if (!state.active && wasGenerating) {
-                        wasGenerating = false
+                    if (state.active && !wasActive) {
+                        wasActive = true
+                        holdWakeLock()
+                    } else if (!state.active && wasActive) {
+                        wasActive = false
                         releaseWakeLock()
                         lastProgress = -1
-                        // Without this an external job (or a paused queue) left the last progress on screen forever.
-                        val queueStopped = ForgeQueueManager.generationQueue.value.isEmpty() || ForgeQueueManager.isQueuePaused.value
-                        if (config.enablePersistentService && queueStopped) {
-                            ForgeNotifications.post(notificationId, buildCurrentNotification())
-                        }
+                    }
+                    if (!state.active) {
+                        stopWhenIdle()
+                        return@collect
                     }
 
                     val shouldUpdate =
                         state.progress != lastProgress || state.text != lastText || state.jobNo != lastJobNo || isNotificationDismissed
 
                     // "Disabled" keeps the static notification the foreground service needs and never refreshes it.
-                    if (shouldUpdate && state.active && mode != "Disabled") {
+                    if (shouldUpdate && ForgeRepository.config.value.notificationMode != "Disabled") {
                         lastProgress = state.progress
                         lastText = state.text
                         lastJobNo = state.jobNo
@@ -135,6 +148,7 @@ class GenerationService : Service() {
 
     private data class ServiceState(
         val active: Boolean,
+        val generating: Boolean,
         val progress: Int,
         val text: String,
         val jobNo: Int,
@@ -147,27 +161,9 @@ class GenerationService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_START_GENERATION -> {
+                lastStartId = startId
                 startForegroundSafe()
-            }
-            ACTION_UPDATE_PERSISTENCE -> {
-                serviceScope.launch {
-                    val config = ForgeRepository.config.value
-                    val isActivelyGenerating = ForgeQueueManager.isGenerating.value || ForgeRepository.isServerBusy.value
-                    if (config.enablePersistentService || isActivelyGenerating) {
-                        startForegroundSafe()
-                    } else {
-                        stopSelf()
-                    }
-                }
-            }
-            ACTION_QUEUE_FINISHED -> {
-                serviceScope.launch {
-                    if (!ForgeRepository.config.value.enablePersistentService) {
-                        stopSelf()
-                    } else {
-                        ForgeNotifications.post(notificationId, buildCurrentNotification())
-                    }
-                }
+                stopWhenIdle() // the job may already be over
             }
             ACTION_EXIT_APP -> {
                 // Handled by the service because it is alive whenever its notification is shown; the old receiver
@@ -178,23 +174,43 @@ class GenerationService : Service() {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300)
-                return START_NOT_STICKY
             }
+            else -> stopSelf(startId) // only the queue starts this service
         }
-        return START_STICKY
+        // Not restarted after the process was killed: without the app's start nothing would run in it.
+        return START_NOT_STICKY
     }
 
-    private fun acquireWakeLock() {
-        try {
-            if (partialWakeLock?.isHeld == false) {
-                partialWakeLock?.acquire(10 * 60 * 1000L /*10 minutes*/)
+    /**
+     * Stops the service once the queue no longer works (not before startForeground, see [isInForeground]).
+     * isGenerating is set before a job starts the service, so it covers the moment isQueueActive is still catching up.
+     */
+    private fun stopWhenIdle() {
+        val working = ForgeQueueManager.isGenerating.value || ForgeQueueManager.isQueueActive.value || ForgeRepository.isServerBusy.value
+        if (!isInForeground || working) return
+        releaseWakeLock()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf(lastStartId)
+    }
+
+    private fun holdWakeLock() {
+        wakeLockKeeper?.cancel()
+        wakeLockKeeper =
+            serviceScope.launch {
+                while (isActive) {
+                    try {
+                        partialWakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to acquire WakeLock", e)
+                    }
+                    delay(WAKE_LOCK_RENEW_MS)
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire WakeLock", e)
-        }
     }
 
     private fun releaseWakeLock() {
+        wakeLockKeeper?.cancel()
+        wakeLockKeeper = null
         try {
             if (partialWakeLock?.isHeld == true) {
                 partialWakeLock?.release()
@@ -213,11 +229,12 @@ class GenerationService : Service() {
                     this,
                     notificationId,
                     notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
                 )
             } else {
                 startForeground(notificationId, notification)
             }
+            isInForeground = true
         } catch (e: Exception) {
             Log.e(TAG, "startForeground failed", e)
         }
@@ -302,8 +319,16 @@ class GenerationService : Service() {
                 }
             }
         } else {
-            builder.setContentTitle("ForgeGen is Active")
-            builder.setContentText(if (ForgeQueueManager.isQueuePaused.value) "Queue paused" else "Ready for generation")
+            // Between jobs, or waiting for the server (the service only runs while the queue works).
+            builder.setContentTitle("ForgeGen queue")
+            builder.setContentText(
+                when {
+                    ForgeQueueManager.queuePauseReason.value == ForgeQueueManager.CONNECTION_LOST_REASON ->
+                        "Connection lost, waiting for the server"
+                    !ForgeRepository.isConnected.value -> "Waiting for the server"
+                    else -> "Waiting to send the next job"
+                },
+            )
             builder.setProgress(0, 0, false)
         }
         builder.addAction(R.drawable.ic_launcher_foreground, "Exit App", exitIntent)
@@ -313,38 +338,15 @@ class GenerationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /**
-     * Android 15+ limits dataSync foreground services to 6 hours per 24 h. If the service is still in the
-     * foreground when the limit is reached it must stop within a few seconds, otherwise the system crashes the app.
-     */
-    override fun onTimeout(
-        startId: Int,
-        fgsType: Int,
-    ) {
-        Log.w(TAG, "Foreground service time limit reached (type $fgsType), stopping")
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
-    }
-
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // Swiping the app away from Recents must not end a running queue or the "Run in Background" service
-        // (that is what the service is for); "Exit App" in the notification quits the app.
-        val queueRunning =
-            ForgeQueueManager.isGenerating.value ||
-                (ForgeQueueManager.generationQueue.value.isNotEmpty() && !ForgeQueueManager.isQueuePaused.value)
-        if (!queueRunning && !ForgeRepository.config.value.enablePersistentService) {
-            stopSelf()
-        }
+        // Swiping the app away from Recents must not end a running queue; "Exit App" in the notification quits it.
+        stopWhenIdle()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            if (partialWakeLock?.isHeld == true) partialWakeLock?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to release WakeLock in onDestroy", e)
-        }
+        releaseWakeLock()
         try {
             unregisterReceiver(dismissReceiver)
         } catch (e: Exception) {

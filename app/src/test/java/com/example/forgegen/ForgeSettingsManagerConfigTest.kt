@@ -11,7 +11,7 @@ class ForgeSettingsManagerConfigTest {
                 apiUrl = "http://10.0.0.5:7860",
                 serverBasePath = "/srv/forge",
                 galleryPath = "/srv/out",
-                isDarkMode = true,
+                themeMode = THEME_DARK,
                 timeout = 33,
                 notifOnBatchFinish = true,
                 notifOnQueueFinish = false,
@@ -19,7 +19,6 @@ class ForgeSettingsManagerConfigTest {
                 autoDismissCivitaiNotif = true,
                 notificationMode = "Verbose",
                 keepScreenOn = true,
-                enablePersistentService = true,
                 swipeToBrowseGallery = false,
                 bottomSheetExpandedByDefault = true,
                 serverProfiles = listOf(ServerProfile("A", "http://a")),
@@ -36,11 +35,24 @@ class ForgeSettingsManagerConfigTest {
                 mainPromptsExpanded = false,
                 mainSettingsExpanded = true,
                 mainLorasExpanded = true,
+                autoSaveMode = AUTO_SAVE_FAVORITES,
+                autoSaveSince = "2026-09-24 10:00:00",
+                saveOomLogs = true,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))
 
         assertEquals(saved, loaded)
+    }
+
+    @Test
+    fun `the dark mode switch of older versions becomes the theme`() {
+        assertEquals(THEME_DARK, ForgeSettingsManager.loadConfig("""{"isDarkMode":true}""").themeMode)
+        assertEquals("the old default look stays light", THEME_LIGHT, ForgeSettingsManager.loadConfig("""{"isDarkMode":false}""").themeMode)
+        assertEquals(THEME_SYSTEM, ForgeSettingsManager.loadConfig("""{"timeout":10}""").themeMode)
+        assertEquals(THEME_SYSTEM, ForgeSettingsManager.loadConfig("""{"themeMode":"Purple"}""").themeMode)
+        assertEquals(THEME_LIGHT, ForgeSettingsManager.loadConfig("""{"themeMode":"Light","isDarkMode":true}""").themeMode)
+        assertEquals("fresh install", THEME_SYSTEM, ForgeSettingsManager.loadConfig(null).themeMode)
     }
 
     @Test

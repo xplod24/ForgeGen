@@ -2,8 +2,10 @@ package com.example.forgegen
 
 import android.annotation.SuppressLint
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.io.File
@@ -116,12 +119,6 @@ object ForgeSettingsManager {
     var onApiUrlChanged: ((String) -> Unit)? = null
 
     /**
-     * Callback invoked when the persistent service setting changes.
-     * Set by ForgeRepository during its init().
-     */
-    var onPersistentServiceChanged: ((Boolean) -> Unit)? = null
-
-    /**
      * Initialize ForgeSettingsManager. Must be called before any other method.
      * Returns a Triple of (config, appState, promptHistory) loaded from Room Database.
      */
@@ -147,6 +144,7 @@ object ForgeSettingsManager {
         }
 
         _config.value = loadedConfig
+        cacheThemeMode(loadedConfig.themeMode)
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
         _pinnedImages.value = loadedPinnedImages
@@ -202,6 +200,52 @@ object ForgeSettingsManager {
                 }
             }.build()
 
+    // --- Theme ---
+    // The theme is also kept in SharedPreferences, which can be read at once: the settings come from the database
+    // only after the first frames, which used to show the light theme to users of the dark one.
+    private const val UI_PREFS = "ui"
+    private const val THEME_MODE_PREF = "theme_mode"
+
+    /** Before the settings are loaded: the theme chosen last time, so the first frames already use it. */
+    fun applyCachedThemeMode(context: Context) {
+        if (::db.isInitialized) return
+        val cached =
+            context
+                .getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE)
+                .getString(THEME_MODE_PREF, null) ?: return
+        _config.update { it.copy(themeMode = cached) }
+    }
+
+    private fun cacheThemeMode(mode: String) {
+        if (!::application.isInitialized) return
+        application
+            .getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(THEME_MODE_PREF, mode)
+            .apply()
+    }
+
+    /** "themeMode" replaced the switch "isDarkMode" in 1.1.5; an older config keeps the look it had. */
+    private fun themeModeOf(
+        json: String?,
+        parsed: AppConfig?,
+    ): String {
+        val stored =
+            try {
+                json?.let { JsonParser.parseString(it).asJsonObject }
+            } catch (_: Exception) {
+                null
+            }
+        val mode =
+            when {
+                stored == null -> THEME_SYSTEM
+                stored.has("themeMode") -> parsed?.themeMode
+                stored.has("isDarkMode") -> if (stored.get("isDarkMode").asBoolean) THEME_DARK else THEME_LIGHT
+                else -> THEME_SYSTEM
+            }
+        return mode?.takeIf { it in listOf(THEME_SYSTEM, THEME_LIGHT, THEME_DARK) } ?: THEME_SYSTEM
+    }
+
     // --- Load/Save Config ---
     fun loadConfig(json: String?): AppConfig {
         val parsed =
@@ -219,7 +263,7 @@ object ForgeSettingsManager {
             apiUrl = parsed?.apiUrl ?: "http://192.168.1.90:7860",
             serverBasePath = parsed?.serverBasePath ?: "",
             galleryPath = parsed?.galleryPath ?: "",
-            isDarkMode = parsed?.isDarkMode ?: false,
+            themeMode = themeModeOf(json, parsed),
             timeout = (parsed?.timeout ?: 10).coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS),
             notifOnBatchFinish = parsed?.notifOnBatchFinish ?: false,
             notifOnQueueFinish = parsed?.notifOnQueueFinish ?: true,
@@ -227,7 +271,6 @@ object ForgeSettingsManager {
             autoDismissCivitaiNotif = parsed?.autoDismissCivitaiNotif ?: false,
             notificationMode = parsed?.notificationMode ?: "Simple",
             keepScreenOn = parsed?.keepScreenOn ?: false,
-            enablePersistentService = parsed?.enablePersistentService ?: false,
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
             bottomSheetExpandedByDefault = parsed?.bottomSheetExpandedByDefault ?: false,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
@@ -257,7 +300,6 @@ object ForgeSettingsManager {
             cleanUrl = "http://$cleanUrl"
         }
 
-        val oldPersistent = _config.value.enablePersistentService
         val oldUrl = _config.value.apiUrl
         val oldTimeout = _config.value.timeout
         val updatedConfig =
@@ -267,6 +309,7 @@ object ForgeSettingsManager {
             )
 
         _config.value = updatedConfig
+        cacheThemeMode(updatedConfig.themeMode)
 
         settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(CONFIG_KEY, gson.toJson(updatedConfig)))
@@ -278,10 +321,6 @@ object ForgeSettingsManager {
                 .connectTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
                 .readTimeout(updatedConfig.timeout.toLong(), TimeUnit.SECONDS)
                 .build()
-
-        if (updatedConfig.enablePersistentService != oldPersistent) {
-            onPersistentServiceChanged?.invoke(updatedConfig.enablePersistentService)
-        }
 
         if (cleanUrl != oldUrl || updatedConfig.timeout != oldTimeout) {
             onApiUrlChanged?.invoke(cleanUrl)

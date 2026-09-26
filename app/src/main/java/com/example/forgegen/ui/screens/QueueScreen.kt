@@ -118,6 +118,7 @@ fun QueueScreen(
                     items(queue, key = { it.id }) { item ->
                         val isFirst = queue.firstOrNull()?.id == item.id
                         val isActive = isFirst && isGenerating
+                        val isFailed = item.status == GenerationStatus.FAILED
                         var isExpanded by remember { mutableStateOf(false) }
 
                         Card(
@@ -145,6 +146,13 @@ fun QueueScreen(
                                             fontWeight = FontWeight.Bold,
                                             color = MaterialTheme.colorScheme.primary,
                                         )
+                                    } else if (isFailed) {
+                                        Text(
+                                            "Failed, set aside",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
                                     } else {
                                         Text("Queued", fontSize = 12.sp, color = Color.Gray)
                                     }
@@ -154,6 +162,10 @@ fun QueueScreen(
                                         contentDescription = "Expand",
                                         tint = Color.Gray,
                                     )
+                                }
+
+                                if (isFailed && item.error != null) {
+                                    Text(item.error, fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                                 }
 
                                 Spacer(Modifier.height(8.dp))
@@ -303,6 +315,10 @@ fun QueueScreen(
                                     // Block Edit/Delete while generating
                                     if (!isActive) {
                                         Row {
+                                            if (isFailed) {
+                                                TextButton(onClick = { viewModel.retryFailed(item.id) }) { Text("Retry") }
+                                                Spacer(Modifier.width(8.dp))
+                                            }
                                             IconButton(
                                                 onClick = {
                                                     editPosPrompt = item.payload.prompt

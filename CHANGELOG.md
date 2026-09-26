@@ -1,3 +1,14 @@
+## 1.1.5
+- Overnight Batch Mode now tells the truth: a failed job is set aside in the queue with its reason (retry or remove it there, or from the card on the main screen) and the queue goes on. At the end a notification says how many jobs were done and how many failed. Failed jobs used to disappear silently, followed by "Queue Completed".
+- In Overnight Batch Mode a lost connection is retried until the server is back, instead of stopping after three tries.
+- Long queues keep running with the screen off: the phone is kept awake for as long as the queue works (it used to be only the first 10 minutes), and on Android 15 and newer the queue is no longer stopped after 6 hours a day.
+- "Run in Background" is removed: the app works in the background only while the queue does.
+- "Keep Screen On" keeps the screen on only while images are being generated, not whenever the app is open.
+- "Show Active Tags UI" now works: turning it off hides the "Edit Tags" row under the prompts.
+- Theme: choose System default, Light or Dark. The start screen uses the chosen theme from the first frame. A theme chosen before is kept.
+- "Remove Battery Restrictions" opens the system dialog for ForgeGen directly instead of the list of all apps.
+- Clearer descriptions in the settings; "Background Service & Advanced" is now "Background & Overnight".
+
 ## 1.1.4-1
 - "Sync Models Now" works only while the app is connected to the Forge server; otherwise it is greyed out. If the connection is lost during a sync, the sync stops, and the models synchronized until then are kept.
 - Version numbers can now carry a micro-patch number, like this one. The updater of 1.1.4 does not recognize it, so this version has to be installed from the release page once; later updates are offered in the app again.

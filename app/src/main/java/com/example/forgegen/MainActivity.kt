@@ -30,6 +30,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -69,6 +70,7 @@ import coil.ImageLoader
 import coil.compose.LocalImageLoader
 import coil.disk.DiskCache
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,6 +98,9 @@ fun rememberDebounced(onClick: () -> Unit): () -> Unit {
         }
     }
 }
+
+// How long the screen stays on after generating stopped, so it does not dim between two jobs.
+private const val KEEP_SCREEN_ON_GRACE_MS = 3_000L
 
 fun checkConnectivity(connectivityManager: ConnectivityManager): Boolean {
     return try {
@@ -247,6 +252,7 @@ class MainActivity : ComponentActivity() {
         }
 
         super.onCreate(savedInstanceState)
+        ForgeSettingsManager.applyCachedThemeMode(this)
 
         if (intent?.action == "ACTION_OPEN_SETTINGS") {
             navEvents.tryEmit("setup")
@@ -366,21 +372,33 @@ class MainActivity : ComponentActivity() {
                         }.build()
                 }
 
-            LaunchedEffect(config.keepScreenOn) {
-                if (config.keepScreenOn) {
+            val isOnline by currentConnectivityStatus(this)
+            val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
+            val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
+            val isQueueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
+
+            // "Keep Screen On" only while images are being generated (it used to keep the screen on whenever the app
+            // was open); the grace period keeps the screen from dimming in the moment between two jobs.
+            val keepScreenOn = config.keepScreenOn && (isQueueActive || isServerBusy)
+            LaunchedEffect(keepScreenOn) {
+                if (keepScreenOn) {
                     activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 } else {
+                    delay(KEEP_SCREEN_ON_GRACE_MS)
                     activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
             }
 
-            val isOnline by currentConnectivityStatus(this)
-            val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
-            val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
-
+            val systemDark = isSystemInDarkTheme()
+            val darkTheme =
+                when (config.themeMode) {
+                    THEME_DARK -> true
+                    THEME_LIGHT -> false
+                    else -> systemDark
+                }
             val defaultColorScheme =
-                remember(config.isDarkMode) {
-                    if (config.isDarkMode) {
+                remember(darkTheme) {
+                    if (darkTheme) {
                         darkColorScheme(
                             primary = Color(0xFF3E80FF),
                             background = Color.Black,

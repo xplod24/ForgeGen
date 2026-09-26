@@ -14,6 +14,7 @@ import java.io.File
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /* ============================================================================
  * QUEUE MANAGER
@@ -26,7 +27,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Losing the connection never costs a job: nothing is sent while the server is unreachable, and a job whose
  * connection drops stays first in the queue (SUSPENDED). The queue pauses and continues by itself once the server
- * is back and idle, at most MAX_AUTO_RETRIES times per job; after that the user resumes it.
+ * is back and idle, at most MAX_AUTO_RETRIES times per job (without limit in overnight mode); after that the user
+ * resumes it.
+ *
+ * Overnight mode does not stop the queue for a failed job: the job is set aside (FAILED, with its reason) at the end
+ * of the queue and skipped, and one summary at the end says how many jobs failed.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeQueueManager {
@@ -74,6 +79,24 @@ object ForgeQueueManager {
     const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
     private const val MAX_AUTO_RETRIES = 3
     private const val AUTO_RETRY_DELAY_MS = 5_000L
+
+    // Overnight mode retries without limit, waiting longer after each loss (5 s, 10 s, ... up to a minute).
+    private const val MAX_AUTO_RETRY_DELAY_MS = 60_000L
+
+    private fun QueuedGeneration.isRunnable() = status != GenerationStatus.FAILED
+
+    /**
+     * The queue is working: a job runs, or jobs wait to be sent and the queue is not stopped (a pause for a lost
+     * connection counts, it continues by itself). The service, its wake lock and "Keep Screen On" follow it.
+     */
+    val isQueueActive: StateFlow<Boolean> =
+        combine(_isGenerating, _generationQueue, _isQueuePaused, _queuePauseReason) { generating, queue, paused, reason ->
+            generating || (queue.any { it.isRunnable() } && (!paused || reason == CONNECTION_LOST_REASON))
+        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, false) // not tied to the main thread
+
+    // Jobs finished and set aside since the queue last ran empty, for the summary at its end.
+    private val runSucceeded = AtomicInteger()
+    private val runFailed = AtomicInteger()
 
     // After an outage during a generation, a server that stays idle this long no longer works on our request:
     // its answer is lost with the dropped connection (a phone's socket can hang for the whole read timeout).
@@ -151,12 +174,15 @@ object ForgeQueueManager {
             if (!json.isNullOrEmpty()) {
                 try {
                     val type = object : TypeToken<List<QueuedGeneration>>() {}.type
-                    // A job that was running when the app was closed starts again from the beginning.
-                    val saved = gson.fromJson<List<QueuedGeneration>>(json, type).map { it.copy(status = GenerationStatus.QUEUED) }
+                    // A job that was running when the app was closed starts again from the beginning; failed ones stay failed.
+                    val saved =
+                        gson.fromJson<List<QueuedGeneration>>(json, type).map {
+                            if (it.isRunnable()) it.copy(status = GenerationStatus.QUEUED) else it
+                        }
                     if (saved.isNotEmpty()) {
                         // Jobs added while the saved queue was being read are kept after it (they used to be lost).
                         _generationQueue.update { current -> saved + current.filter { job -> saved.none { it.id == job.id } } }
-                        _totalQueueSize.value = _generationQueue.value.size
+                        _totalQueueSize.value = _generationQueue.value.count { it.isRunnable() }
                         _completedQueueItems.value = 0
                     }
                 } catch (e: Exception) {
@@ -187,8 +213,8 @@ object ForgeQueueManager {
     }
 
     /**
-     * The first job, as soon as one may start: queued, the queue not paused, the server reachable and not busy.
-     * Jobs used to be sent while the server was unreachable, each failing at once.
+     * The first job that is not set aside, as soon as it may start: the queue not paused, the server reachable and
+     * not busy. Jobs used to be sent while the server was unreachable, each failing at once.
      */
     private suspend fun nextJob(): QueuedGeneration =
         combine(
@@ -197,7 +223,7 @@ object ForgeQueueManager {
             ForgeRepository.isServerBusy,
             ForgeRepository.isConnected,
         ) { queue, paused, busy, connected ->
-            queue.firstOrNull()?.takeIf { !paused && !busy && connected }
+            queue.firstOrNull { it.isRunnable() }?.takeIf { !paused && !busy && connected }
         }.filterNotNull().first()
 
     /** Continues a queue paused by a lost connection once the server is back and idle (with a short delay). */
@@ -207,7 +233,14 @@ object ForgeQueueManager {
                 reason == CONNECTION_LOST_REASON && connected && !busy
             }.distinctUntilChanged().collectLatest { serverBack ->
                 if (!serverBack) return@collectLatest
-                delay(AUTO_RETRY_DELAY_MS)
+                // Overnight mode retries without limit, so it waits longer after each loss of the same job.
+                val losses =
+                    if (ForgeRepository.config.value.overnightMode) {
+                        _generationQueue.value.firstOrNull { it.isRunnable() }?.let { connectionLosses[it.id] } ?: 1
+                    } else {
+                        1
+                    }
+                delay((AUTO_RETRY_DELAY_MS * losses).coerceAtMost(MAX_AUTO_RETRY_DELAY_MS))
                 if (_queuePauseReason.value == CONNECTION_LOST_REASON) {
                     ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
                     _queuePauseReason.value = null
@@ -218,13 +251,16 @@ object ForgeQueueManager {
         }
     }
 
-    /** Marks [job] GENERATING if it is still first in the queue (the user may have removed or moved it). */
+    /**
+     * Marks [job] GENERATING and puts it first, if it is still the first job not set aside (the user may have removed
+     * or moved it). The running job is always first, also when failed jobs were moved above it.
+     */
     private fun claim(job: QueuedGeneration): QueuedGeneration? {
         var claimed: QueuedGeneration? = null
         _generationQueue.update { queue ->
-            val first = queue.firstOrNull()
+            val first = queue.firstOrNull { it.isRunnable() }
             claimed = first?.takeIf { it.id == job.id }?.copy(status = GenerationStatus.GENERATING)
-            claimed?.let { listOf(it) + queue.drop(1) } ?: queue
+            claimed?.let { running -> listOf(running) + queue.filter { it.id != running.id } } ?: queue
         }
         return claimed
     }
@@ -328,7 +364,7 @@ object ForgeQueueManager {
             saveQueueState()
 
             // The worker picks the job up by itself as soon as it may start.
-            val qSize = _generationQueue.value.size
+            val qSize = _generationQueue.value.count { it.isRunnable() }
             if (qSize == 1) {
                 _totalQueueSize.value = 1
                 _completedQueueItems.value = 0
@@ -350,6 +386,7 @@ object ForgeQueueManager {
         val config = ForgeRepository.config.value
         var succeeded = false
         var errorReason: String? = null // set when a failure paused the queue
+        var setAsideReason: String? = null // set when overnight mode sets the failed job aside instead
         var isOom = false
         // With "Save to phone: All new images" the gallery sync saves the server's copy (its own name and
         // folder), so saving here as well would put every image on the phone twice.
@@ -417,9 +454,12 @@ object ForgeQueueManager {
                     )
                 } else {
                     _statusText.value = "Error: HTTP ${answer.code}"
-                    if (!config.overnightMode) {
-                        pauseQueue("The server returned HTTP ${answer.code}.")
-                        errorReason = "The server returned HTTP ${answer.code}."
+                    val reason = "The server returned HTTP ${answer.code}."
+                    if (config.overnightMode) {
+                        setAsideReason = reason
+                    } else {
+                        pauseQueue(reason)
+                        errorReason = reason
                     }
                 }
             }
@@ -431,7 +471,7 @@ object ForgeQueueManager {
             // following job used to fail at once and the whole queue was thrown away.
             connectionLost = true
             val losses = connectionLosses.merge(job.id, 1, Int::plus) ?: 1
-            if (losses <= MAX_AUTO_RETRIES) {
+            if (losses <= MAX_AUTO_RETRIES || ForgeRepository.config.value.overnightMode) {
                 pauseQueue(CONNECTION_LOST_REASON)
                 _statusText.value = "Connection lost. The job is sent again when the server is back."
             } else {
@@ -443,23 +483,30 @@ object ForgeQueueManager {
             // The images are on the server anyway; the app (and the queue) must survive a batch too big to decode.
             _statusText.value = "The images are too large for the phone's memory"
             val reason = "The images were too large for the phone's memory. They are saved on the server."
-            if (!ForgeRepository.config.value.overnightMode) pauseQueue(reason)
-            errorReason = reason
+            if (ForgeRepository.config.value.overnightMode) {
+                setAsideReason = reason
+            } else {
+                pauseQueue(reason)
+                errorReason = reason
+            }
             OomLogs.report(
                 reason = "The app ran out of memory while reading the images.",
                 details = "${describeForReport(job)}\n\n${e.stackTraceToString()}",
             )
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
-            if (!ForgeRepository.config.value.overnightMode) {
-                pauseQueue("Generation failed: ${e.localizedMessage}")
-                errorReason = "Generation failed: ${e.localizedMessage}"
+            val reason = "Generation failed: ${e.localizedMessage}"
+            if (ForgeRepository.config.value.overnightMode) {
+                setAsideReason = reason
+            } else {
+                pauseQueue(reason)
+                errorReason = reason
             }
         } finally {
             if (connectionLost) {
                 keepForRetry(job, errorReason ?: CONNECTION_LOST_REASON)
             } else {
-                finishJob(job, succeeded, errorReason, isOom)
+                finishJob(job, succeeded, errorReason, isOom, setAsideReason)
             }
             saveQueueState()
             _isGenerating.value = false
@@ -626,54 +673,93 @@ object ForgeQueueManager {
     ) {
         _generationQueue.update { q -> q.map { if (it.id == job.id) it.copy(status = GenerationStatus.SUSPENDED) else it } }
         notifyGenerationError(reason, isOom = false, queuePaused = true)
-        try {
-            application.startService(Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED))
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to notify service of the paused queue", e)
-        }
     }
 
-    /** Removes a finished (or failed) job and posts at most one notification for it. */
+    /**
+     * Removes a finished job, or sets a failed one aside in overnight mode ([setAsideReason]), and posts at most one
+     * notification for it. When no job is left to run, a queue in which jobs were set aside ends with a summary.
+     * The service follows [isQueueActive] by itself.
+     */
     private fun finishJob(
         job: QueuedGeneration,
         succeeded: Boolean,
         errorReason: String?,
         isOom: Boolean,
+        setAsideReason: String?,
     ) {
         connectionLosses.remove(job.id)
-        _generationQueue.update { q -> q.filter { it.id != job.id } }
+        if (setAsideReason != null) {
+            // At the end of the queue, so the jobs still to run stay first.
+            _generationQueue.update { q ->
+                q.filter { it.id != job.id } + job.copy(status = GenerationStatus.FAILED, error = setAsideReason)
+            }
+            runFailed.incrementAndGet()
+        } else {
+            _generationQueue.update { q -> q.filter { it.id != job.id } }
+            if (succeeded) runSucceeded.incrementAndGet()
+        }
         _completedQueueItems.update { it + 1 }
 
-        val queueEmpty = _generationQueue.value.isEmpty()
-        if (queueEmpty) {
+        val queueDone = _generationQueue.value.none { it.isRunnable() }
+        val succeededInRun = runSucceeded.get()
+        val failedInRun = runFailed.get()
+        if (queueDone) {
             _totalQueueSize.value = 0
             _completedQueueItems.value = 0
+            runSucceeded.set(0)
+            runFailed.set(0)
             // Nothing left to hold back: a paused empty queue would silently swallow the next job.
             _isQueuePaused.value = false
             _queuePauseReason.value = null
         }
 
         // One notification per job: "queue completed" replaces "batch completed" for the last job, and a
-        // failed job only gets the error alert (it used to be reported as a completed queue).
+        // failed job only gets the error alert (it used to be reported as a completed queue). A job set aside by
+        // overnight mode gets none; the summary at the end counts it (overnight mode used to report failed jobs
+        // as a completed queue).
         val notifConfig = ForgeRepository.config.value
         when {
-            errorReason != null -> notifyGenerationError(errorReason, isOom, queuePaused = !queueEmpty)
-            queueEmpty && notifConfig.notifOnQueueFinish ->
+            errorReason != null -> notifyGenerationError(errorReason, isOom, queuePaused = !queueDone)
+            queueDone && failedInRun > 0 -> notifyFailedJobs(succeededInRun, failedInRun)
+            queueDone && notifConfig.notifOnQueueFinish ->
                 launchNotification(job.positivePrompt, isQueueFinished = true)
             succeeded && notifConfig.notifOnBatchFinish ->
                 launchNotification(job.positivePrompt, isQueueFinished = false)
         }
+    }
 
-        // Also when the queue paused: otherwise the service kept showing the last progress indefinitely.
-        if (queueEmpty || _isQueuePaused.value) {
-            try {
-                val finishIntent =
-                    Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_QUEUE_FINISHED)
-                application.startService(finishIntent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to notify service of queue finish", e)
-            }
+    /** The end of a queue in which overnight mode set failed jobs aside; shown like the other errors. */
+    private fun notifyFailedJobs(
+        succeeded: Int,
+        failed: Int,
+    ) {
+        val builder = ForgeNotifications.builder(ForgeNotifications.CHANNEL_ALERTS) ?: return
+        val notification =
+            builder
+                .setContentTitle("Queue finished with errors")
+                .setContentText("$succeeded done, $failed failed. The failed jobs are kept in the queue.")
+                .setColor(0xFFFF0000.toInt())
+                .setAutoCancel(true)
+                .build()
+        ForgeNotifications.post(ForgeNotifications.ID_QUEUE_PAUSED, notification)
+    }
+
+    /** Puts failed jobs ([id], or all of them) back in the queue, after the jobs already waiting. */
+    fun retryFailed(id: String? = null) {
+        var retried = 0
+        _generationQueue.update { q ->
+            val (failed, rest) = q.partition { !it.isRunnable() && (id == null || it.id == id) }
+            retried = failed.size
+            rest + failed.map { it.copy(status = GenerationStatus.QUEUED, error = null) }
         }
+        if (retried > 0) _totalQueueSize.update { it + retried }
+        saveQueueState()
+    }
+
+    /** Removes every failed job from the queue. */
+    fun removeFailedJobs() {
+        _generationQueue.update { q -> q.filter { it.isRunnable() } }
+        saveQueueState()
     }
 
     private fun launchNotification(
@@ -709,6 +795,7 @@ object ForgeQueueManager {
             when {
                 isOom && queuePaused -> "Lower the resolution or batch size, then resume the queue."
                 isOom -> "Lower the resolution or batch size and try again."
+                reason == CONNECTION_LOST_REASON -> reason // it continues by itself
                 queuePaused -> "$reason Open the app to resume the queue."
                 else -> reason
             }
@@ -749,6 +836,8 @@ object ForgeQueueManager {
         _generationQueue.update { q -> q.filter { it.status == GenerationStatus.GENERATING } }
         _totalQueueSize.value = _generationQueue.value.size
         _completedQueueItems.value = 0
+        runSucceeded.set(0)
+        runFailed.set(0)
         saveQueueState()
     }
 

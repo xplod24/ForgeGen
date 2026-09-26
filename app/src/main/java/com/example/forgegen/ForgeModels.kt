@@ -32,7 +32,8 @@ data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
     var serverBasePath: String = "",
     var galleryPath: String = "",
-    var isDarkMode: Boolean = false,
+    // THEME_SYSTEM, THEME_LIGHT or THEME_DARK (was the switch "isDarkMode" up to 1.1.4-1).
+    var themeMode: String = THEME_SYSTEM,
     var timeout: Int = 10,
     var notifOnBatchFinish: Boolean = false,
     var notifOnQueueFinish: Boolean = true,
@@ -40,7 +41,6 @@ data class AppConfig(
     var autoDismissCivitaiNotif: Boolean = false,
     var notificationMode: String = "Simple",
     var keepScreenOn: Boolean = false,
-    var enablePersistentService: Boolean = false,
     var swipeToBrowseGallery: Boolean = true,
     var bottomSheetExpandedByDefault: Boolean = false,
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
@@ -65,6 +65,10 @@ data class AppConfig(
     // The user's consent to write a report with the app's log to Downloads when the app or the server runs out of memory.
     var saveOomLogs: Boolean = false,
 )
+
+const val THEME_SYSTEM = "System"
+const val THEME_LIGHT = "Light"
+const val THEME_DARK = "Dark"
 
 const val AUTO_SAVE_OFF = "Off"
 const val AUTO_SAVE_FAVORITES = "Favorites"
@@ -111,12 +115,17 @@ data class QueuedGeneration(
     val positivePrompt: String,
     val payload: Txt2ImgPayloadDto,
     val status: GenerationStatus = GenerationStatus.QUEUED,
+    // Why the job failed (FAILED only).
+    val error: String? = null,
 )
 
 enum class GenerationStatus {
     QUEUED,
     GENERATING,
     SUSPENDED,
+
+    // Set aside by overnight mode after an error: kept at the end of the queue, skipped until the user retries it.
+    FAILED,
 }
 
 data class ApiResource(

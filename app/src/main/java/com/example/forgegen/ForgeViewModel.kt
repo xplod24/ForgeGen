@@ -269,6 +269,7 @@ class ForgeViewModel(
     val isGenerating: StateFlow<Boolean> = ForgeQueueManager.isGenerating
     val generationQueue: StateFlow<List<QueuedGeneration>> = ForgeQueueManager.generationQueue
     val isQueuePaused: StateFlow<Boolean> = ForgeQueueManager.isQueuePaused
+    val isQueueActive: StateFlow<Boolean> = ForgeQueueManager.isQueueActive
     val oomAlert: StateFlow<Boolean> = ForgeQueueManager.oomAlert
     val queuePauseReason: StateFlow<String?> = ForgeQueueManager.queuePauseReason
     val totalQueueSize: StateFlow<Int> = ForgeQueueManager.totalQueueSize
@@ -370,6 +371,10 @@ class ForgeViewModel(
 
     // --- DELEGATION OF ACTIONS TO QUEUE MANAGER ---
     fun resumeQueue() = ForgeQueueManager.resumeQueue()
+
+    fun retryFailed(id: String? = null) = ForgeQueueManager.retryFailed(id)
+
+    fun removeFailedJobs() = ForgeQueueManager.removeFailedJobs()
 
     fun interruptGeneration() = ForgeQueueManager.interruptGeneration()
 
