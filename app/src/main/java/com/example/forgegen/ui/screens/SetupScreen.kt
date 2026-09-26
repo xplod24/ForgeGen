@@ -182,6 +182,7 @@ fun SetupScreen(
     // Samsung Now Bar: offered on One UI 8+ only; the system can also turn live notifications off for the app.
     val isNowBarSupported = remember { NowBar.isSupported(context) }
     var isNowBarAllowed by remember { mutableStateOf(NowBar.isAllowedBySystem(context)) }
+    var areNotificationsAllowed by remember { mutableStateOf(NowBar.areNotificationsAllowed(context)) }
 
     // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION AND LIVE NOTIFICATION REFRESH ---
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -191,6 +192,7 @@ fun SetupScreen(
                 if (event == Lifecycle.Event.ON_RESUME) {
                     isIgnoringBattery = pm.isIgnoringBatteryOptimizations(context.packageName)
                     isNowBarAllowed = NowBar.isAllowedBySystem(context)
+                    areNotificationsAllowed = NowBar.areNotificationsAllowed(context)
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -581,15 +583,15 @@ fun SetupScreen(
                     onCheckedChange = { viewModel.saveConfig(config.copy(nowBarProgress = it)) },
                 )
             }
-            if (isNowBarSupported && config.nowBarProgress && !isNowBarAllowed) {
+            if (isNowBarSupported && config.nowBarProgress) {
                 item {
-                    TextPreference(
-                        title = "Live Notifications Are Off",
-                        subtitle = "The system settings do not let ForgeGen show live notifications. Tap to open them.",
-                        value = "",
-                    ) {
-                        NowBar.openSystemSettings(context)
-                    }
+                    NowBarChecklist(
+                        notificationsAllowed = areNotificationsAllowed,
+                        liveNotificationsAllowed = isNowBarAllowed,
+                        onOpenNotificationSettings = { NowBar.openNotificationSettings(context) },
+                        onOpenLiveNotificationSettings = { NowBar.openSystemSettings(context) },
+                        onOpenDeveloperOptions = { NowBar.openDeveloperOptions(context) },
+                    )
                 }
             }
             item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
@@ -1264,6 +1266,66 @@ fun ExpandableCategoryHeader(title: String, appState: AppState, viewModel: Forge
             modifier = Modifier.size(18.dp)
         )
         HorizontalDivider(modifier = Modifier.weight(1f))
+    }
+}
+
+/**
+ * What the Now Bar needs besides the app: what the app can check is marked, the rest (Samsung's) is listed, with
+ * buttons to the pages where it is changed.
+ */
+@Composable
+private fun NowBarChecklist(
+    notificationsAllowed: Boolean,
+    liveNotificationsAllowed: Boolean,
+    onOpenNotificationSettings: () -> Unit,
+    onOpenLiveNotificationSettings: () -> Unit,
+    onOpenDeveloperOptions: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("For the Now Bar", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Spacer(Modifier.height(6.dp))
+            NowBarCheck(notificationsAllowed, "Notifications allowed")
+            NowBarCheck(liveNotificationsAllowed, "Live notifications allowed by the system")
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Samsung also needs these, which the app cannot check: \"Live notifications for all apps\" turned on in " +
+                    "the developer options (otherwise Samsung shows only the apps on its own list), and ForgeGen's " +
+                    "notifications shown on the lock screen, with their content.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            // Two buttons per row at most, so they fit on narrow phones.
+            if (!liveNotificationsAllowed) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onOpenLiveNotificationSettings) { Text("Live Notifications") }
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onOpenNotificationSettings) { Text("Notifications") }
+                TextButton(onClick = onOpenDeveloperOptions) { Text("Developer Options") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NowBarCheck(
+    ok: Boolean,
+    text: String,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+        Icon(
+            if (ok) Icons.Default.CheckCircle else Icons.Default.Warning,
+            contentDescription = if (ok) "Done" else "Missing",
+            tint = if (ok) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = 13.sp)
     }
 }
 

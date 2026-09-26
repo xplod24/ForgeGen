@@ -296,7 +296,11 @@ class GenerationService : Service() {
                 .setDeleteIntent(deleteIntent)
                 .setOnlyAlertOnce(true)
         // "Show Progress in Now Bar": a Live Update, which Samsung shows in the pill at the bottom of the lock screen.
-        if (inNowBar) builder.setRequestPromotedOngoing(true)
+        // Public, so the app itself never hides it there: it only shows the image number and the progress, no prompt.
+        if (inNowBar) {
+            builder.setRequestPromotedOngoing(true)
+            builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        }
 
         if (isActivelyGenerating) {
             builder.color = 0xFF005BFF.toInt()

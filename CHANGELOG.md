@@ -1,3 +1,7 @@
+## 1.4.1
+- Now Bar: the progress notification may always be shown in full on the lock screen (it shows only the image number and the progress, never the prompt), as Samsung requires.
+- Under "Show Progress in Now Bar" a checklist shows what the Now Bar needs: whether notifications and live notifications are allowed, and what Samsung needs besides that and the app cannot check ("Live notifications for all apps" in the developer options, and notifications with their content on the lock screen). Buttons open the right settings pages.
+
 ## 1.4.0
 - The settings show the app version under App Updates.
 - A hidden debug mode for maintaining the app, locked with a password. It shows the app's state and offers developer tools: editing all settings as text, HTTP logging, test notifications, saving the full log, and more. It stays hidden during normal use.
