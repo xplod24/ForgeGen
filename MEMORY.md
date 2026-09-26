@@ -59,6 +59,42 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Build 277 fixes:** see CHANGELOG.md (generation timeout, checkpoint override, progress, settings persistence, lock on cold start, PNG metadata, queue pause UX). Unit tests: `PngMetadataTest`, `ForgeSettingsManagerConfigTest`; `ForgeUpdateManagerTest` fixed to the list-based changelog.
 
 ## 4. Current Outstanding Tasks
+- **Planned for 2.0.0 (owner accepted all, after 1.6.2), with a full optimization pass and a new start animation:**
+  1. Undo after removing a job or clearing the queue (a bar with "Undo"; today the queue's bin clears everything at once, without asking).
+  2. Duplicate a job to the end of the queue (same seed or a new random one).
+  3. Reorder the queue by dragging instead of the up/down arrows.
+  4. Swap width and height with one button.
+  5. Vibration when a batch finishes while the app is on screen (with a switch).
+  6. Pinch and double-tap zoom in the image viewer.
+  7. Multi-select in the gallery (long press): share, save, favorite at once.
+  8. Launcher shortcuts (long press on the icon): Queue, Gallery, Generate Again.
+  9. Quick Settings tile with the queue's progress; a tap pauses or resumes it.
+  10. Take shared text as a prompt (`ACTION_SEND` `text/plain`; today only `image/*`).
+  11. Export and import of settings, presets, wildcards and server profiles to a file.
+- **2.0.0 optimization plan (found in the review after 1.6.2; waiting for the owner's approval and three decisions:
+  release build type, whether the start waits for the server, the new start animation):**
+  - Build: releases are debuggable debug builds without R8 (APK 68 MB, ~65 MB of it dex, mostly
+    material-icons-extended); Compose runs much slower when debuggable. Proposal: a non-debuggable, R8-minified build
+    signed with the same debug.keystore, same `.debug` app id, still published as `app-debug.apk` (Gson DTOs need keep
+    rules).
+  - Background: `ForgeSettingsManager.updateState` writes AppState to Room on every keystroke / slider step (LoRA
+    strength too) -> debounced writer; the ping runs every 10 s forever in the background -> stop when nothing runs,
+    2-3 s when idle on screen; the live preview is a base64 String flow decoded by the UI each second -> decode once,
+    downsampled, bitmap reuse; three OkHttp clients (settings, network manager, Coil) -> one shared pool; error
+    logging peeks whole bodies -> cap; `readImages` holds each image as base64 text -> stream-decode; session cache
+    keeps every image of a long queue until the next start -> keep the last N batches; recoverLastPrompt/Seed download
+    the whole image -> IIB `image_geninfo`; no `onTrimMemory`.
+  - Gallery: the whole index (prompts included) lives in memory and is filtered on every change, and each sync loads
+    it twice -> SQL queries (LIKE, ORDER BY, index on date), sync reads paths only; the grid uses
+    SubcomposeAsyncImage with one shimmer animation per cell -> AsyncImage + one shared shimmer, contentType; the
+    viewer decodes full-size images (3 pages) -> cap at screen size; Coil's ImageLoader is built per activity -> one
+    per app.
+  - UI: LoRA and model dropdowns compose every item with its preview at once -> lazy searchable sheet; the undo
+    history copies a growing list per keystroke -> cap; `PromptVisualTransformation()` is a new object per
+    recomposition; the live preview/progress recompose the main column -> read state where it is used.
+  - Start: WelcomeScreen always plays 3 s, then waits for the server (up to ~26 s). Proposal: Android 12+ splash with
+    an animated anvil icon (hammer strike, sparks, ~0.8 s), exit by scale + circular reveal into the main screen, no
+    fixed wait; status under the logo only when the start is slow.
 - **Now Bar: work in progress (owner, 1.5.0).** The setting is labelled "(Work in Progress)". Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.
