@@ -19,7 +19,9 @@
 
 
 
-    <application android:hasFragileUserData="true" android:allowBackup="true"
+    <application
+        android:name=".ForgeApp"
+        android:hasFragileUserData="true" android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"

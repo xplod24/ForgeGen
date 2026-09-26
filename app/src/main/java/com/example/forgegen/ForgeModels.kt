@@ -230,9 +230,26 @@ interface GalleryImageDao {
     @Query("DELETE FROM gallery_images")
     suspend fun clearAll()
 
-    @Query("SELECT * FROM gallery_images")
-    suspend fun getAllImages(): List<GalleryImageEntity>
+    /** The index without the prompts, which are most of its size; they are searched with [findPathsByPrompt]. */
+    @Query("SELECT fullpath, name, date, model, loras FROM gallery_images")
+    suspend fun getIndexedImages(): List<IndexedImage>
+
+    @Query("SELECT fullpath FROM gallery_images")
+    suspend fun getAllPaths(): List<String>
+
+    /** Images whose positive or negative prompt matches the LIKE [pattern] (with '\' as the escape character). */
+    @Query("SELECT fullpath FROM gallery_images WHERE positivePrompt LIKE :pattern ESCAPE '\\' OR negativePrompt LIKE :pattern ESCAPE '\\'")
+    suspend fun findPathsByPrompt(pattern: String): List<String>
 }
+
+/** A gallery image of the index as the app keeps it in memory: without its prompts. */
+data class IndexedImage(
+    val fullpath: String,
+    val name: String,
+    val date: String,
+    val model: String,
+    val loras: String,
+)
 
 @Entity(tableName = "app_settings")
 data class AppSettingEntity(

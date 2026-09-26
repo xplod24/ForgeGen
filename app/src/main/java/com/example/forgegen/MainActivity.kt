@@ -66,9 +66,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.forgegen.ui.components.*
 import com.example.forgegen.ui.screens.*
-import coil.ImageLoader
-import coil.compose.LocalImageLoader
-import coil.disk.DiskCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -354,32 +351,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Initialize the Coil image loader configuration using a custom HTTP Client to force a 30-day cache (2.5GB maximum size) for loaded network thumbnails.
-            val imageLoader =
-                remember(context) {
-                    ImageLoader
-                        .Builder(context)
-                        // Built lazily on the first image request: before initialization viewModel.client is a
-                        // bare OkHttpClient without the gallery cookie and timeouts from the settings.
-                        .okHttpClient {
-                            viewModel.client
-                                .newBuilder()
-                                .addNetworkInterceptor { chain ->
-                                    val originalResponse = chain.proceed(chain.request())
-                                    originalResponse
-                                        .newBuilder()
-                                        .header("Cache-Control", "public, max-age=2592000")
-                                        .build()
-                                }.build()
-                        }.diskCache {
-                            DiskCache
-                                .Builder()
-                                .directory(context.cacheDir.resolve("image_cache"))
-                                .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
-                                .build()
-                        }.build()
-                }
-
             val isOnline by currentConnectivityStatus(this)
             val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
             val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
@@ -489,209 +460,207 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            CompositionLocalProvider(LocalImageLoader provides imageLoader) {
-                MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
-                    // The overlays below fade in and out, so the blur behind them follows instead of snapping.
-                    val backgroundBlur by animateDpAsState(
-                        targetValue = if (shouldBlur) 15.dp else 0.dp,
-                        animationSpec = tween(OVERLAY_FADE_MS),
-                        label = "background_blur",
-                    )
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        Surface(
+            MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
+                // The overlays below fade in and out, so the blur behind them follows instead of snapping.
+                val backgroundBlur by animateDpAsState(
+                    targetValue = if (shouldBlur) 15.dp else 0.dp,
+                    animationSpec = tween(OVERLAY_FADE_MS),
+                    label = "background_blur",
+                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Surface(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier),
+                        color = MaterialTheme.colorScheme.background,
+                    ) {
+                        AppNavigation(viewModel = viewModel, navController = navController)
+                    }
+
+                    AnimatedVisibility(
+                        visible = shouldBlur,
+                        enter = fadeIn(tween(OVERLAY_FADE_MS)),
+                        exit = fadeOut(tween(OVERLAY_FADE_MS)),
+                    ) {
+                        Box(
                             modifier =
                                 Modifier
                                     .fillMaxSize()
-                                    .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier),
-                            color = MaterialTheme.colorScheme.background,
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .clickable(enabled = false) {},
+                            contentAlignment = Alignment.Center,
                         ) {
-                            AppNavigation(viewModel = viewModel, navController = navController)
-                        }
-
-                        AnimatedVisibility(
-                            visible = shouldBlur,
-                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
-                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
-                        ) {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.5f))
-                                        .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center,
+                            Card(
+                                shape = MaterialTheme.shapes.large,
+                                elevation = CardDefaults.cardElevation(8.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             ) {
-                                Card(
-                                    shape = MaterialTheme.shapes.large,
-                                    elevation = CardDefaults.cardElevation(8.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                ) {
-                                    Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                        if (!isOnline) {
-                                            Icon(
-                                                Icons.Default.SignalWifiOff,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(48.dp),
-                                                tint = MaterialTheme.colorScheme.error,
-                                            )
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("Turn on the internet to use the app", textAlign = TextAlign.Center)
-                                        } else {
-                                            Icon(
-                                                Icons.Default.CloudOff,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(48.dp),
-                                                tint = MaterialTheme.colorScheme.error,
-                                            )
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                            Spacer(Modifier.height(8.dp))
-                                            Text("Make sure the API server is running.", textAlign = TextAlign.Center)
-                                        }
-
-                                        Spacer(modifier = Modifier.height(16.dp))
-
-                                        Button(
-                                            onClick = onSetupClick,
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                        ) {
-                                            Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Open Settings")
-                                        }
+                                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    if (!isOnline) {
+                                        Icon(
+                                            Icons.Default.SignalWifiOff,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(48.dp),
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("Turn on the internet to use the app", textAlign = TextAlign.Center)
+                                    } else {
+                                        Icon(
+                                            Icons.Default.CloudOff,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(48.dp),
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("Make sure the API server is running.", textAlign = TextAlign.Center)
                                     }
-                                }
-                            }
-                        }
 
-                        val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
-                        var showPromptCancel by remember { mutableStateOf(false) }
-
-                        LaunchedEffect(isRestoringPrompt) {
-                            if (isRestoringPrompt == IndicatorState.LOADING) {
-                                showPromptCancel = false
-                                kotlinx.coroutines.delay(3000)
-                                showPromptCancel = true
-                            } else {
-                                showPromptCancel = false
-                            }
-                        }
-
-                        val shownRestoreState = rememberLastActive(isRestoringPrompt, IndicatorState.IDLE)
-                        AnimatedVisibility(
-                            visible = isRestoringPrompt != IndicatorState.IDLE,
-                            modifier = Modifier.zIndex(100f),
-                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
-                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
-                        ) {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.5f))
-                                        .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    AnimatedStatusIndicator(state = shownRestoreState)
                                     Spacer(modifier = Modifier.height(16.dp))
 
-                                    val statusText =
-                                        when (shownRestoreState) {
-                                            IndicatorState.SUCCESS -> "Successfully recovered!"
-                                            IndicatorState.ERROR -> "Failed to recover."
-                                            else -> "Recovering prompt..."
-                                        }
-
-                                    Text(statusText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-
-                                    if (showPromptCancel) {
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        OutlinedButton(onClick = { viewModel.cancelPromptRestore() }) {
-                                            Text("Cancel", color = Color.White)
-                                        }
+                                    Button(
+                                        onClick = onSetupClick,
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                    ) {
+                                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Open Settings")
                                     }
                                 }
                             }
                         }
+                    }
 
-                        // GLOBAL DOWNLOAD PROGRESS DIALOG
-                        if (isUpdateDownloading && !isLocked) {
-                            AlertDialog(
-                                onDismissRequest = { },
-                                properties =
-                                    androidx.compose.ui.window.DialogProperties(
-                                        dismissOnBackPress = false,
-                                        dismissOnClickOutside = false,
-                                    ),
-                                title = { Text("Downloading Update") },
-                                text = {
-                                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                                        LinearProgressIndicator(
-                                            progress = { updateDownloadProgress },
-                                            modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                        )
-                                        val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
-                                        val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
-                                        Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
-                                    }
-                                },
-                                confirmButton = { },
-                            )
+                    val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
+                    var showPromptCancel by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(isRestoringPrompt) {
+                        if (isRestoringPrompt == IndicatorState.LOADING) {
+                            showPromptCancel = false
+                            kotlinx.coroutines.delay(3000)
+                            showPromptCancel = true
+                        } else {
+                            showPromptCancel = false
                         }
+                    }
 
-                        // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
-                        val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
-                        if (importedImageMetadata != null && !isLocked) {
-                            AppMetadataAlertDialog(
-                                metadata = importedImageMetadata,
-                                onDismiss = { viewModel.setImportedImageMetadata(null) },
-                                onApplyPrompt = { pos, neg ->
-                                    viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
-                                    viewModel.setImportedImageMetadata(null)
-                                    viewModel.showToast("Applied Prompts")
-                                },
-                                onApplyModel = { modelName ->
-                                    viewModel.changeCheckpoint(modelName)
-                                    viewModel.setImportedImageMetadata(null)
-                                    viewModel.showToast("Applied Model: $modelName")
-                                },
-                                onApplyLoras = { loras ->
-                                    loras.forEach { loraTag ->
-                                        val loraName = loraTag.substringAfter("<lora:").substringBefore(":")
-                                        if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
+                    val shownRestoreState = rememberLastActive(isRestoringPrompt, IndicatorState.IDLE)
+                    AnimatedVisibility(
+                        visible = isRestoringPrompt != IndicatorState.IDLE,
+                        modifier = Modifier.zIndex(100f),
+                        enter = fadeIn(tween(OVERLAY_FADE_MS)),
+                        exit = fadeOut(tween(OVERLAY_FADE_MS)),
+                    ) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.5f))
+                                    .clickable(enabled = false) {},
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                AnimatedStatusIndicator(state = shownRestoreState)
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                val statusText =
+                                    when (shownRestoreState) {
+                                        IndicatorState.SUCCESS -> "Successfully recovered!"
+                                        IndicatorState.ERROR -> "Failed to recover."
+                                        else -> "Recovering prompt..."
                                     }
-                                    viewModel.setImportedImageMetadata(null)
-                                    viewModel.showToast("Applied LoRAs")
-                                },
-                            )
-                        }
 
-                        // WHAT'S NEW after an update: once the app is unlocked and past the start animation.
-                        val whatsNew by viewModel.whatsNew.collectAsStateWithLifecycle()
-                        whatsNew?.let { notes ->
-                            if (!isLocked && currentRoute != null && currentRoute != "welcome") {
-                                WhatsNewDialog(markdown = notes, onDismiss = { viewModel.dismissWhatsNew() })
+                                Text(statusText, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+
+                                if (showPromptCancel) {
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    OutlinedButton(onClick = { viewModel.cancelPromptRestore() }) {
+                                        Text("Cancel", color = Color.White)
+                                    }
+                                }
                             }
                         }
+                    }
 
-                        // APP LOCK: laid over the app instead of replacing it. The old lock removed the whole UI, so
-                        // every unlock rebuilt the app from the start screen and lost the current screen and state.
-                        // Its own window also keeps it above dialogs that were open when the app was left.
-                        if (isLocked) {
-                            Box(modifier = Modifier.fillMaxSize().background(Color.Black))
-                            Dialog(
-                                onDismissRequest = { activity.moveTaskToBack(true) }, // Back leaves the app, still locked
-                                properties =
-                                    DialogProperties(
-                                        dismissOnClickOutside = false,
-                                        usePlatformDefaultWidth = false,
-                                    ),
-                            ) {
-                                AppLockScreen(onUnlock = requestUnlock)
-                            }
+                    // GLOBAL DOWNLOAD PROGRESS DIALOG
+                    if (isUpdateDownloading && !isLocked) {
+                        AlertDialog(
+                            onDismissRequest = { },
+                            properties =
+                                androidx.compose.ui.window.DialogProperties(
+                                    dismissOnBackPress = false,
+                                    dismissOnClickOutside = false,
+                                ),
+                            title = { Text("Downloading Update") },
+                            text = {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                                    LinearProgressIndicator(
+                                        progress = { updateDownloadProgress },
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    )
+                                    val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
+                                    val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
+                                    Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
+                                }
+                            },
+                            confirmButton = { },
+                        )
+                    }
+
+                    // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
+                    val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()
+                    if (importedImageMetadata != null && !isLocked) {
+                        AppMetadataAlertDialog(
+                            metadata = importedImageMetadata,
+                            onDismiss = { viewModel.setImportedImageMetadata(null) },
+                            onApplyPrompt = { pos, neg ->
+                                viewModel.updateState { it.copy(positivePrompt = pos, negativePrompt = neg) }
+                                viewModel.setImportedImageMetadata(null)
+                                viewModel.showToast("Applied Prompts")
+                            },
+                            onApplyModel = { modelName ->
+                                viewModel.changeCheckpoint(modelName)
+                                viewModel.setImportedImageMetadata(null)
+                                viewModel.showToast("Applied Model: $modelName")
+                            },
+                            onApplyLoras = { loras ->
+                                loras.forEach { loraTag ->
+                                    val loraName = loraTag.substringAfter("<lora:").substringBefore(":")
+                                    if (loraName.isNotEmpty()) viewModel.appendLora(loraName)
+                                }
+                                viewModel.setImportedImageMetadata(null)
+                                viewModel.showToast("Applied LoRAs")
+                            },
+                        )
+                    }
+
+                    // WHAT'S NEW after an update: once the app is unlocked and past the start animation.
+                    val whatsNew by viewModel.whatsNew.collectAsStateWithLifecycle()
+                    whatsNew?.let { notes ->
+                        if (!isLocked && currentRoute != null && currentRoute != "welcome") {
+                            WhatsNewDialog(markdown = notes, onDismiss = { viewModel.dismissWhatsNew() })
+                        }
+                    }
+
+                    // APP LOCK: laid over the app instead of replacing it. The old lock removed the whole UI, so
+                    // every unlock rebuilt the app from the start screen and lost the current screen and state.
+                    // Its own window also keeps it above dialogs that were open when the app was left.
+                    if (isLocked) {
+                        Box(modifier = Modifier.fillMaxSize().background(Color.Black))
+                        Dialog(
+                            onDismissRequest = { activity.moveTaskToBack(true) }, // Back leaves the app, still locked
+                            properties =
+                                DialogProperties(
+                                    dismissOnClickOutside = false,
+                                    usePlatformDefaultWidth = false,
+                                ),
+                        ) {
+                            AppLockScreen(onUnlock = requestUnlock)
                         }
                     }
                 }

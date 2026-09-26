@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -56,43 +57,33 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING)
- * An animated gradient on placeholders while something loads. Each placeholder runs it only while it is shown.
+ * An animated gradient on placeholders while something loads. It is only drawn (the animation never recomposes the
+ * placeholder), and each placeholder runs it only while it is shown.
  * ============================================================================ */
 
 @Composable
-fun coloredShimmerBrush(baseColor: Color): Brush {
-    val shimmerColors =
-        listOf(
-            baseColor.copy(alpha = 0.2f),
-            baseColor.copy(alpha = 0.8f),
-            baseColor.copy(alpha = 0.2f),
+fun Modifier.shimmer(baseColor: Color = MaterialTheme.colorScheme.surfaceVariant): Modifier {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val translate =
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1000f,
+            animationSpec = infiniteRepeatable(tween(durationMillis = 1000, easing = LinearEasing), RepeatMode.Restart),
+            label = "shimmer_translate",
         )
-    val transition = rememberInfiniteTransition(label = "shimmer_${baseColor.value}")
-    val translateAnim by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1000f,
-        animationSpec =
-            infiniteRepeatable(
-                animation = tween(durationMillis = 1000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart,
-            ),
-        label = "shimmer_translate_${baseColor.value}",
-    )
-    return Brush.linearGradient(
-        colors = shimmerColors,
-        start = Offset.Zero,
-        end = Offset(x = translateAnim, y = translateAnim),
-    )
+    val colors = remember(baseColor) { listOf(baseColor.copy(alpha = 0.2f), baseColor.copy(alpha = 0.8f), baseColor.copy(alpha = 0.2f)) }
+    return drawBehind {
+        val t = translate.value
+        drawRect(Brush.linearGradient(colors, start = Offset.Zero, end = Offset(t, t)))
+    }
 }
 
 enum class ActiveMenu { NONE, FILTER, SORT, SETTINGS }
-
-@Composable
-fun shimmerBrush(): Brush = coloredShimmerBrush(MaterialTheme.colorScheme.surfaceVariant)
 
 private val FavoriteGold = Color(0xFFFFD54F)
 
@@ -561,7 +552,7 @@ fun GalleryScreen(
                                     .padding(4.dp)
                                     .aspectRatio(1f)
                                     .clip(MaterialTheme.shapes.small)
-                                    .background(shimmerBrush()),
+                                    .shimmer(),
                         )
                     }
                 }
@@ -588,7 +579,11 @@ fun GalleryScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(4.dp),
                 ) {
-                    itemsIndexed(displayedFiles, key = { _, item -> item.fullpath }) { index, item ->
+                    itemsIndexed(
+                        displayedFiles,
+                        key = { _, item -> item.fullpath },
+                        contentType = { _, item -> if (item.isDir) "dir" else "image" },
+                    ) { index, item ->
                         if (item.isDir) {
                             val folderIcon =
                                 when (item.fullpath) {
@@ -647,24 +642,7 @@ fun GalleryScreen(
                                             }
                                         },
                             ) {
-                                SubcomposeAsyncImage(
-                                    model = viewModel.getGalleryThumbnailUrl(item),
-                                    contentDescription = item.name,
-                                    loading = {
-                                        Box(modifier = Modifier.fillMaxSize().background(shimmerBrush()))
-                                    },
-                                    // Very old gallery extensions have no thumbnails; show the image itself then.
-                                    error = {
-                                        AsyncImage(
-                                            model = viewModel.getGalleryImageUrl(item),
-                                            contentDescription = item.name,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop,
-                                        )
-                                    },
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop,
-                                )
+                                GalleryThumbnail(viewModel, item)
                                 Box(
                                     modifier =
                                         Modifier
@@ -989,6 +967,33 @@ fun FullscreenGalleryViewer(
             }
         }
     }
+}
+
+/**
+ * A grid cell's image. A plain AsyncImage: SubcomposeAsyncImage (and a shimmer brush rebuilt on every animation frame)
+ * made scrolling heavy. Very old gallery extensions have no thumbnails; the image itself is shown then.
+ */
+@Composable
+private fun GalleryThumbnail(
+    viewModel: ForgeViewModel,
+    item: GalleryItem,
+) {
+    var thumbnailFailed by remember(item.fullpath) { mutableStateOf(false) }
+    var loading by remember(item.fullpath) { mutableStateOf(true) }
+    val url =
+        remember(item.fullpath, item.date, thumbnailFailed) {
+            if (thumbnailFailed) viewModel.getGalleryImageUrl(item) else viewModel.getGalleryThumbnailUrl(item)
+        }
+    AsyncImage(
+        model = url,
+        contentDescription = item.name,
+        onState = { state ->
+            loading = state is AsyncImagePainter.State.Loading
+            if (state is AsyncImagePainter.State.Error && !thumbnailFailed) thumbnailFailed = true
+        },
+        modifier = Modifier.fillMaxSize().then(if (loading) Modifier.shimmer() else Modifier),
+        contentScale = ContentScale.Crop,
+    )
 }
 
 /** The full image; its thumbnail (already cached by the grid) is shown at once while the full one loads. */

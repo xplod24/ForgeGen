@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
@@ -112,7 +113,8 @@ object ForgeGalleryManager {
     private val _gallerySyncCurrentFile = MutableStateFlow("")
     val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
 
-    private val indexedImages = MutableStateFlow<List<GalleryImageEntity>>(emptyList())
+    // The index in memory without the prompts (most of its size); a prompt search asks the database.
+    private val indexedImages = MutableStateFlow<List<IndexedImage>>(emptyList())
 
     private val _indexedImageCount = MutableStateFlow(0)
     val indexedImageCount: StateFlow<Int> = _indexedImageCount.asStateFlow()
@@ -167,38 +169,57 @@ object ForgeGalleryManager {
     private val _availableLoras = MutableStateFlow<List<String>>(emptyList())
     val availableLoras: StateFlow<List<String>> = _availableLoras.asStateFlow()
 
+    private class Shown(
+        val files: List<GalleryItem>,
+        val path: String,
+        val filters: GalleryFilters,
+        val index: List<IndexedImage>,
+    )
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val displayedFiles: StateFlow<List<GalleryItem>> =
-        combine(folderItems, _currentGalleryPath, _galleryFilters, indexedImages) { files, path, filters, index ->
-            if (filters.isSearch || path == ALL_IMAGES) {
-                val root = galleryRoot()
-                val found =
-                    index
-                        .asSequence()
-                        .filter { root == null || isUnder(it.fullpath, root) }
-                        .filter { !filters.isSearch || matches(it, filters) }
-                        .map { it.toGalleryItem() }
-                        .toList()
-                sortItems(found, filters.sortOrder)
-            } else {
-                sortItems(files, filters.sortOrder)
-            }
-        }.stateIn(
-            scope = managerScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList(),
-        )
+        combine(folderItems, _currentGalleryPath, _galleryFilters, indexedImages, ::Shown)
+            .mapLatest { shown ->
+                val filters = shown.filters
+                if (filters.isSearch || shown.path == ALL_IMAGES) {
+                    val root = galleryRoot()?.let { norm(it) }
+                    val promptHits = filters.prompt.trim().takeIf { it.isNotEmpty() }?.let { promptMatches(it) }
+                    val found =
+                        shown.index
+                            .asSequence()
+                            .filter { root == null || isUnderNormalized(it.fullpath, root) }
+                            .filter { !filters.isSearch || matches(it, filters, promptHits) }
+                            .map { it.toGalleryItem() }
+                            .toList()
+                    sortItems(found, filters.sortOrder)
+                } else {
+                    sortItems(shown.files, filters.sortOrder)
+                }
+            }.stateIn(
+                scope = managerScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList(),
+            )
+
+    /** Paths of the images whose prompts contain [text] (ignoring case), found by the database. */
+    private suspend fun promptMatches(text: String): Set<String> {
+        val escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return try {
+            getDb().galleryImageDao().findPathsByPrompt("%$escaped%").toHashSet()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e(TAG, "Prompt search failed", e)
+            emptySet()
+        }
+    }
 
     private fun matches(
-        image: GalleryImageEntity,
+        image: IndexedImage,
         filters: GalleryFilters,
+        promptHits: Set<String>?,
     ): Boolean {
         if (filters.name.isNotBlank() && !image.name.contains(filters.name.trim(), ignoreCase = true)) return false
-        if (filters.prompt.isNotBlank()) {
-            val text = filters.prompt.trim()
-            if (!image.positivePrompt.contains(text, ignoreCase = true) && !image.negativePrompt.contains(text, ignoreCase = true)) {
-                return false
-            }
-        }
+        if (promptHits != null && image.fullpath !in promptHits) return false
         if (filters.models.isNotEmpty() && image.model !in filters.models) return false
         if (filters.loras.isNotEmpty()) {
             val used = image.loras.split(",").map { it.trim() }
@@ -285,9 +306,9 @@ object ForgeGalleryManager {
     /** Reloads the index into memory; the filter lists only offer models and LoRAs of the current gallery. */
     private suspend fun reloadIndex() {
         try {
-            val all = getDb().galleryImageDao().getAllImages()
-            val root = galleryRoot()
-            val inGallery = all.filter { root == null || isUnder(it.fullpath, root) }
+            val all = getDb().galleryImageDao().getIndexedImages()
+            val root = galleryRoot()?.let { norm(it) }
+            val inGallery = all.filter { root == null || isUnderNormalized(it.fullpath, root) }
             indexedImages.value = all
             _indexedImageCount.value = inGallery.size
             _availableModels.value = inGallery.map { it.model }.filter { it.isNotBlank() }.distinct().sorted()
@@ -377,6 +398,24 @@ object ForgeGalleryManager {
         return root.isEmpty() || norm(path).startsWith("$root/")
     }
 
+    /**
+     * [isUnder] for a folder already normalized ([norm]) without building new strings: it runs for every image of
+     * the index whenever the shown list changes.
+     */
+    private fun isUnderNormalized(
+        path: String,
+        root: String,
+    ): Boolean {
+        if (root.isEmpty()) return true
+        if (path.length <= root.length) return false
+        for (i in root.indices) {
+            val c = path[i].let { if (it == '\\') '/' else it.lowercaseChar() }
+            if (c != root[i]) return false
+        }
+        val next = path[root.length]
+        return next == '/' || next == '\\'
+    }
+
     private fun parentOf(path: String) = norm(path).substringBeforeLast('/', "")
 
     private fun fileName(path: String) = path.replace('\\', '/').trimEnd('/').substringAfterLast('/')
@@ -439,7 +478,7 @@ object ForgeGalleryManager {
         return list
     }
 
-    private fun GalleryImageEntity.toGalleryItem() = GalleryItem(name = name, fullpath = fullpath, type = "file", date = date)
+    private fun IndexedImage.toGalleryItem() = GalleryItem(name = name, fullpath = fullpath, type = "file", date = date)
 
     /** An error the server reported, shown to the user as it is. */
     private class GalleryException(
@@ -655,8 +694,8 @@ object ForgeGalleryManager {
         full: Boolean,
     ): SyncResult {
         val dao = getDb().galleryImageDao()
-        val indexed = dao.getAllImages()
-        val indexedPaths = indexed.mapTo(HashSet()) { it.fullpath }
+        val indexed = dao.getAllPaths() // only the paths: the whole index used to be read here, prompts included
+        val indexedPaths = indexed.toHashSet()
 
         // 1. Find the images.
         val listing = listTree(root, if (full) emptyMap() else loadFolderDates())
@@ -664,16 +703,15 @@ object ForgeGalleryManager {
         // 2. Forget images that are gone: from every listed folder, or anywhere in the gallery on a full sync.
         val present = listing.files.mapTo(HashSet()) { norm(it.fullpath) }
         val stale =
-            indexed
-                .filter { image ->
-                    isUnder(image.fullpath, root) &&
-                        norm(image.fullpath) !in present &&
-                        (
-                            full ||
-                                parentOf(image.fullpath) in listing.listedFolders ||
-                                listing.removedFolders.any { isUnder(image.fullpath, it) }
-                        )
-                }.map { it.fullpath }
+            indexed.filter { path ->
+                isUnder(path, root) &&
+                    norm(path) !in present &&
+                    (
+                        full ||
+                            parentOf(path) in listing.listedFolders ||
+                            listing.removedFolders.any { isUnder(path, it) }
+                    )
+            }
         stale.chunked(500).forEach { dao.deleteImages(it) } // SQLite limits the number of parameters
 
         // 3. Read the generation data of the new images, 100 per request.
