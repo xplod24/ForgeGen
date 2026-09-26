@@ -116,19 +116,7 @@ interface ForgeApi {
 }
 
 /* ============================================================================
- * 2. CIVITAI API
- * Civitai integration API.
- * Used for fetching model metadata, image previews, and model versions from Civitai based on their SHA256 hashes.
- * ============================================================================ */
-interface CivitaiApi {
-    @GET("api/v1/model-versions/by-hash/{hash}")
-    suspend fun getModelByHash(
-        @Path("hash") hash: String,
-    ): Response<CivitaiVersionResponseDto>
-}
-
-/* ============================================================================
- * 3. GITHUB RELEASES API
+ * 2. GITHUB RELEASES API
  * App updates come from the latest release of the (public) GitHub repository, so no token is needed.
  * ============================================================================ */
 interface GitHubApi {

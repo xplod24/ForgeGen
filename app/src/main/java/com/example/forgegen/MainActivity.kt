@@ -471,12 +471,6 @@ class MainActivity : ComponentActivity() {
             val isSessionActive =
                 currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue" || currentRoute == "wildcards"
 
-            // CIVITAI SYNC STATES
-            val isCivitaiSyncing by viewModel.isCivitaiSyncing.collectAsStateWithLifecycle()
-            val civitaiSyncCurrentModel by viewModel.civitaiSyncCurrentModel.collectAsStateWithLifecycle()
-            val civitaiSyncProgress by viewModel.civitaiSyncProgress.collectAsStateWithLifecycle()
-            val civitaiSyncLastResult by viewModel.civitaiSyncLastResult.collectAsStateWithLifecycle()
-
             val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
             val onSetupClick = rememberDebounced { navController.navigate("setup") }
 
@@ -499,7 +493,7 @@ class MainActivity : ComponentActivity() {
                 MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
                     // The overlays below fade in and out, so the blur behind them follows instead of snapping.
                     val backgroundBlur by animateDpAsState(
-                        targetValue = if (shouldBlur || isCivitaiSyncing != IndicatorState.IDLE) 15.dp else 0.dp,
+                        targetValue = if (shouldBlur) 15.dp else 0.dp,
                         animationSpec = tween(OVERLAY_FADE_MS),
                         label = "background_blur",
                     )
@@ -617,99 +611,6 @@ class MainActivity : ComponentActivity() {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         OutlinedButton(onClick = { viewModel.cancelPromptRestore() }) {
                                             Text("Cancel", color = Color.White)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // GLOBAL CIVITAI SYNCHRONIZATION OVERLAY DIALOG
-                        var showCivitaiCancel by remember { mutableStateOf(false) }
-
-                        LaunchedEffect(isCivitaiSyncing) {
-                            if (isCivitaiSyncing == IndicatorState.LOADING) {
-                                showCivitaiCancel = false
-                                kotlinx.coroutines.delay(3000)
-                                showCivitaiCancel = true
-                            } else {
-                                showCivitaiCancel = false
-                            }
-                        }
-
-                        val shownCivitaiState = rememberLastActive(isCivitaiSyncing, IndicatorState.IDLE)
-                        AnimatedVisibility(
-                            visible = isCivitaiSyncing != IndicatorState.IDLE,
-                            modifier = Modifier.zIndex(150f),
-                            enter = fadeIn(tween(OVERLAY_FADE_MS)),
-                            exit = fadeOut(tween(OVERLAY_FADE_MS)),
-                        ) {
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.7f))
-                                        .clickable(enabled = false) {},
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Card(
-                                    modifier =
-                                        Modifier
-                                            .padding(
-                                                32.dp,
-                                            ).fillMaxWidth(0.85f)
-                                            .animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
-                                    shape = MaterialTheme.shapes.large,
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(24.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        AnimatedStatusIndicator(state = shownCivitaiState)
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Text("Civitai Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Text("Fetching metadata for:", fontSize = 12.sp, color = Color.Gray)
-                                        Text(
-                                            text = civitaiSyncCurrentModel.ifEmpty { "..." },
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            textAlign = TextAlign.Center,
-                                            maxLines = 2,
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-
-                                        val (current, total) = civitaiSyncProgress
-                                        LinearProgressIndicator(
-                                            progress = { if (total > 0) current.toFloat() / total.toFloat() else 0f },
-                                            modifier = Modifier.fillMaxWidth().height(6.dp),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text("Model $current of $total", fontSize = 12.sp)
-
-                                        if (civitaiSyncLastResult != null) {
-                                            Spacer(modifier = Modifier.height(12.dp))
-                                            val isError =
-                                                civitaiSyncLastResult!!.contains("Błąd", ignoreCase = true) ||
-                                                    civitaiSyncLastResult!!.contains("Error", ignoreCase = true) ||
-                                                    civitaiSyncLastResult!!.startsWith("Stopped")
-                                            Text(
-                                                text = "Last result: $civitaiSyncLastResult",
-                                                fontSize = 11.sp,
-                                                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                            )
-                                        }
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text("API limits applied to prevent IP ban.", fontSize = 10.sp, color = Color.Gray)
-
-                                        if (showCivitaiCancel) {
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            OutlinedButton(onClick = { viewModel.cancelCivitaiSync() }) {
-                                                Text("Cancel")
-                                            }
                                         }
                                     }
                                 }

@@ -5,13 +5,13 @@ package com.example.forgegen
  * The server decides what it generates (a prompt-checking extension answers a refused prompt with HTTP 403, which
  * the queue reports as "The prompt does not comply with the server's rules"). On top of that, as an extra check
  * before a job is sent, the app refuses what no server may be sent; such a job goes the same way as a server's 403
- * (ForgeQueueManager). Everything these rules do is in this file, to manage them in one place; a rule some
+ * (ForgeQueueManager). Everything this check does is in this file, to manage it in one place; a rule some
  * country requires on top belongs here too.
- *  1. Sexual content with a minor: a word that makes a person a minor, or an age under 18, together with any
- *     sexual word.
- *  2. A real person: nudity or sex with the LoRA of a real person (Civitai marks such models).
- *  3. Civitai: a sample image Civitai marks as showing a minor is never a preview unless it is rated PG.
- * The rules work on whole words ("_" and "-" count as spaces), so they are a safeguard, not an enforcement.
+ *  - Sexual content with a minor: a word that makes a person a minor, or an age under 18, together with any
+ *    sexual word.
+ * (Until 1.6.0 it also refused nudity with a real person's LoRA and Civitai previews of minors; both relied on
+ * Civitai's data, which the app no longer fetches since 1.6.1.)
+ * The rule works on whole words ("_" and "-" count as spaces), so they are a safeguard, not an enforcement.
  * ============================================================================ */
 object BlockingApi {
     /** Why a prompt is refused, and the words that caused it. */
@@ -209,29 +209,13 @@ object BlockingApi {
     /** The words in [text] that make a person a minor, ages under 18 included. */
     fun minorTerms(text: String) = minorRegex.terms(text) + MINOR_AGE.findAll(text).map { it.value.lowercase() }
 
-    /**
-     * Why [prompt] is never sent, or null. [realPersonLoras] are the LoRAs Civitai marks as a real person (their
-     * names in `<lora:name:weight>`).
-     */
-    fun check(
-        prompt: String,
-        realPersonLoras: Set<String> = emptySet(),
-    ): Verdict? {
-        val nudity = nudityRegex.terms(prompt)
-        val sexual = nudity + suggestiveRegex.terms(prompt)
-        // Rule 1: sexual content with a minor.
+    /** Why [prompt] is never sent (sexual content with a minor), or null. */
+    fun check(prompt: String): Verdict? {
+        val sexual = nudityRegex.terms(prompt) + suggestiveRegex.terms(prompt)
         val minors = minorTerms(prompt)
         if (sexual.isNotEmpty() && minors.isNotEmpty()) {
             return Verdict(minors + sexual, "Sexual content with a minor is never sent.")
         }
-        // Rule 2: nudity or sex with a real person.
-        val people = parseActiveLoras(prompt).map { it.name }.filter { it in realPersonLoras }
-        if (people.isNotEmpty() && nudity.isNotEmpty()) {
-            return Verdict(people + nudity, "Nudity or sex with the LoRA of a real person is never sent.")
-        }
         return null
     }
-
-    /** Rule 3: whether a Civitai sample image may be a preview at all. */
-    fun allowsCivitaiImage(image: CivitaiImage) = !(image.minor && image.level > 1)
 }

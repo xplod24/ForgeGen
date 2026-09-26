@@ -74,12 +74,7 @@ fun MainScreen(
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
 
-    var pendingLora by remember { mutableStateOf<ApiResource?>(null) }
     var fullscreenImageIndex by remember { mutableIntStateOf(-1) }
-
-    var tagsPopupHash by remember { mutableStateOf<String?>(null) }
-    var tagsPopupName by remember { mutableStateOf("") }
-    var availableTagsForPopup by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val context = LocalContext.current
     val imageLoader = context.imageLoader
@@ -269,11 +264,6 @@ fun MainScreen(
                         availableLoras = availableLoras,
                         activeLoras = activeLoras,
                         config = config,
-                        onPendingLora = { pendingLora = it },
-                        onOpenTagsPopup = { hash, name ->
-                            tagsPopupHash = hash
-                            tagsPopupName = name
-                        },
                     )
 
                     // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
@@ -298,15 +288,6 @@ fun MainScreen(
 
         // --- ROOT DIALOGS ---
 
-        if (pendingLora != null) {
-            LoraTriggerDialog(
-                viewModel = viewModel,
-                state = state,
-                lora = pendingLora!!,
-                onDismiss = { pendingLora = null },
-            )
-        }
-
         if (fullscreenImageIndex >= 0 && sessionImages.isNotEmpty()) {
             FullscreenImageViewer(
                 viewModel = viewModel,
@@ -314,53 +295,6 @@ fun MainScreen(
                 sessionImages = sessionImages,
                 initialIndex = fullscreenImageIndex,
                 onDismiss = { fullscreenImageIndex = -1 },
-            )
-        }
-
-        if (tagsPopupHash != null) {
-            LaunchedEffect(tagsPopupHash) {
-                val hash = tagsPopupHash ?: return@LaunchedEffect
-                availableTagsForPopup = emptyList() // don't flash the previous LoRA's tags while loading
-                availableTagsForPopup = viewModel.getTagsForLora(hash)
-            }
-
-            AlertDialog(
-                onDismissRequest = { tagsPopupHash = null },
-                title = { Text("Tags for: $tagsPopupName", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-                text = {
-                    val promptTags = state.positivePrompt.split(",").map { it.trim() }
-                    val filteredTags = availableTagsForPopup.filter { !promptTags.contains(it) }
-
-                    if (filteredTags.isEmpty()) {
-                        Text("No new tags found. Refresh API if the model was updated on Civitai.", fontSize = 14.sp)
-                    } else {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.heightIn(max = 300.dp),
-                        ) {
-                            filteredTags.forEach { tag ->
-                                AssistChip(
-                                    onClick = {
-                                        val currentPrompt = state.positivePrompt
-                                        val newPrompt =
-                                            if (currentPrompt.endsWith(",")) {
-                                                "$currentPrompt $tag"
-                                            } else if (currentPrompt.isBlank()) {
-                                                tag
-                                            } else {
-                                                "$currentPrompt, $tag"
-                                            }
-                                        viewModel.updateState { it.copy(positivePrompt = newPrompt) }
-                                    },
-                                    label = { Text(tag, fontSize = 12.sp) },
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { tagsPopupHash = null }) { Text("Close") }
-                },
             )
         }
 

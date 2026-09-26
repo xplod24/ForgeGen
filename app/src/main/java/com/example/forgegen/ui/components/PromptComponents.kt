@@ -1109,15 +1109,12 @@ fun GenerationSettingsSection(
                                             .background(Color.DarkGray),
                                     contentScale = ContentScale.Crop,
                                 )
-                                Column {
-                                    Text(
-                                        text = mod.title,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    ModelBadges(mod)
-                                }
+                                Text(
+                                    text = mod.title,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         },
                         onClick = {
@@ -1411,8 +1408,6 @@ fun LorasSection(
     availableLoras: List<ApiResource>,
     activeLoras: List<ActiveLora>,
     config: AppConfig,
-    onPendingLora: (ApiResource) -> Unit,
-    onOpenTagsPopup: (String, String) -> Unit,
 ) {
     val expanded = config.mainLorasExpanded
 
@@ -1483,19 +1478,16 @@ fun LorasSection(
                                             .background(Color.DarkGray),
                                     contentScale = ContentScale.Crop,
                                 )
-                                Column {
-                                    Text(
-                                        text = loraData.title,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                    ModelBadges(loraData)
-                                }
+                                Text(
+                                    text = loraData.title,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         },
                         onClick = {
-                            onPendingLora(loraData)
+                            viewModel.addLora(loraData.name)
                             loraExpanded = false
                         },
                     )
@@ -1544,24 +1536,8 @@ fun LorasSection(
                                 modifier = Modifier.weight(1f),
                             )
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(
-                                    onClick = {
-                                        val hash = loraResource?.hash
-                                        if (hash != null) {
-                                            onOpenTagsPopup(hash, lora.name)
-                                        } else {
-                                            viewModel.showToast("No model metadata. Refresh the model list.")
-                                        }
-                                    },
-                                    modifier = Modifier.size(24.dp),
-                                ) {
-                                    Icon(Icons.Default.LocalOffer, "View Tags", modifier = Modifier.size(16.dp))
-                                }
-
-                                IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
-                                    Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
-                                }
+                            IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
                             }
                         }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1802,105 +1778,6 @@ fun BottomControlsSection(
             }
         }
     }
-}
-
-@Composable
-fun LoraTriggerDialog(
-    viewModel: ForgeViewModel,
-    state: AppState,
-    lora: ApiResource,
-    onDismiss: () -> Unit,
-) {
-    var triggerWords by remember(lora) { mutableStateOf<List<String>?>(null) }
-    var selectedWords by remember { mutableStateOf(emptySet<String>()) }
-    var originalPrompt by remember(lora) { mutableStateOf(state.positivePrompt) }
-
-    LaunchedEffect(lora) {
-        triggerWords =
-            if (lora.hash != null) {
-                viewModel.getTagsForLora(lora.hash)
-            } else {
-                emptyList()
-            }
-    }
-
-    LaunchedEffect(selectedWords, lora) {
-        val hasLora = originalPrompt.contains("<lora:${lora.name}:")
-        var newPrompt = originalPrompt
-
-        if (!hasLora) {
-            val prefix = if (newPrompt.isNotEmpty() && !newPrompt.trimEnd().endsWith(",")) ", " else ""
-            newPrompt = newPrompt.trimEnd() + prefix + "<lora:${lora.name}:1.0>"
-        }
-
-        if (selectedWords.isNotEmpty()) {
-            val tags = ", " + selectedWords.joinToString(", ")
-            newPrompt += tags
-        }
-
-        viewModel.updateState { it.copy(positivePrompt = newPrompt) }
-    }
-
-    AlertDialog(
-        onDismissRequest = {
-            viewModel.updateState { it.copy(positivePrompt = originalPrompt) }
-            onDismiss()
-        },
-        title = { Text(lora.title, fontSize = 18.sp, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                if (triggerWords == null) {
-                    CircularProgressIndicator(modifier = Modifier.padding(16.dp))
-                    Text("Loading trigger words...", fontSize = 12.sp)
-                } else {
-                    if (triggerWords!!.isNotEmpty()) {
-                        Text(
-                            "Click tags to add/remove them from your prompt:",
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(bottom = 8.dp),
-                        )
-                        LazyColumn(
-                            modifier =
-                                Modifier
-                                    .heightIn(
-                                        max = 250.dp,
-                                    ).fillMaxWidth()
-                                    .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small),
-                        ) {
-                            items(triggerWords!!) { word: String ->
-                                val isSelected = selectedWords.contains(word)
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier =
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                selectedWords = if (isSelected) selectedWords.minus(word) else selectedWords.plus(word)
-                                            }.padding(horizontal = 8.dp, vertical = 6.dp),
-                                ) {
-                                    Checkbox(checked = isSelected, onCheckedChange = null)
-                                    Text(word, fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
-                                }
-                            }
-                        }
-                    } else {
-                        Text("This LoRA has no trigger words on Civitai. Do you still want to add it?", fontSize = 14.sp)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss, enabled = triggerWords != null) {
-                Text(if (triggerWords?.isEmpty() == true) "Add LoRA" else "Done")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = {
-                viewModel.updateState { it.copy(positivePrompt = originalPrompt) }
-                onDismiss()
-            }) { Text("Cancel") }
-        },
-    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)

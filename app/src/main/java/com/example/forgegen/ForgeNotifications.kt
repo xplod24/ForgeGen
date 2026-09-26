@@ -14,7 +14,7 @@ import androidx.core.app.NotificationManagerCompat
 /* ============================================================================
  * NOTIFICATIONS
  * One place for channels, notification ids and posting, used by the service, the queue,
- * the gallery sync and the Civitai sync. Channels are created at app start, so a notification
+ * and the gallery sync. Channels are created at app start, so a notification
  * posted before the generation service ever ran is not silently dropped.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak") // holds the application context only
@@ -22,12 +22,11 @@ object ForgeNotifications {
     // Ids kept from the old channels, so settings the user already changed for them survive.
     const val CHANNEL_ALERTS = "forge_high" // queue paused, server out of memory
     const val CHANNEL_RESULTS = "forge_default" // batch / queue finished, sync results
-    const val CHANNEL_PROGRESS = "forge_low" // silent: generation service, gallery and Civitai sync progress
+    const val CHANNEL_PROGRESS = "forge_low" // silent: generation service and gallery sync progress
 
     const val ID_SERVICE = 1001
     const val ID_QUEUE_PAUSED = 1002
     const val ID_GALLERY_SYNC = 555
-    const val ID_CIVITAI_SYNC = 556
 
     private const val TAG = "ForgeNotifications"
     private var context: Context? = null

@@ -38,8 +38,6 @@ data class AppConfig(
     var timeout: Int = 10,
     var notifOnBatchFinish: Boolean = false,
     var notifOnQueueFinish: Boolean = true,
-    var notifCivitaiSync: Boolean = true,
-    var autoDismissCivitaiNotif: Boolean = false,
     var notificationMode: String = "Simple",
     var keepScreenOn: Boolean = false,
     var swipeToBrowseGallery: Boolean = true,
@@ -54,7 +52,6 @@ data class AppConfig(
     var lastUpdateCheckDate: String = "",
     var defaultState: AppState = AppState(),
     var presets: List<GenerationPreset> = emptyList(),
-    var autoSyncModels: Boolean = false,
     var mainPromptsExpanded: Boolean = true,
     var mainSettingsExpanded: Boolean = false,
     var mainLorasExpanded: Boolean = false,
@@ -144,9 +141,6 @@ data class ApiResource(
     val path: String,
     val name: String,
     val hash: String? = null,
-    // Civitai's labels of the model, shown next to it (ModelBadges).
-    val nsfw: Boolean = false,
-    val realPerson: Boolean = false,
 )
 
 /** An app update offered by the latest GitHub release. */
@@ -184,36 +178,6 @@ data class GalleryItem(
  * 2. ROOM DATABASE COMPONENTS (Entities & DAOs)
  * Representation of data in the local SQLite database.
  * ============================================================================ */
-
-@Entity(tableName = "civitai_models")
-data class CivitaiModelEntity(
-    @PrimaryKey val sha256: String,
-    val type: String,
-    val name: String,
-    val trainedWords: String,
-    // The safe (PG) sample image, or before 1.3.0 simply the first one.
-    val previewImage: String?,
-    // Civitai's sample images with their ratings (JSON list of CivitaiImage); null until synced by 1.3.0 or later.
-    val previewImages: String? = null,
-    @ColumnInfo(defaultValue = "0") val nsfw: Boolean = false,
-    // Civitai marks models of a real person ("poi"); with nudity or sex they are never sent (BlockingApi).
-    @ColumnInfo(defaultValue = "0") val realPerson: Boolean = false,
-)
-
-@Dao
-interface CivitaiModelDao {
-    @Query("SELECT * FROM civitai_models ORDER BY name ASC")
-    suspend fun getAllModels(): List<CivitaiModelEntity>
-
-    @Query("SELECT * FROM civitai_models WHERE sha256 = :sha256")
-    suspend fun getModelByHash(sha256: String): CivitaiModelEntity?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertModels(models: List<CivitaiModelEntity>)
-
-    @Query("DELETE FROM civitai_models")
-    suspend fun deleteAll()
-}
 
 @Entity(tableName = "favorite_images")
 data class FavoriteImageEntity(
@@ -290,18 +254,16 @@ interface AppSettingDao {
 
 @Database(
     entities = [
-        CivitaiModelEntity::class, 
         FavoriteImageEntity::class, 
         WildcardEntity::class, 
         GalleryImageEntity::class,
         AppSettingEntity::class
     ],
-    version = 11,
+    // 12 (1.6.1): the civitai_models table is gone (MIGRATION_11_12).
+    version = 12,
     exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
-    abstract fun civitaiModelDao(): CivitaiModelDao
-
     abstract fun favoriteImageDao(): FavoriteImageDao
 
     abstract fun wildcardDao(): WildcardDao
@@ -313,7 +275,7 @@ abstract class ForgeDatabase : RoomDatabase() {
 
 /* ============================================================================
  * 3. DATA TRANSFER OBJECTS (DTOs)
- * Classes mapping JSON responses from Retrofit (A1111, Forge, Civitai).
+ * Classes mapping JSON responses from Retrofit (A1111, Forge).
  * ============================================================================ */
 
 data class OverrideSettingsDto(
@@ -427,40 +389,6 @@ data class CustomApiModelDto(
     val filename: String?,
     val sha256: String?,
 )
-
-// New DTO for Civitai (replaces org.json.JSONObject)
-data class CivitaiVersionResponseDto(
-    val model: CivitaiBaseModelDto?,
-    val trainedWords: List<String>?,
-    val images: List<CivitaiImageDto>?,
-)
-
-data class CivitaiBaseModelDto(
-    val name: String?,
-    val nsfw: Boolean? = null,
-    val poi: Boolean? = null,
-)
-
-data class CivitaiImageDto(
-    val url: String?,
-    val nsfwLevel: Int? = null,
-    val minor: Boolean? = null,
-)
-
-/** A Civitai sample image of a model with Civitai's rating (1 PG, 2 PG-13, 4 R, 8 X, 16 XXX, 32 blocked by Civitai). */
-data class CivitaiImage(
-    val url: String,
-    val level: Int,
-    val minor: Boolean = false,
-) {
-    companion object {
-        private const val BLOCKED_BY_CIVITAI = 32
-
-        /** The preview of a model: its first sample image that neither Civitai nor BlockingApi (rule 3) refuses. */
-        fun preview(images: List<CivitaiImage>) =
-            images.firstOrNull { it.level != BLOCKED_BY_CIVITAI && BlockingApi.allowsCivitaiImage(it) }
-    }
-}
 
 // New DTO for memory and global settings queries
 data class MemoryResponseDto(

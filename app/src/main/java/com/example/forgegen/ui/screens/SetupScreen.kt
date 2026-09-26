@@ -308,33 +308,9 @@ fun SetupScreen(
                 }
             }
 
-
-
-            item { ExpandableCategoryHeader("Metadata & Civitai", appState, viewModel) }
-            if ("Metadata & Civitai" in appState.setupExpandedSections) {
-
-            item {
-                // Only while connected to the Forge server: the models to look up come from it.
-                TextPreference(
-                    title = "Sync Models Now",
-                    subtitle =
-                        if (isConnected) {
-                            "Fetch missing thumbnails and trigger words from Civitai API"
-                        } else {
-                            "Needs a connection to the Forge server"
-                        },
-                    value = "",
-                    enabled = isConnected,
-                ) {
-                    viewModel.syncCivitaiModelsManual()
-                }
-            }
-
-            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
-
             /* ==========================================================
              * CATEGORY: PRIVACY
-             * ========================================================== */            }
+             * ========================================================== */
 
             item { ExpandableCategoryHeader("Privacy", appState, viewModel) }
             if ("Privacy" in appState.setupExpandedSections) {
@@ -515,23 +491,6 @@ fun SetupScreen(
                     subtitle = "Get alerted when all queued jobs are finished",
                     checked = config.notifOnQueueFinish,
                     onCheckedChange = { viewModel.saveConfig(config.copy(notifOnQueueFinish = it)) },
-                )
-            }
-            item {
-                SwitchPreference(
-                    title = "Notify during Civitai Sync",
-                    subtitle = "Show progress notification while synchronizing models",
-                    checked = config.notifCivitaiSync,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(notifCivitaiSync = it)) },
-                )
-            }
-            item {
-                SwitchPreference(
-                    title = "Auto-Dismiss Sync Notification",
-                    subtitle = "Automatically dismiss the notification after a successful sync",
-                    checked = config.autoDismissCivitaiNotif,
-                    enabled = config.notifCivitaiSync,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(autoDismissCivitaiNotif = it)) },
                 )
             }
             item {

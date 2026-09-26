@@ -548,7 +548,7 @@ object ForgeQueueManager {
         val startedAt = System.currentTimeMillis()
         try {
             // The extra check of BlockingApi goes the way of the server's own refusal (HTTP 403), without sending.
-            val refused = BlockingApi.check(job.payload.prompt, ForgeModelManager.realPersonLoras.value)
+            val refused = BlockingApi.check(job.payload.prompt)
             val answer =
                 if (refused != null) {
                     Answer.Failed(HTTP_FORBIDDEN, gson.toJson(mapOf("detail" to "${refused.reason} (${refused.terms.joinToString(", ")})")))

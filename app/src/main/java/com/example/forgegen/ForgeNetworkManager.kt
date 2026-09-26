@@ -3,7 +3,6 @@ package com.example.forgegen
 import com.example.forgegen.ui.components.*
 import android.util.Log
 import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -28,7 +27,7 @@ import java.util.concurrent.TimeUnit
 /* ============================================================================
  * NETWORK MANAGER
  * Manages OkHttpClient instances, Retrofit client initialization, and coordinates API fetch operations
- * for server configurations (Models, Samplers, LoRAs, and Civitai updates).
+ * for server configurations (Models, Samplers, LoRAs).
  * ============================================================================ */
 class ForgeNetworkManager(
     private val getDb: () -> ForgeDatabase,
@@ -88,52 +87,6 @@ class ForgeNetworkManager(
         }
     }
 
-    private val civitaiClient: OkHttpClient by lazy {
-        val loggingInterceptor =
-            HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.BODY
-            }
-        val conditionalCivitaiLogger =
-            okhttp3.Interceptor { chain ->
-                if (!getConfig().enableLogging) {
-                    chain.proceed(chain.request())
-                } else {
-                    loggingInterceptor.intercept(chain)
-                }
-            }
-        OkHttpClient
-            .Builder()
-            .addInterceptor(conditionalCivitaiLogger)
-            .connectTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
-            .readTimeout(getConfig().timeout.toLong(), TimeUnit.SECONDS)
-            .build()
-    }
-
-    // Civitai's API. civitai.com and civitai.red share the database and their APIs answer the same (the website of
-    // civitai.com shows only safe content since April 2026); civitai.red would be the one to use if that changes.
-    private val civitaiApi: CivitaiApi by lazy {
-        Retrofit
-            .Builder()
-            .baseUrl("https://civitai.com/")
-            .client(civitaiClient)
-            .addConverterFactory(GsonConverterFactory.create(gson))
-            .build()
-            .create(CivitaiApi::class.java)
-    }
-
-    /** The preview of a synced model (CivitaiImage.preview); a model synced before 1.3.0 has only the one it stored. */
-    private fun civitaiPreview(entity: CivitaiModelEntity): CivitaiImage? {
-        val images =
-            entity.previewImages?.let {
-                try {
-                    gson.fromJson<List<CivitaiImage>>(it, object : TypeToken<List<CivitaiImage>>() {}.type)
-                } catch (e: Exception) {
-                    null
-                }
-            } ?: return entity.previewImage?.let { CivitaiImage(it, level = 0) }
-        return CivitaiImage.preview(images)
-    }
-
     // --- STATIC CACHE STATES (Model list, Samplers, Schedulers) ---
     // The selected checkpoint is shared with ForgeQueueManager (override_settings of every job), so it lives in
     // ForgeModelManager: a second copy here let the queue keep sending the model that was active at app start.
@@ -153,29 +106,6 @@ class ForgeNetworkManager(
 
     private val _availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
     val availableLoras: StateFlow<List<ApiResource>> = _availableLoras.asStateFlow()
-
-    // --- CIVITAI SYNCHRONIZATION STATES ---
-    private val _isCivitaiSyncing = MutableStateFlow(IndicatorState.IDLE)
-    val isCivitaiSyncing: StateFlow<IndicatorState> = _isCivitaiSyncing.asStateFlow()
-
-    private var civitaiSyncJob: kotlinx.coroutines.Job? = null
-
-    fun cancelCivitaiSync() {
-        if (_isCivitaiSyncing.value == IndicatorState.LOADING) {
-            civitaiSyncJob?.cancel()
-            ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC)
-            _isCivitaiSyncing.value = IndicatorState.IDLE
-        }
-    }
-
-    private val _civitaiSyncCurrentModel = MutableStateFlow("")
-    val civitaiSyncCurrentModel: StateFlow<String> = _civitaiSyncCurrentModel.asStateFlow()
-
-    private val _civitaiSyncProgress = MutableStateFlow(0 to 0)
-    val civitaiSyncProgress: StateFlow<Pair<Int, Int>> = _civitaiSyncProgress.asStateFlow()
-
-    private val _civitaiSyncLastResult = MutableStateFlow<String?>(null)
-    val civitaiSyncLastResult: StateFlow<String?> = _civitaiSyncLastResult.asStateFlow()
 
     private val _galleryApiPrefix = MutableStateFlow("infinite_image_browsing")
     val galleryApiPrefix: StateFlow<String> = _galleryApiPrefix.asStateFlow()
@@ -395,43 +325,16 @@ class ForgeNetworkManager(
                                     if (customRes?.isSuccessful == true) {
                                         val modelsList = customRes.body()?.models ?: emptyList()
 
-                                        val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
-                                        val newModelsToInsert = mutableListOf<CivitaiModelEntity>()
-                                        val parsedApiModels = mutableListOf<CustomApiModelDto>()
+                                        // The server's own names and previews; models without a hash are left out.
+                                        val parsedApiModels = modelsList.filter { !it.sha256.isNullOrEmpty() }
 
-                                        for (item in modelsList) {
-                                            val type = item.type ?: ""
-                                            val name = item.name ?: ""
-                                            val filename = item.filename ?: ""
-                                            val sha256 = item.sha256 ?: ""
-
-                                            if (sha256.isEmpty()) continue
-                                            parsedApiModels.add(CustomApiModelDto(type, name, filename, sha256))
-
-                                            if (!localDbModels.containsKey(sha256)) {
-                                                newModelsToInsert.add(CivitaiModelEntity(sha256, type, name, "", null))
-                                            }
-                                        }
-
-                                        if (newModelsToInsert.isNotEmpty()) {
-                                            getDb().civitaiModelDao().insertModels(newModelsToInsert)
-                                        }
-
-                                        val updatedDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                                        // Civitai's preview, else the server's own.
-                                        fun resource(cam: CustomApiModelDto): ApiResource {
-                                            val dbEntity = updatedDbModels[cam.sha256]
-                                            val preview = dbEntity?.let { civitaiPreview(it) }
-                                            return ApiResource(
-                                                title = dbEntity?.name ?: cam.name ?: "Unknown",
+                                        fun resource(cam: CustomApiModelDto) =
+                                            ApiResource(
+                                                title = cam.name ?: "Unknown",
                                                 name = cam.name ?: "Unknown",
-                                                path = preview?.url ?: cam.filename ?: "",
+                                                path = cam.filename ?: "",
                                                 hash = cam.sha256,
-                                                nsfw = dbEntity?.nsfw == true,
-                                                realPerson = dbEntity?.realPerson == true,
                                             )
-                                        }
 
                                         val checkpoints =
                                             parsedApiModels
@@ -447,8 +350,6 @@ class ForgeNetworkManager(
 
                                         _models.value = checkpoints
                                         _availableLoras.value = loras
-                                        // For rule 2 of BlockingApi (nudity with a real person's LoRA).
-                                        ForgeModelManager.setRealPersonLoras(loras.filter { it.realPerson }.map { it.name }.toSet())
                                         customApiSuccess = true
                                     }
                                 } catch (e: Exception) {
@@ -505,190 +406,6 @@ class ForgeNetworkManager(
                     lastFetchHadLists = false
                 }
             }
-    }
-
-    /**
-     * Manually triggers Civitai synchronization. Implements a rate-limiting delay to prevent IP bans.
-     * It works only while the app is connected to the Forge server (the settings grey the button out otherwise)
-     * and stops when the connection is lost; the models synchronized until then are kept.
-     */
-    fun syncCivitaiModelsManual() {
-        if (_isCivitaiSyncing.value != IndicatorState.IDLE) return
-        if (!ForgeRepository.isConnected.value) {
-            ForgeRepository.showToast("Civitai sync needs a connection to the Forge server")
-            return
-        }
-
-        civitaiSyncJob =
-            managerScope.launch(Dispatchers.IO) {
-                try {
-                    _isCivitaiSyncing.value = IndicatorState.LOADING
-                    _civitaiSyncLastResult.value = null
-
-                    val customRes = forgeApi?.getCustomModelsHashes()
-                    if (customRes?.code() != 200) {
-                        _civitaiSyncLastResult.value = "Error: No Custom API on Forge server (HTTP ${customRes?.code() ?: -1})."
-                        _isCivitaiSyncing.value = IndicatorState.ERROR
-                        delay(3000)
-                        _isCivitaiSyncing.value = IndicatorState.IDLE
-                        return@launch
-                    }
-
-                    val modelsList = customRes.body()?.models ?: emptyList()
-                    val localDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
-
-                    val missingOrIncomplete =
-                        modelsList.filter { item ->
-                            val sha = item.sha256 ?: return@filter false
-                            val entity = localDbModels[sha]
-                            // previewImages is stored by every successful download since 1.3.0; without it the model
-                            // failed before, or was synced before 1.3.0 (without Civitai's image ratings and flags).
-                            entity == null || entity.previewImages == null
-                        }
-
-                    if (missingOrIncomplete.isEmpty()) {
-                        _civitaiSyncLastResult.value = "All models are already synchronized!"
-                        _isCivitaiSyncing.value = IndicatorState.SUCCESS
-                        delay(2000)
-                        _isCivitaiSyncing.value = IndicatorState.IDLE
-                        return@launch
-                    }
-
-                    _civitaiSyncProgress.value = 0 to missingOrIncomplete.size
-                    var hasError = false
-                    var failedCount = 0
-                    var doneCount = 0
-                    var connectionLost = false
-
-                    for ((index, cam) in missingOrIncomplete.withIndex()) {
-                        var civName = cam.name ?: "Unknown"
-                        val civType = cam.type ?: "checkpoint"
-                        val sha256 = cam.sha256 ?: continue
-                        var trainedWords = ""
-                        var previewImage: String? = null
-                        var previewImages: String? = null
-                        var nsfw = false
-                        var realPerson = false
-
-                        _civitaiSyncCurrentModel.value = civName
-                        _civitaiSyncProgress.value = index to missingOrIncomplete.size
-                        notifyCivitaiSync(
-                            title = "Syncing Civitai models (${index + 1}/${missingOrIncomplete.size})",
-                            text = civName,
-                            progress = index to missingOrIncomplete.size,
-                        )
-
-                        // Rate-limiting delay (5 seconds) to prevent Civitai from issuing an IP ban/rate-limit.
-                        if (index > 0) delay(5000) else delay(500)
-                        if (!ForgeRepository.isConnected.value) {
-                            connectionLost = true
-                            break
-                        }
-
-                        try {
-                            val civRes = civitaiApi.getModelByHash(sha256)
-                            if (civRes.isSuccessful) {
-                                val civBody = civRes.body()
-                                if (civBody?.model != null) civName = civBody.model.name ?: civName
-                                trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
-                                // Every sample image with Civitai's rating; CivitaiImage.preview picks the one shown
-                                // (never one BlockingApi's rule 3 refuses).
-                                val images =
-                                    civBody?.images.orEmpty().mapNotNull { image ->
-                                        image.url?.let {
-                                            val url = it.replace("original=true", "original=false")
-                                            CivitaiImage(url, image.nsfwLevel ?: 0, image.minor == true)
-                                        }
-                                    }
-                                previewImages = gson.toJson(images)
-                                previewImage = CivitaiImage.preview(images)?.url
-                                nsfw = civBody?.model?.nsfw == true
-                                realPerson = civBody?.model?.poi == true
-                                _civitaiSyncLastResult.value = "Downloaded successfully"
-                            } else {
-                                _civitaiSyncLastResult.value = "Error: HTTP ${civRes.code()}"
-                                hasError = true
-                                failedCount++
-                            }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            _civitaiSyncLastResult.value = "Network error"
-                            hasError = true
-                            failedCount++
-                        }
-
-                        // A failed download keeps what an earlier sync stored (a model synced before 1.3.0 is
-                        // downloaded again, and its trigger words must not be lost to a network error).
-                        if (previewImages != null || localDbModels[sha256] == null) {
-                            val updatedEntity =
-                                CivitaiModelEntity(sha256, civType, civName, trainedWords, previewImage, previewImages, nsfw, realPerson)
-                            getDb().civitaiModelDao().insertModels(listOf(updatedEntity))
-                        }
-                        _civitaiSyncProgress.value = (index + 1) to missingOrIncomplete.size
-                        doneCount++
-                    }
-
-                    val total = missingOrIncomplete.size
-                    if (connectionLost) hasError = true
-                    _civitaiSyncLastResult.value =
-                        when {
-                            connectionLost -> "Stopped: the connection to the Forge server was lost ($doneCount of $total models done)"
-                            hasError -> "Finished with errors: $failedCount of $total models failed"
-                            else -> "Synchronization completed successfully"
-                        }
-                    when {
-                        connectionLost ->
-                            notifyCivitaiSync(
-                                title = "Civitai sync stopped",
-                                text = "The connection to the Forge server was lost ($doneCount of $total models done)",
-                                isError = true,
-                            )
-                        hasError ->
-                            notifyCivitaiSync(
-                                title = "Civitai sync finished with errors",
-                                text = "$failedCount of $total models failed",
-                                isError = true,
-                            )
-                        getConfig().autoDismissCivitaiNotif -> ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC)
-                        else -> notifyCivitaiSync("Civitai sync finished", "$total models updated")
-                    }
-                    fetchApiData() // Refresh model resources from the local SQLite database to reflect synced metadata.
-
-                    _isCivitaiSyncing.value = if (hasError) IndicatorState.ERROR else IndicatorState.SUCCESS
-                    delay(2000)
-                    _isCivitaiSyncing.value = IndicatorState.IDLE
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) {
-                        ForgeNotifications.cancel(ForgeNotifications.ID_CIVITAI_SYNC) // an ongoing notification cannot be swiped away
-                        throw e
-                    }
-                    Log.e(TAG, "Critical error during Civitai synchronization: $e")
-                    _civitaiSyncLastResult.value = "A critical error occurred"
-                    notifyCivitaiSync("Civitai sync failed", "A critical error occurred", isError = true)
-                    _isCivitaiSyncing.value = IndicatorState.ERROR
-                    delay(3000)
-                    _isCivitaiSyncing.value = IndicatorState.IDLE
-                }
-            }
-    }
-
-    /** Honours "Notify during Civitai Sync"; the sync pauses 5 s per model, so it can run for minutes. */
-    private fun notifyCivitaiSync(
-        title: String,
-        text: String,
-        progress: Pair<Int, Int>? = null,
-        isError: Boolean = false,
-    ) {
-        if (!getConfig().notifCivitaiSync) return
-        val channel = if (isError) ForgeNotifications.CHANNEL_RESULTS else ForgeNotifications.CHANNEL_PROGRESS
-        val builder = ForgeNotifications.builder(channel) ?: return
-        builder.setContentTitle(title).setContentText(text)
-        if (progress != null) {
-            builder.setProgress(progress.second, progress.first, false).setOngoing(true).setSilent(true)
-        } else {
-            builder.setAutoCancel(true)
-        }
-        ForgeNotifications.post(ForgeNotifications.ID_CIVITAI_SYNC, builder.build())
     }
 
     fun refreshCheckpoints(onResult: (Boolean, String) -> Unit) {

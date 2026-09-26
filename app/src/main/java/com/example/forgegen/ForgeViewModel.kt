@@ -158,22 +158,6 @@ class ForgeViewModel(
 
     fun debugRebuildModelLists() = networkManager.fetchApiData()
 
-    /** Forgets everything synced from Civitai; the next sync downloads it all again. */
-    fun debugForgetCivitaiData() {
-        viewModelScope.launch(Dispatchers.IO) {
-            ForgeRepository.db.civitaiModelDao().deleteAll()
-            networkManager.fetchApiData()
-            ForgeSettingsManager.showToast("Civitai data forgotten; the next sync downloads it again")
-        }
-    }
-
-    /** Civitai entries in the database: all, and those still without image ratings (synced before 1.3.0 or failed). */
-    suspend fun debugCivitaiCounts(): Pair<Int, Int> =
-        withContext(Dispatchers.IO) {
-            val all = ForgeRepository.db.civitaiModelDao().getAllModels()
-            all.size to all.count { it.previewImages == null }
-        }
-
     // --- INITIALIZATION OF MANAGERS ---
 
     val networkManager: ForgeNetworkManager
@@ -316,10 +300,6 @@ class ForgeViewModel(
     val upscalers: StateFlow<List<String>> = networkManager.upscalers
     val availableLoras: StateFlow<List<ApiResource>> = networkManager.availableLoras
 
-    val isCivitaiSyncing: StateFlow<IndicatorState> = networkManager.isCivitaiSyncing
-    val civitaiSyncCurrentModel: StateFlow<String> = networkManager.civitaiSyncCurrentModel
-    val civitaiSyncProgress: StateFlow<Pair<Int, Int>> = networkManager.civitaiSyncProgress
-    val civitaiSyncLastResult: StateFlow<String?> = networkManager.civitaiSyncLastResult
 
     // --- DELEGATION OF STATE FROM FORGE GALLERY MANAGER ---
     val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NEW (optimized filtering)
@@ -387,7 +367,6 @@ class ForgeViewModel(
     fun cancelPromptRestore() = ForgeGalleryManager.cancelPromptRestore()
 
     // --- DELEGATION OF ACTIONS TO REPOSITORY ---
-    suspend fun getTagsForLora(hash: String) = ForgeModelManager.getTagsForLora(hash)
 
     fun saveWildcard(
         name: String,
@@ -554,9 +533,9 @@ class ForgeViewModel(
         _importedImageMetadata.value = data
     }
 
-    fun cancelCivitaiSync() = networkManager.cancelCivitaiSync()
-
     fun setGalleryMode(mode: GalleryMode) = ForgeGalleryManager.setGalleryMode(mode)
+
+    fun addLora(name: String) = ForgeRepository.addLora(name)
 
     fun removeLora(name: String) = ForgeRepository.removeLora(name)
 
@@ -571,7 +550,6 @@ class ForgeViewModel(
 
     fun changeCheckpoint(modelTitle: String) = networkManager.changeCheckpoint(modelTitle)
 
-    fun syncCivitaiModelsManual() = networkManager.syncCivitaiModelsManual()
 
     fun appendLora(loraName: String) = ForgeRepository.appendLora(loraName)
 

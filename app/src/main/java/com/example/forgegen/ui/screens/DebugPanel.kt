@@ -15,7 +15,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -51,12 +50,9 @@ fun DebugPanel(viewModel: ForgeViewModel) {
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
     val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
     val favorites by viewModel.favoritePaths.collectAsStateWithLifecycle()
-    val realPersonLoras by ForgeModelManager.realPersonLoras.collectAsStateWithLifecycle()
     val forceNowBar by viewModel.debugForceNowBar.collectAsStateWithLifecycle()
 
     var refresh by remember { mutableIntStateOf(0) }
-    var civitai by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(refresh) { civitai = viewModel.debugCivitaiCounts() }
     var showRawEditor by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -69,6 +65,8 @@ fun DebugPanel(viewModel: ForgeViewModel) {
 
         DebugTitle("Status")
         val runtime = Runtime.getRuntime()
+        // Read again on "Refresh"; the other lines follow their flows by themselves.
+        val memoryUsed = remember(refresh) { (runtime.totalMemory() - runtime.freeMemory()) shr 20 }
         val status =
             buildString {
                 appendLine("App: ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE}), ${context.packageName}")
@@ -76,7 +74,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
                 appendLine(
                     "Now Bar: ${if (NowBar.isSupported(context)) "offered" else "not offered"}${if (forceNowBar) " (forced)" else ""}",
                 )
-                appendLine("Memory: ${(runtime.totalMemory() - runtime.freeMemory()) shr 20} MB used of ${runtime.maxMemory() shr 20} MB")
+                appendLine("Memory: $memoryUsed MB used of ${runtime.maxMemory() shr 20} MB")
                 appendLine("Server: ${config.apiUrl}")
                 appendLine("  connected=$isConnected busy=$isServerBusy")
                 val byStatus =
@@ -89,11 +87,6 @@ fun DebugPanel(viewModel: ForgeViewModel) {
                 appendLine("  generating=$isGenerating active=$isQueueActive paused=$isQueuePaused")
                 pauseReason?.let { appendLine("  pause reason: $it") }
                 appendLine("Lists: ${models.size} models, ${loras.size} LoRAs, ${samplers.size} samplers")
-                appendLine("Real-person LoRAs (BlockingApi rule 2): ${realPersonLoras.size}")
-                appendLine(
-                    "Civitai: " +
-                        (civitai?.let { (all, unrated) -> "$all entries, $unrated without image ratings" } ?: "..."),
-                )
                 append("Stored: ${promptHistory.size} prompts, ${wildcards.size} wildcards, ${favorites.size} favorites")
             }
         SelectionContainer { Text(status, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
@@ -102,7 +95,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
         DebugTitle("Settings")
         SwitchPreference(
             title = "HTTP Logging",
-            subtitle = "Every request to the server and to Civitai, with its content, goes to the app's log",
+            subtitle = "Every request to the server, with its content, goes to the app's log",
             checked = config.enableLogging,
             onCheckedChange = { viewModel.saveConfig(config.copy(enableLogging = it)) },
         )
@@ -124,10 +117,6 @@ fun DebugPanel(viewModel: ForgeViewModel) {
 
         DebugTitle("Data")
         DebugButton("Rebuild Model Lists") { viewModel.debugRebuildModelLists() }
-        DebugButton("Forget Civitai Data") {
-            viewModel.debugForgetCivitaiData()
-            refresh++
-        }
 
         Button(
             onClick = { viewModel.debugLock() },

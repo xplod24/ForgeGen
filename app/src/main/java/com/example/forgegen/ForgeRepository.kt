@@ -180,6 +180,14 @@ object ForgeRepository {
             }
         }
 
+    // 1.6.1: Civitai sync removed (model data comes from the server).
+    val MIGRATION_11_12 =
+        object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `civitai_models`")
+            }
+        }
+
     val MIGRATION_9_10 = object : Migration(9, 10) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
@@ -193,7 +201,7 @@ object ForgeRepository {
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-                .addMigrations(MIGRATION_9_10, MIGRATION_10_11)
+                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 
@@ -447,6 +455,19 @@ object ForgeRepository {
         // Lambda replacement: a '$' or '\' in the LoRA name must not be treated as a group reference.
         val newPrompt = current.replace(regex) { "<lora:$name:$formattedStrength>" }
         ForgeSettingsManager.updateState { it.copy(positivePrompt = newPrompt) }
+    }
+
+    /** Adds `<lora:name:1.0>` to the positive prompt, unless the LoRA is already in it. */
+    fun addLora(name: String) {
+        val current = appState.value.positivePrompt
+        if (current.contains("<lora:$name:")) return
+        val separator =
+            when {
+                current.isBlank() -> ""
+                current.trimEnd().endsWith(",") -> " "
+                else -> ", "
+            }
+        ForgeSettingsManager.updateState { it.copy(positivePrompt = current.trimEnd() + separator + "<lora:$name:1.0>") }
     }
 
     fun removeLora(name: String) {

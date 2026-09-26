@@ -235,7 +235,7 @@ class PromptVisualTransformation : VisualTransformation {
 
 enum class IndicatorState { IDLE, LOADING, SUCCESS, ERROR }
 
-/** Fade of the full-screen overlays (offline, prompt recovery, Civitai and gallery sync), in and out alike. */
+/** Fade of the full-screen overlays (offline, prompt recovery, gallery sync), in and out alike. */
 const val OVERLAY_FADE_MS = 200
 
 /**
