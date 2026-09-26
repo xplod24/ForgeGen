@@ -53,6 +53,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   timeout (`isPingPath`). UI: `ConnectionStatus` in the top bar (tap = `openServerDialog`), `ServerConnectionDialog`
   (address, profiles, Test = `testServer`, Connect/Retry = `connectTo`, Settings, Close) shown by MainActivity when
   OFFLINE (closable, `offlineDialogClosed`) or asked for. Tests: G31 (window shortened), G21/G22 (start).
+- **Compose animations outside composition (2.0.1):** `Animatable.animateTo` (and anything using `withFrameNanos`) needs
+  Compose's frame clock: run it in a `LaunchedEffect` or with `AndroidUiDispatcher.Main`, never in a plain
+  `lifecycleScope`/`Dispatchers.Main` coroutine. 2.0.0 did that for the splash's reveal and crashed at every start
+  (tests on the JVM cannot catch it). The reveal also ends fully shown whatever happens.
 - **Performance rules (2.0.0):** one OkHttp client (`ForgeSettingsManager.createClient`: timeouts, gallery cookie, HTTP
   log without image/txt2img bodies, error bodies logged up to 64 KB) shared by the APIs and Coil; one Coil ImageLoader
   (`ForgeApp`). AppState is written by a debounced writer (500 ms, `flushState` on stop). txt2img images are streamed

@@ -1,3 +1,6 @@
+## 2.0.1
+- Fixed: the app closed right after the start animation (when the main screen was about to open).
+
 ## 2.0.0
 ### Faster and lighter
 - **A new start:** the hammer strikes the anvil and the main screen opens from the middle, in under a second. The app no longer plays a 3-second intro and no longer waits for the server before showing the main screen.

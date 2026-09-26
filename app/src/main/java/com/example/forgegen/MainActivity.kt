@@ -1,6 +1,9 @@
 package com.example.forgegen
 
 import android.app.Activity
+import androidx.compose.ui.platform.AndroidUiDispatcher
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -308,9 +311,19 @@ class MainActivity : ComponentActivity() {
      * screen is hidden first (under the splash, so nothing flashes) and revealed while the splash fades out.
      */
     private fun playSplashExit(provider: SplashScreenViewProvider) {
-        lifecycleScope.launch {
-            reveal.snapTo(0f)
-            reveal.animateTo(1f, tween(durationMillis = 650, easing = FastOutSlowInEasing))
+        // AndroidUiDispatcher.Main brings Compose's frame clock, which animateTo needs: on the plain main dispatcher it
+        // threw and closed the app as soon as the splash left (2.0.0). Whatever happens, the screen ends up fully shown.
+        lifecycleScope.launch(AndroidUiDispatcher.Main) {
+            try {
+                reveal.snapTo(0f)
+                reveal.animateTo(1f, tween(durationMillis = 650, easing = FastOutSlowInEasing))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                android.util.Log.w("MainActivity", "The reveal animation failed", e)
+            } finally {
+                withContext(NonCancellable) { reveal.snapTo(1f) }
+            }
         }
         try {
             provider.iconView
