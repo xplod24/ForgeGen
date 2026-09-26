@@ -384,8 +384,14 @@ fun SetupScreen(
             item {
                 SwitchPreference(
                     title = "Share Without Generation Data",
-                    subtitle = "Shared images leave without their prompt, seed and model",
+                    subtitle =
+                        if (DeviceImages.sharingAllowed(config.contentMode)) {
+                            "Shared images leave without their prompt, seed and model"
+                        } else {
+                            DeviceImages.SHARING_OFF
+                        },
                     checked = config.shareWithoutMetadata,
+                    enabled = DeviceImages.sharingAllowed(config.contentMode),
                     onCheckedChange = { viewModel.saveConfig(config.copy(shareWithoutMetadata = it)) },
                 )
             }
@@ -736,7 +742,11 @@ fun SetupScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked = wipeSettings, onCheckedChange = { wipeSettings = it })
-                            Text("App Settings & State (1 item)", fontSize = 14.sp)
+                            Text(
+                                "App Settings & State (1 item" +
+                                    (if (config.contentMode == CONTENT_UNRESTRICTED) ", turns Unrestricted off)" else ")"),
+                                fontSize = 14.sp,
+                            )
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(checked = wipePresets, onCheckedChange = { wipePresets = it })
@@ -805,22 +815,35 @@ fun SetupScreen(
                 title = { Text("Content Mode") },
                 text = {
                     Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        // Unrestricted is one-way (ForgeSettingsManager.saveConfig): the other modes are shown, not offered.
+                        val locked = config.contentMode == CONTENT_UNRESTRICTED
+                        if (locked) {
+                            Text(
+                                "Unrestricted is on and cannot be turned off here. Only wiping \"App Settings & State\" " +
+                                    "in the Danger Zone brings back SFW.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
                         listOf(CONTENT_SFW, CONTENT_NSFW, CONTENT_UNRESTRICTED).forEach { mode ->
+                            val selectable = !locked || mode == CONTENT_UNRESTRICTED
                             Row(
                                 modifier =
                                     Modifier
                                         .fillMaxWidth()
-                                        .clickable {
+                                        .clickable(enabled = selectable) {
                                             showContentModeDialog = false
                                             if (contentModeRank(mode) > contentModeRank(config.contentMode)) {
                                                 pendingContentMode = mode
                                             } else {
                                                 viewModel.saveConfig(config.copy(contentMode = mode))
                                             }
-                                        }.padding(vertical = 10.dp),
+                                        }.padding(vertical = 10.dp)
+                                        .alpha(if (selectable) 1f else 0.38f),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                RadioButton(selected = config.contentMode == mode, onClick = null)
+                                RadioButton(selected = config.contentMode == mode, onClick = null, enabled = selectable)
                                 Spacer(Modifier.width(16.dp))
                                 Column {
                                     Text(mode, fontSize = 16.sp, fontWeight = FontWeight.Bold)
@@ -842,24 +865,81 @@ fun SetupScreen(
         }
 
         pendingContentMode?.let { mode ->
-            AlertDialog(
-                onDismissRequest = { pendingContentMode = null },
-                title = { Text("Allow Adult Content?") },
-                text = {
-                    Text(
-                        "The $mode mode lets the app send and show sexual content" +
-                            (if (mode == CONTENT_UNRESTRICTED) ", including extreme content. " else ". ") +
-                            "Turn it on only if you are 18 or older and such content is legal where you are.",
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.saveConfig(config.copy(contentMode = mode))
-                        pendingContentMode = null
-                    }) { Text("I Am 18 or Older") }
-                },
-                dismissButton = { TextButton(onClick = { pendingContentMode = null }) { Text("Cancel") } },
-            )
+            if (mode == CONTENT_UNRESTRICTED) {
+                // One-way and the user's sole responsibility: the confirmation needs the box ticked.
+                var accepted by remember { mutableStateOf(false) }
+                AlertDialog(
+                    onDismissRequest = { pendingContentMode = null },
+                    title = { Text("Turn On Unrestricted Mode?") },
+                    text = {
+                        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                            Text(
+                                "Unrestricted sends and shows everything: nothing is blurred and no tag is hidden. Only the two " +
+                                    "blocks kept in every mode stay: sexual content with a minor, and nudity or sex with the LoRA " +
+                                    "of a real person.",
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "You alone are responsible for what you generate, keep and pass on, and for following the law " +
+                                    "where you live. Creating or possessing some content, AI-generated content too, can be a " +
+                                    "criminal offence, punished with fines or prison.",
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "This cannot be undone in the settings: only wiping \"App Settings & State\" in the Danger Zone " +
+                                    "turns it off. Sharing images from the app is turned off in this mode.",
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { accepted = !accepted },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = accepted, onCheckedChange = { accepted = it })
+                                Text("I am 18 or older and I accept sole responsibility.", fontSize = 14.sp)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            enabled = accepted,
+                            onClick = {
+                                viewModel.saveConfig(config.copy(contentMode = mode))
+                                pendingContentMode = null
+                            },
+                        ) {
+                            Text(
+                                "Turn On Unrestricted",
+                                color =
+                                    if (accepted) {
+                                        MaterialTheme.colorScheme.error
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    },
+                            )
+                        }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingContentMode = null }) { Text("Cancel") } },
+                )
+            } else {
+                AlertDialog(
+                    onDismissRequest = { pendingContentMode = null },
+                    title = { Text("Allow Adult Content?") },
+                    text = {
+                        Text(
+                            "The $mode mode lets the app send and show sexual content. Turn it on only if you are 18 or older " +
+                                "and such content is legal where you are.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            viewModel.saveConfig(config.copy(contentMode = mode))
+                            pendingContentMode = null
+                        }) { Text("I Am 18 or Older") }
+                    },
+                    dismissButton = { TextButton(onClick = { pendingContentMode = null }) { Text("Cancel") } },
+                )
+            }
         }
 
         if (showThemeDialog) {
@@ -1115,7 +1195,9 @@ private fun contentModeDescription(mode: String): String =
         CONTENT_NSFW ->
             "Adult content is allowed. Extreme tags (non-consent, gore, bestiality and the like) are not sent, and images " +
                 "made with them are blurred. Civitai previews up to X."
-        CONTENT_UNRESTRICTED -> "Nothing is blocked or blurred. Civitai previews: all except those Civitai itself blocks."
+        CONTENT_UNRESTRICTED ->
+            "Nothing is blurred or hidden; only the two blocks kept in every mode apply. Civitai previews: all except " +
+                "those Civitai itself blocks. It cannot be turned off, and images cannot be shared."
         else ->
             "Tags with nudity, sex or other adult content are not sent and are hidden, and every image is blurred until " +
                 "you tap it. Civitai previews: safe ones only."

@@ -1962,12 +1962,15 @@ fun FullscreenImageViewer(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )
 
-                IconButton(onClick = {
-                    viewModel.shareSessionImage(currentFile) { intent ->
-                        context.startActivity(intent)
+                // No sharing in the Unrestricted content mode.
+                if (DeviceImages.sharingAllowed(config.contentMode)) {
+                    IconButton(onClick = {
+                        viewModel.shareSessionImage(currentFile) { intent ->
+                            context.startActivity(intent)
+                        }
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                     }
-                }) {
-                    Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                 }
 
                 val showMetadata by viewModel.showGalleryMetadata.collectAsStateWithLifecycle()

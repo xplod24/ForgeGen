@@ -1,3 +1,8 @@
+## 1.3.1
+- Turning on **Unrestricted** now shows a clear warning: you alone are responsible for what you generate and for following the law where you live, as some content can be a criminal offence. It needs a ticked box to confirm.
+- Unrestricted is one-way: once on, it cannot be turned off in the settings. Only wiping "App Settings & State" in the Danger Zone brings back SFW.
+- In Unrestricted, images cannot be shared from the app: the share buttons are gone.
+
 ## 1.3.0
 - New **Content Mode** in the new Content & Privacy section of the settings. It is your choice; the app starts in SFW:
   - **SFW**: prompts with nudity, sex or other adult tags are not sent, such tags are hidden in the tag editor and in texts, and every image is blurred until you tap "Show image" (a safe prompt does not guarantee a safe image).

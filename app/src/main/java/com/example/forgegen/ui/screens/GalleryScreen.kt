@@ -915,12 +915,15 @@ fun FullscreenGalleryViewer(
                     )
                 }
 
-                IconButton(onClick = {
-                    currentItem?.let {
-                        viewModel.shareImage(it) { intent -> context.startActivity(intent) }
+                // No sharing in the Unrestricted content mode.
+                if (DeviceImages.sharingAllowed(config.contentMode)) {
+                    IconButton(onClick = {
+                        currentItem?.let {
+                            viewModel.shareImage(it) { intent -> context.startActivity(intent) }
+                        }
+                    }) {
+                        Icon(Icons.Default.Share, "Share", tint = Color.White)
                     }
-                }) {
-                    Icon(Icons.Default.Share, "Share", tint = Color.White)
                 }
 
                 IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {
