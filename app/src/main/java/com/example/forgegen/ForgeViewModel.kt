@@ -352,6 +352,17 @@ class ForgeViewModel(
     val isQueueActive: StateFlow<Boolean> = ForgeQueueManager.isQueueActive
     val oomAlert: StateFlow<Boolean> = ForgeQueueManager.oomAlert
     val queuePauseReason: StateFlow<String?> = ForgeQueueManager.queuePauseReason
+    val scheduledStart: StateFlow<Long?> = ForgeQueueManager.scheduledStart
+    val isWaitingForSchedule: StateFlow<Boolean> = ForgeQueueManager.isWaitingForSchedule
+    val queueSecondsLeft: StateFlow<Long?> = ForgeQueueManager.queueSecondsLeft
+
+    /** "Start at" [hour]:[minute]: today, or tomorrow when that time has passed. */
+    fun scheduleQueueStart(
+        hour: Int,
+        minute: Int,
+    ) = ForgeQueueManager.scheduleStart(QueueSchedule.nextOccurrence(hour, minute))
+
+    fun startScheduledQueueNow() = ForgeQueueManager.startScheduledQueueNow()
     val totalQueueSize: StateFlow<Int> = ForgeQueueManager.totalQueueSize
     val completedQueueItems: StateFlow<Int> = ForgeQueueManager.completedQueueItems
     val sessionImages: StateFlow<List<String>> = ForgeQueueManager.sessionImages

@@ -571,7 +571,8 @@ fun SetupScreen(
             item {
                 // Off until the user turns it on; greyed out on phones without Samsung's One UI 8 or newer.
                 SwitchPreference(
-                    title = "Show Progress in Now Bar",
+                    // Work in progress: Samsung shows it only with a developer option (see NowBar), to be improved.
+                    title = "Show Progress in Now Bar (Work in Progress)",
                     subtitle =
                         when {
                             !isNowBarSupported -> "Samsung phones with One UI 8 or newer only"

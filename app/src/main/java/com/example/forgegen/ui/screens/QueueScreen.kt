@@ -49,6 +49,10 @@ fun QueueScreen(
     val availableLoras by viewModel.availableLoras.collectAsStateWithLifecycle()
     val contentMode = viewModel.config.collectAsStateWithLifecycle().value.contentMode
 
+    val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
+    val timing = queueTimingText(viewModel)
+    var showStartTimePicker by remember { mutableStateOf(false) }
+
     var editItemId by remember { mutableStateOf<String?>(null) }
     var editPosPrompt by remember { mutableStateOf("") }
     var editNegPrompt by remember { mutableStateOf("") }
@@ -76,6 +80,9 @@ fun QueueScreen(
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
                             )
                         }
+                        timing?.let {
+                            Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        }
                     }
                 },
                 navigationIcon = {
@@ -88,6 +95,14 @@ fun QueueScreen(
                         IconButton(onClick = { viewModel.interruptGeneration() }) {
                             Icon(Icons.Default.Stop, "Interrupt Current", tint = MaterialTheme.colorScheme.error)
                         }
+                    }
+                    // "Start at": the queue waits until a time of day.
+                    IconButton(onClick = { showStartTimePicker = true }) {
+                        Icon(
+                            Icons.Default.Schedule,
+                            "Start the Queue At",
+                            tint = if (scheduledStart != null) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        )
                     }
                     if (queue.isNotEmpty()) {
                         IconButton(onClick = { viewModel.clearQueue() }) {
@@ -115,6 +130,7 @@ fun QueueScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    item(key = "schedule") { QueueScheduleCard(viewModel) }
                     // The key keeps per-card state (e.g. "expanded") with its job when jobs are moved or removed.
                     items(queue, key = { it.id }) { item ->
                         val isFirst = queue.firstOrNull()?.id == item.id
@@ -350,6 +366,14 @@ fun QueueScreen(
                     }
                 }
             }
+        }
+
+        if (showStartTimePicker) {
+            QueueStartTimeDialog(
+                initial = scheduledStart,
+                onDismiss = { showStartTimePicker = false },
+                onPick = { hour, minute -> viewModel.scheduleQueueStart(hour, minute) },
+            )
         }
 
         if (editItemId != null) {

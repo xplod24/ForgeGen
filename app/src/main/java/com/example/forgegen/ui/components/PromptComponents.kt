@@ -624,6 +624,8 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
     val hasPausedJobs = isQueuePaused && waiting > 0
     // Jobs set aside by overnight mode, once nothing else is going on.
     val showFailed = failed > 0 && !oomAlert && !hasPausedJobs && waiting == 0
+    // "Start at": jobs added on this screen wait too, so the card says when they start.
+    QueueScheduleCard(viewModel, modifier = Modifier.padding(bottom = 8.dp))
     AnimatedVisibility(visible = showFailed) {
         Card(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),

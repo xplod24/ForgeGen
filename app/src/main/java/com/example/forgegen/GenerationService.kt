@@ -97,6 +97,8 @@ class GenerationService : Service() {
             var lastProgress = -1
             var lastText = ""
             var lastJobNo = -1
+            var lastWaitingUntil: Long? = null
+            var wakeLockHeld = false
 
             // Reacts to changes of the generation state instead of waking up every second; at most one
             // notification update per second.
@@ -105,38 +107,50 @@ class GenerationService : Service() {
                     ForgeQueueManager.isQueueActive,
                     ForgeQueueManager.isGenerating,
                     ForgeRepository.isServerBusy,
-                ) { queueActive, generating, busy ->
-                    (queueActive || busy) to (generating || busy)
+                    ForgeQueueManager.isWaitingForSchedule,
+                    ForgeQueueManager.scheduledStart,
+                ) { queueActive, generating, busy, waiting, at ->
+                    Triple(queueActive || busy, generating || busy, if (waiting && !busy) at else null)
                 },
                 ForgeQueueManager.progress,
                 ForgeQueueManager.statusText,
                 ForgeRepository.currentJobNo,
-            ) { (active, generating), progress, text, jobNo ->
-                ServiceState(active, generating, (progress * 100).toInt(), text, jobNo)
+            ) { (active, generating, waitingUntil), progress, text, jobNo ->
+                ServiceState(active, generating, (progress * 100).toInt(), text, jobNo, waitingUntil)
             }.distinctUntilChanged()
                 .conflate()
                 .collect { state ->
                     if (state.active && !wasActive) {
                         wasActive = true
-                        holdWakeLock()
                     } else if (!state.active && wasActive) {
                         wasActive = false
-                        releaseWakeLock()
                         lastProgress = -1
+                    }
+                    // The wake lock only while work is going on: waiting for a scheduled start ("Start at") needs
+                    // none, the alarm wakes the phone then.
+                    val needsWakeLock = state.active && state.waitingUntil == null
+                    if (needsWakeLock && !wakeLockHeld) {
+                        wakeLockHeld = true
+                        holdWakeLock()
+                    } else if (!needsWakeLock && wakeLockHeld) {
+                        wakeLockHeld = false
+                        releaseWakeLock()
                     }
                     if (!state.active) {
                         stopWhenIdle()
                         return@collect
                     }
 
-                    val shouldUpdate =
-                        state.progress != lastProgress || state.text != lastText || state.jobNo != lastJobNo || isNotificationDismissed
+                    val changed =
+                        state.progress != lastProgress || state.text != lastText || state.jobNo != lastJobNo
+                    val shouldUpdate = changed || state.waitingUntil != lastWaitingUntil || isNotificationDismissed
 
                     // "Disabled" keeps the static notification the foreground service needs and never refreshes it.
                     if (shouldUpdate && ForgeRepository.config.value.notificationMode != "Disabled") {
                         lastProgress = state.progress
                         lastText = state.text
                         lastJobNo = state.jobNo
+                        lastWaitingUntil = state.waitingUntil
                         isNotificationDismissed = false
                         ForgeNotifications.post(notificationId, buildCurrentNotification())
                     }
@@ -152,6 +166,8 @@ class GenerationService : Service() {
         val progress: Int,
         val text: String,
         val jobNo: Int,
+        // The scheduled start the queue waits for, or null.
+        val waitingUntil: Long?,
     )
 
     override fun onStartCommand(
@@ -331,6 +347,8 @@ class GenerationService : Service() {
             builder.setContentTitle("ForgeGen queue")
             builder.setContentText(
                 when {
+                    ForgeQueueManager.isWaitingForSchedule.value ->
+                        "Starts at ${ForgeQueueManager.scheduledStart.value?.let { QueueSchedule.formatTime(it) } ?: "the set time"}"
                     ForgeQueueManager.queuePauseReason.value == ForgeQueueManager.CONNECTION_LOST_REASON ->
                         "Connection lost, waiting for the server"
                     !ForgeRepository.isConnected.value -> "Waiting for the server"

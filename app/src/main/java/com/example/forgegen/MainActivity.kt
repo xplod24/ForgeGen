@@ -384,10 +384,12 @@ class MainActivity : ComponentActivity() {
             val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
             val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
             val isQueueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
+            val isWaitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
 
             // "Keep Screen On" only while images are being generated (it used to keep the screen on whenever the app
             // was open); the grace period keeps the screen from dimming in the moment between two jobs.
-            val keepScreenOn = config.keepScreenOn && (isQueueActive || isServerBusy)
+            // Not while the queue only waits for its scheduled start ("Start at"), maybe for hours.
+            val keepScreenOn = config.keepScreenOn && ((isQueueActive && !isWaitingForSchedule) || isServerBusy)
             LaunchedEffect(keepScreenOn) {
                 if (keepScreenOn) {
                     activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

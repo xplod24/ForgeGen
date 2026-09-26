@@ -117,6 +117,27 @@ object ForgeQueueManager {
     private val _totalQueueSize = MutableStateFlow(0)
     val totalQueueSize: StateFlow<Int> = _totalQueueSize.asStateFlow()
 
+    // "Start at" (QueueSchedule): the queue sends nothing before this time (ms since 1970); saved with the queue.
+    private val _scheduledStart = MutableStateFlow<Long?>(null)
+    val scheduledStart: StateFlow<Long?> = _scheduledStart.asStateFlow()
+
+    /** Jobs wait for the scheduled start: the service keeps the app alive, but without the wake lock. */
+    val isWaitingForSchedule: StateFlow<Boolean> =
+        combine(_scheduledStart, _isGenerating) { at, generating -> at != null && !generating }
+            .stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, false)
+
+    // The server's speed learned from finished jobs (QueueEstimate), saved across restarts.
+    private val speedRates = MutableStateFlow<Map<String, Double>>(emptyMap())
+
+    // The job the user interrupted: its short run must not teach the estimate a wrong speed.
+    @Volatile private var interruptedJobId: String? = null
+
+    /** Seconds the queue still needs (QueueEstimate), or null before the first job has finished. */
+    val queueSecondsLeft: StateFlow<Long?> =
+        combine(_generationQueue, _currentEta, speedRates) { queue, eta, rates ->
+            QueueEstimate.remaining(queue, rates, eta)?.toLong()
+        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, null)
+
     private val _completedQueueItems = MutableStateFlow(0)
     val completedQueueItems: StateFlow<Int> = _completedQueueItems.asStateFlow()
 
@@ -149,10 +170,96 @@ object ForgeQueueManager {
     /** Returns once the saved queue is loaded; the writer, the worker and the reconnect watcher run from then on. */
     suspend fun start() {
         loadQueueState()
+        loadScheduleAndSpeed()
         startQueueWriter()
         startQueueWorker()
         startReconnectWatcher()
+        startScheduleWatcher()
         cleanupSessionCache()
+    }
+
+    private const val SCHEDULE_KEY = "queue_scheduled_start"
+    private const val SPEED_KEY = "queue_speed"
+
+    private suspend fun loadScheduleAndSpeed() {
+        withContext(Dispatchers.IO) {
+            val settings = ForgeRepository.db.appSettingDao()
+            try {
+                settings.getSetting(SPEED_KEY)?.value?.let { json ->
+                    speedRates.value = gson.fromJson(json, object : TypeToken<Map<String, Double>>() {}.type)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load the queue speed", e)
+            }
+            // A start time that passed while the app was closed starts the queue now.
+            val at = settings.getSetting(SCHEDULE_KEY)?.value?.toLongOrNull()
+            if (at != null && at > System.currentTimeMillis()) {
+                _scheduledStart.value = at
+                QueueSchedule.setAlarm(application, at)
+            } else if (at != null) {
+                settings.putSetting(AppSettingEntity(SCHEDULE_KEY, ""))
+            }
+        }
+    }
+
+    private fun saveSchedule() {
+        val at = _scheduledStart.value
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            try {
+                ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(SCHEDULE_KEY, at?.toString() ?: ""))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save the queue schedule", e)
+            }
+        }
+    }
+
+    /** "Start at": nothing is sent before [at]; jobs added meanwhile wait too. */
+    fun scheduleStart(at: Long) {
+        _scheduledStart.value = at
+        saveSchedule()
+        QueueSchedule.setAlarm(application, at)
+    }
+
+    /** Ends the wait for the scheduled start: the queue continues now. */
+    fun startScheduledQueueNow() {
+        if (_scheduledStart.value == null) return
+        _scheduledStart.value = null
+        saveSchedule()
+        if (::application.isInitialized) QueueSchedule.cancelAlarm(application)
+    }
+
+    /** The scheduled time has come (the alarm, or the watcher while the phone is awake). */
+    fun onScheduledTime() {
+        val at = _scheduledStart.value ?: return
+        if (System.currentTimeMillis() >= at - 1_000) startScheduledQueueNow()
+    }
+
+    /** Starts the queue at the scheduled time while the app is awake; the alarm covers a sleeping phone. */
+    private fun startScheduleWatcher() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.Default) {
+            _scheduledStart.collectLatest { at ->
+                if (at == null) return@collectLatest
+                delay((at - System.currentTimeMillis()).coerceAtLeast(0))
+                onScheduledTime()
+            }
+        }
+    }
+
+    /** Teaches the estimate how long [job] took, unless it was interrupted. */
+    private fun learnSpeed(
+        job: QueuedGeneration,
+        seconds: Double,
+    ) {
+        if (interruptedJobId == job.id) return
+        val rates = QueueEstimate.learn(speedRates.value, job.payload, seconds)
+        speedRates.value = rates
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            try {
+                ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(SPEED_KEY, gson.toJson(rates)))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save the queue speed", e)
+            }
+        }
     }
 
     fun updateExternalProgress(
@@ -227,8 +334,9 @@ object ForgeQueueManager {
             _isQueuePaused,
             ForgeRepository.isServerBusy,
             ForgeRepository.isConnected,
-        ) { queue, paused, busy, connected ->
-            queue.firstOrNull { it.isRunnable() }?.takeIf { !paused && !busy && connected }
+            _scheduledStart,
+        ) { queue, paused, busy, connected, scheduled ->
+            queue.firstOrNull { it.isRunnable() }?.takeIf { !paused && !busy && connected && scheduled == null }
         }.filterNotNull().first()
 
     /** Continues a queue paused by a lost connection once the server is back and idle (with a short delay). */
@@ -431,6 +539,7 @@ object ForgeQueueManager {
         }
 
         var connectionLost = false
+        val startedAt = System.currentTimeMillis()
         try {
             val answer = requestWithWatchdog(job, shouldSaveToDevice)
             if (answer is Answer.Images) {
@@ -453,6 +562,7 @@ object ForgeQueueManager {
                     }
 
                     succeeded = true
+                    learnSpeed(job, (System.currentTimeMillis() - startedAt) / 1000.0)
                 }
             } else if (answer is Answer.Failed) {
                 val errorBody = answer.body
@@ -936,6 +1046,7 @@ object ForgeQueueManager {
     }
 
     fun interruptGeneration() {
+        interruptedJobId = _generationQueue.value.firstOrNull { it.status == GenerationStatus.GENERATING }?.id
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
                 ForgeRepository.forgeApi?.interruptGeneration()

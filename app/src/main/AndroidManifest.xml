@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Live Updates (Android 16): the progress in Samsung's Now Bar, only with "Show Progress in Now Bar" on. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
+    <!-- "Start at" of the queue: an exact alarm where Android grants it (by default up to Android 13). -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- The app is not distributed through Google Play: the direct "ignore battery optimizations" dialog is fine. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
@@ -52,6 +54,11 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Sends the user's queued image generation jobs to their own Stable Diffusion server and receives the images, which can take hours." />
         </service>
+
+        <!-- The alarm of the queue's "Start at". -->
+        <receiver
+            android:name=".QueueScheduleReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

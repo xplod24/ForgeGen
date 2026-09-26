@@ -1,3 +1,8 @@
+## 1.5.0
+- **Start the queue at a set time:** the clock button in the queue picks a time of day (today, or tomorrow when that time has passed). Until then nothing is sent, also jobs added later; a card on the main screen and in the queue shows when the queue starts, with Start Now and Change. The phone may sleep meanwhile; an alarm wakes it at that time (Android may deliver it a few minutes late to save battery). "Keep Screen On" does not keep the screen on while the queue only waits.
+- **When the queue ends:** after the first finished job the app knows how fast your server is, for each model, and the queue shows when it will be done ("Ends around 03:40, 2 h 15 min left"), or how long it will run after its set start.
+- "Show Progress in Now Bar" is marked as work in progress: Samsung shows it only with a developer option for now.
+
 ## 1.4.1
 - Now Bar: the progress notification may always be shown in full on the lock screen (it shows only the image number and the progress, never the prompt), as Samsung requires.
 - Under "Show Progress in Now Bar" a checklist shows what the Now Bar needs: whether notifications and live notifications are allowed, and what Samsung needs besides that and the app cannot check ("Live notifications for all apps" in the developer options, and notifications with their content on the lock screen). Buttons open the right settings pages.
