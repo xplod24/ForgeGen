@@ -79,6 +79,10 @@ import kotlin.math.roundToInt
  * STATIC REGEX PARSER & TOKENIZER (Performance Optimization & Couple Tags)
  * ============================================================================ */
 
+// Undo keeps this many steps; typing without a pause this long is one step.
+private const val UNDO_STEPS = 100
+private const val UNDO_GROUP_MS = 800L
+
 @Composable
 fun UndoRedoTextField(
     value: String,
@@ -92,13 +96,24 @@ fun UndoRedoTextField(
 ) {
     var history by remember { mutableStateOf(listOf(value)) }
     var historyIndex by remember { mutableIntStateOf(0) }
+    // When the last step was typed (0 when it came from elsewhere or from Undo/Redo): typing within a moment of it
+    // replaces that step instead of adding one per character, and the history keeps a limited number of steps.
+    var lastTypedAt by remember { mutableLongStateOf(0L) }
+
+    fun record(
+        newValue: String,
+        typed: Boolean,
+    ) {
+        val base = history.take(historyIndex + 1)
+        val now = System.currentTimeMillis()
+        val merge = typed && base.size > 1 && now - lastTypedAt < UNDO_GROUP_MS
+        history = ((if (merge) base.dropLast(1) else base) + newValue).takeLast(UNDO_STEPS)
+        historyIndex = history.lastIndex
+        lastTypedAt = if (typed) now else 0L
+    }
 
     LaunchedEffect(value) {
-        if (history.isEmpty() || history[historyIndex] != value) {
-            val newHistory = history.take(historyIndex + 1) + value
-            history = newHistory
-            historyIndex = newHistory.size - 1
-        }
+        if (history.isEmpty() || history[historyIndex] != value) record(value, typed = false)
     }
 
     Column(modifier = modifier) {
@@ -107,6 +122,7 @@ fun UndoRedoTextField(
                 onClick = {
                     if (historyIndex > 0) {
                         historyIndex--
+                        lastTypedAt = 0L
                         onValueChange(history[historyIndex])
                     }
                 },
@@ -118,6 +134,7 @@ fun UndoRedoTextField(
                 onClick = {
                     if (historyIndex < history.size - 1) {
                         historyIndex++
+                        lastTypedAt = 0L
                         onValueChange(history[historyIndex])
                     }
                 },
@@ -130,9 +147,7 @@ fun UndoRedoTextField(
             value = value,
             onValueChange = {
                 if (it != value) {
-                    val newHistory = history.take(historyIndex + 1) + it
-                    history = newHistory
-                    historyIndex = newHistory.size - 1
+                    record(it, typed = true)
                     onValueChange(it)
                 }
             },
@@ -178,7 +193,7 @@ fun HybridPromptEditor(
             minLines = 3,
             maxLines = 8,
             modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PromptVisualTransformation(),
+            visualTransformation = PromptHighlighting,
         )
 
         // Split tags respecting nesting using a custom Tokenizer
@@ -1083,55 +1098,18 @@ fun GenerationSettingsSection(
                     )
                 }
             }
-            DropdownMenu(
-                expanded = modelExpanded,
-                onDismissRequest = { modelExpanded = false },
-                modifier = Modifier.heightIn(max = 350.dp),
-            ) {
-                models.forEach { mod ->
-                    val isSelected = mod.name == selectedModel || mod.title == selectedModel
-                    DropdownMenuItem(
-                        modifier =
-                            if (isSelected) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AsyncImage(
-                                    model =
-                                        ImageRequest
-                                            .Builder(LocalContext.current)
-                                            .data(viewModel.getPreviewUrl(mod.path, isLora = false))
-                                            .crossfade(true)
-                                            .build(),
-                                    contentDescription = null,
-                                    modifier =
-                                        Modifier
-                                            .size(
-                                                40.dp,
-                                            ).padding(end = 8.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.DarkGray),
-                                    contentScale = ContentScale.Crop,
-                                )
-                                Text(
-                                    text = mod.title,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        },
-                        onClick = {
-                            viewModel.changeCheckpoint(mod.name)
-                            modelExpanded = false
-                        },
-                    )
-                }
+            if (modelExpanded) {
+                ResourcePickerSheet(
+                    title = "Model",
+                    items = models,
+                    isSelected = { it.name == selectedModel || it.title == selectedModel },
+                    previewUrl = { viewModel.getPreviewUrl(it.path, isLora = false) },
+                    onPick = {
+                        viewModel.changeCheckpoint(it.name)
+                        modelExpanded = false
+                    },
+                    onDismiss = { modelExpanded = false },
+                )
             }
         }
 
@@ -1456,51 +1434,18 @@ fun LorasSection(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Add LoRA...", fontSize = 12.sp)
             }
-            DropdownMenu(expanded = loraExpanded, onDismissRequest = { loraExpanded = false }, modifier = Modifier.heightIn(max = 350.dp)) {
-                availableLoras.forEach { loraData ->
-                    val isSelected = activeLoras.any { it.name == loraData.name }
-                    DropdownMenuItem(
-                        modifier =
-                            if (isSelected) {
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                                )
-                            } else {
-                                Modifier
-                            },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                AsyncImage(
-                                    model =
-                                        ImageRequest
-                                            .Builder(LocalContext.current)
-                                            .data(viewModel.getPreviewUrl(loraData.path, isLora = true))
-                                            .crossfade(true)
-                                            .build(),
-                                    contentDescription = null,
-                                    modifier =
-                                        Modifier
-                                            .size(
-                                                40.dp,
-                                            ).padding(end = 8.dp)
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.DarkGray),
-                                    contentScale = ContentScale.Crop,
-                                )
-                                Text(
-                                    text = loraData.title,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                )
-                            }
-                        },
-                        onClick = {
-                            viewModel.addLora(loraData.name)
-                            loraExpanded = false
-                        },
-                    )
-                }
+            if (loraExpanded) {
+                ResourcePickerSheet(
+                    title = "LoRA",
+                    items = availableLoras,
+                    isSelected = { lora -> activeLoras.any { it.name == lora.name } },
+                    previewUrl = { viewModel.getPreviewUrl(it.path, isLora = true) },
+                    onPick = {
+                        viewModel.addLora(it.name)
+                        loraExpanded = false
+                    },
+                    onDismiss = { loraExpanded = false },
+                )
             }
         }
 

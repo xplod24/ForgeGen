@@ -204,7 +204,8 @@ fun AnimatedStatusIndicator(
  * HELPER CLASSES & FUNCTIONS
  * ============================================================================ */
 
-class PromptVisualTransformation : VisualTransformation {
+/** Colours LoRA tags and weights in the prompt; one shared object, so the text field does not redo it needlessly. */
+object PromptHighlighting : VisualTransformation {
     override fun filter(text: AnnotatedString): TransformedText {
         val spanStyles = mutableListOf<AnnotatedString.Range<SpanStyle>>()
         val str = text.text
