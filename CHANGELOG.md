@@ -1,3 +1,6 @@
+## 1.6.2
+- The app no longer checks prompts itself: your server alone decides what it generates. A prompt it refuses (HTTP 403) is set aside in the queue with "The prompt does not comply with the server's rules." and the server's reason; the other jobs go on.
+
 ## 1.6.1
 - Civitai sync is gone: model names and previews come from your server alone. Picking a LoRA adds it to the prompt at once (without the trigger-word dialog). The Civitai settings, notifications and the NSFW / "Real person" labels are gone too, and the stored Civitai data is removed from the phone.
 - The live preview on the main screen stays blurred until you tap the eye.

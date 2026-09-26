@@ -79,7 +79,8 @@ object ForgeQueueManager {
 
     const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
 
-    // The server refuses a prompt against its rules with HTTP 403 (BlockingApi's extra check answers the same way).
+    // The server refuses a prompt against its rules with HTTP 403 (its prompt-checking extension); the app checks no
+    // prompt itself.
     private const val HTTP_FORBIDDEN = 403
     const val PROMPT_REFUSED = "The prompt does not comply with the server's rules."
 
@@ -547,14 +548,7 @@ object ForgeQueueManager {
         var connectionLost = false
         val startedAt = System.currentTimeMillis()
         try {
-            // The extra check of BlockingApi goes the way of the server's own refusal (HTTP 403), without sending.
-            val refused = BlockingApi.check(job.payload.prompt)
-            val answer =
-                if (refused != null) {
-                    Answer.Failed(HTTP_FORBIDDEN, gson.toJson(mapOf("detail" to "${refused.reason} (${refused.terms.joinToString(", ")})")))
-                } else {
-                    requestWithWatchdog(job, shouldSaveToDevice)
-                }
+            val answer = requestWithWatchdog(job, shouldSaveToDevice)
             if (answer is Answer.Images) {
                 if (answer.files.isNotEmpty()) {
                     val currentList = _sessionImages.value.toMutableList()
@@ -581,8 +575,8 @@ object ForgeQueueManager {
                 // Forge answers most failures (bad sampler, missing model, ...) with HTTP 500, so the status code
                 // alone must not raise the out-of-memory alarm.
                 if (answer.code == HTTP_FORBIDDEN) {
-                    // The server's rules refused the prompt (a prompt-checking extension on the server, or BlockingApi's
-                    // check before sending): only this job fails, set aside with the reason; the queue goes on.
+                    // The server's rules refused the prompt (its prompt-checking extension): only this job fails, set
+                    // aside with the reason; the queue goes on.
                     val reason = PROMPT_REFUSED + (serverDetail(errorBody)?.let { " $it" } ?: "")
                     _statusText.value = PROMPT_REFUSED
                     ForgeRepository.showToast(reason)

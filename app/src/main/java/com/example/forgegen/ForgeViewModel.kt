@@ -100,7 +100,7 @@ class ForgeViewModel(
         }
     }
 
-    // --- DEBUG MODE (DebugMode; the rules of BlockingApi stay on) ---
+    // --- DEBUG MODE (DebugMode) ---
     val debugUnlocked: StateFlow<Boolean> = DebugMode.unlocked
     val debugForceNowBar: StateFlow<Boolean> = DebugMode.forceNowBar
 

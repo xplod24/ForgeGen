@@ -31,7 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 /* ============================================================================
  * DEBUG PANEL
  * The "Debug" section of the settings, shown only after unlocking the debug mode (DebugMode). Its actions work at
- * once, without the usual confirmations; the rules of BlockingApi (the check before a job is sent) stay on.
+ * once, without the usual confirmations.
  * ============================================================================ */
 @Composable
 fun DebugPanel(viewModel: ForgeViewModel) {
@@ -57,8 +57,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            "Everything here acts at once, without the usual confirmations. The check before a job is sent " +
-                "(BlockingApi) stays on.",
+            "Everything here acts at once, without the usual confirmations.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.error,
         )
