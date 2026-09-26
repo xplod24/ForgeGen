@@ -534,6 +534,56 @@ class ForgeViewModel(
 
     fun moveQueueItemUp(id: String) = ForgeQueueManager.moveQueueItemUp(id)
 
+    // --- BACKUP (settings, presets, server profiles and wildcards in one file) ---
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val json = Backup.write(ForgeSettingsManager.config.value, ForgePromptManager.wildcards.value, AppVersion.currentVersion)
+                getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { it.write(json.toByteArray()) }
+                    ?: throw java.io.IOException("The file cannot be written")
+                showToast("Settings exported")
+            } catch (e: Exception) {
+                showToast("Export failed: ${e.message}")
+            }
+        }
+    }
+
+    fun importBackup(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val json =
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                        ?: throw java.io.IOException("The file cannot be read")
+                val backup = Backup.read(json)
+                if (backup == null) {
+                    showToast("This is not a ForgeGen backup")
+                    return@launch
+                }
+                val current = ForgeSettingsManager.config.value
+                withContext(Dispatchers.Main) {
+                    ForgeSettingsManager.saveConfig(backup.config.copy(lastUpdateCheckDate = current.lastUpdateCheckDate))
+                }
+                ForgePromptManager.saveWildcards(backup.wildcards)
+                showToast(
+                    "Settings imported: ${backup.config.presets.size} presets, ${backup.config.serverProfiles.size} server profiles, " +
+                        "${backup.wildcards.size} wildcards",
+                )
+            } catch (e: Exception) {
+                showToast("Import failed: ${e.message}")
+            }
+        }
+    }
+
+    fun downloadImages(items: List<GalleryItem>) = ForgeGalleryManager.downloadImages(items)
+
+    fun addFavorites(items: List<GalleryItem>) = ForgeGalleryManager.addFavorites(items)
+
+    fun shareImages(
+        items: List<GalleryItem>,
+        onIntentReady: (Intent) -> Unit,
+    ) = ForgeGalleryManager.shareImages(items, onIntentReady)
+
     fun moveQueueItemDown(id: String) = ForgeQueueManager.moveQueueItemDown(id)
 
     fun dismissGridPreview(index: Int? = null) = ForgeQueueManager.dismissGridPreview(index)

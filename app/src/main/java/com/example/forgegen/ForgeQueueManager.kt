@@ -85,6 +85,14 @@ object ForgeQueueManager {
     }
 
     const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
+    const val USER_PAUSED_REASON = "Paused by you. The running job finishes; resume the queue to go on."
+
+    /** The user pauses the queue (the Quick Settings tile): the running job finishes, the next ones wait. */
+    fun pauseByUser() {
+        if (_generationQueue.value.none { it.isRunnable() }) return
+        pauseQueue(USER_PAUSED_REASON)
+        _statusText.value = "Queue paused"
+    }
 
     // The server refuses a prompt against its rules with HTTP 403 (its prompt-checking extension); the app checks no
     // prompt itself.
@@ -428,6 +436,7 @@ object ForgeQueueManager {
             while (isActive) {
                 val job = claim(nextJob()) ?: continue
                 _isGenerating.value = true
+                ForgeRepository.pingNow() // progress from the first second, not after the idle interval
                 saveQueueState()
                 try {
                     executeGeneration(job)

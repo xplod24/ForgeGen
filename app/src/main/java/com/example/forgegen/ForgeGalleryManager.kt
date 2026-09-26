@@ -1020,6 +1020,69 @@ object ForgeGalleryManager {
         managerScope.launch { saveToPhone(item, quietIfSaved = false) }
     }
 
+    // --- SEVERAL IMAGES AT ONCE (selected in the gallery) ---
+
+    /** Saves [items] to the phone, skipping those saved before; one message at the end. */
+    fun downloadImages(items: List<GalleryItem>) {
+        managerScope.launch {
+            val saved = DeviceImages.savedNames(application).toMutableSet()
+            var count = 0
+            var failed = 0
+            for (item in items) {
+                val name = DeviceImages.nameFor(item.fullpath)
+                if (name in saved) continue
+                try {
+                    saveServerImage(item, name)
+                    saved += name
+                    count++
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    failed++
+                }
+            }
+            val failedText = if (failed > 0) ", $failed failed" else ""
+            ForgeRepository.showToast("Saved $count of ${items.size} images to ${DeviceImages.locationName()}$failedText")
+        }
+    }
+
+    /** Adds [items] to the favorites (those already there stay). */
+    fun addFavorites(items: List<GalleryItem>) {
+        managerScope.launch {
+            val dao = getDb().favoriteImageDao()
+            val added = items.filter { it.fullpath !in _favoritePaths.value }
+            for (item in added) {
+                dao.insertFavorite(FavoriteImageEntity(fullpath = item.fullpath, name = item.name, date = item.date ?: ""))
+            }
+            _favoritePaths.update { it + added.map { item -> item.fullpath } }
+            ForgeRepository.showToast("Added ${added.size} images to the favorites")
+            if (ForgeRepository.config.value.autoSaveMode == AUTO_SAVE_FAVORITES) added.forEach { saveToPhone(it, quietIfSaved = true) }
+        }
+    }
+
+    /** One share sheet for [items], downloaded from the server one after another. */
+    fun shareImages(
+        items: List<GalleryItem>,
+        onIntentReady: (Intent) -> Unit,
+    ) {
+        managerScope.launch {
+            try {
+                val files =
+                    items.map { item ->
+                        val request = Request.Builder().url(getGalleryImageUrl(item)).build()
+                        networkManager.client.newCall(request).awaitResponse().use { response ->
+                            if (!response.isSuccessful) throw IOException("Server returned ${response.code}")
+                            DeviceImages.sharedCopy(application, item.name) { out -> response.body.byteStream().use { it.copyTo(out) } }
+                        }
+                    }
+                val intent = DeviceImages.shareManyIntent(application, files)
+                withContext(Dispatchers.Main) { onIntentReady(intent) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                ForgeRepository.showToast("Share Failed: ${e.message}")
+            }
+        }
+    }
+
     fun shareImage(
         item: GalleryItem,
         onIntentReady: (Intent) -> Unit,

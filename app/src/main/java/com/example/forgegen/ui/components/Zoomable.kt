@@ -83,7 +83,11 @@ fun Modifier.zoomable(key: Any?): Modifier {
                     val middle = Offset(size.width / 2f, size.height / 2f)
                     val newScale = (scale * zoom).coerceIn(1f, MAX_ZOOM)
                     val anchored =
-                        if (centroid == Offset.Unspecified) offset else (centroid - middle) - (centroid - middle - offset) * (newScale / scale)
+                        if (centroid == Offset.Unspecified) {
+                            offset
+                        } else {
+                            (centroid - middle) - (centroid - middle - offset) * (newScale / scale)
+                        }
                     offset = if (newScale <= 1f) Offset.Zero else clamp(anchored + pan, newScale, size)
                     scale = newScale
                     event.changes.forEach { if (it.positionChanged()) it.consume() }

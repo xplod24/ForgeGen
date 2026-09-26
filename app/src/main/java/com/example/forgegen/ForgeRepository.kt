@@ -345,6 +345,11 @@ object ForgeRepository {
         wakePing.trySend(Unit)
     }
 
+    /** Asks the server now instead of after the current wait (a job just started: its progress should show at once). */
+    fun pingNow() {
+        wakePing.trySend(Unit)
+    }
+
     private fun startSearch() {
         _searchEndsAt.value = System.currentTimeMillis() + searchWindowMs
         _connection.value = ServerConnection.SEARCHING

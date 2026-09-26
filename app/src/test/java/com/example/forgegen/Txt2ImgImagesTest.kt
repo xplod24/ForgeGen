@@ -15,10 +15,11 @@ class Txt2ImgImagesTest {
 
     private fun read(json: String): List<ByteArray> {
         val images = mutableListOf<ByteArray>()
-        val count = Txt2ImgImages.read(StringReader(json)) { index, stream ->
-            assertEquals(images.size, index)
-            images += stream.readBytes()
-        }
+        val count =
+            Txt2ImgImages.read(StringReader(json)) { index, stream ->
+                assertEquals(images.size, index)
+                images += stream.readBytes()
+            }
         assertEquals(images.size, count)
         return images
     }

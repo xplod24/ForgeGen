@@ -44,6 +44,12 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
             </intent-filter>
+            <!-- Shared text becomes the prompt. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -58,6 +64,18 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Sends the user's queued image generation jobs to their own Stable Diffusion server and receives the images, which can take hours." />
+        </service>
+
+        <!-- The queue in Quick Settings: its progress; a tap pauses or resumes it. -->
+        <service
+            android:name=".QueueTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_queue"
+            android:label="ForgeGen Queue"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
         </service>
 
         <!-- The alarm of the queue's "Start at". -->

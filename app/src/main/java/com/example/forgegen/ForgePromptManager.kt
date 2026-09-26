@@ -36,6 +36,15 @@ object ForgePromptManager {
         }
     }
 
+    /** Adds or replaces several wildcards at once (a restored backup). */
+    suspend fun saveWildcards(list: List<WildcardEntity>) {
+        withContext(Dispatchers.IO) {
+            val dao = ForgeRepository.db.wildcardDao()
+            list.forEach { dao.insertWildcard(it) }
+            _wildcards.value = dao.getAllWildcards()
+        }
+    }
+
     fun deleteWildcard(name: String) {
         repositoryScope.launch(Dispatchers.IO) {
             ForgeRepository.db.wildcardDao().deleteWildcard(WildcardEntity(name, ""))

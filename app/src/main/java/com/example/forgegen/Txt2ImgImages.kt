@@ -158,7 +158,9 @@ object Txt2ImgImages {
                     while (true) {
                         val d = next()
                         if (d == -1) return
-                        if (d == ','.code || d == '}'.code || d == ']'.code || d == ' '.code || d == '\n'.code || d == '\r'.code || d == '\t'.code) {
+                        val separator = d == ','.code || d == '}'.code || d == ']'.code
+                        val space = d == ' '.code || d == '\n'.code || d == '\r'.code || d == '\t'.code
+                        if (separator || space) {
                             back()
                             return
                         }

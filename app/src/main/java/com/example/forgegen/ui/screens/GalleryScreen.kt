@@ -22,6 +22,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -171,9 +172,18 @@ fun GalleryScreen(
         }
     }
 
+    // Several images selected with a long press: saved, shared or made favorites at once.
+    var selected by remember { mutableStateOf(emptySet<String>()) }
+    val selectionMode = selected.isNotEmpty()
+    val selectedItems = { displayedFiles.filter { !it.isDir && it.fullpath in selected } }
+    val context = LocalContext.current
+    LaunchedEffect(currentPath, galleryFilters) { selected = emptySet() }
+
     BackHandler(onBack = {
         if (fullscreenIndex >= 0) {
             fullscreenIndex = -1
+        } else if (selectionMode) {
+            selected = emptySet()
         } else {
             onBack()
         }
@@ -181,35 +191,62 @@ fun GalleryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+            if (selectionMode) {
+                TopAppBar(
+                    title = { Text("${selected.size} selected") },
+                    navigationIcon = {
+                        IconButton(onClick = { selected = emptySet() }) { Icon(Icons.Default.Close, "Clear Selection") }
+                    },
+                    actions = {
+                        IconButton(onClick = { selected = displayedFiles.filter { !it.isDir }.map { it.fullpath }.toSet() }) {
+                            Icon(Icons.Default.SelectAll, "Select All")
+                        }
+                        IconButton(onClick = {
+                            viewModel.addFavorites(selectedItems())
+                            selected = emptySet()
+                        }) { Icon(Icons.Default.Star, "Add to Favorites") }
+                        IconButton(onClick = {
+                            viewModel.downloadImages(selectedItems())
+                            selected = emptySet()
+                        }) { Icon(Icons.Default.Save, "Save to Phone") }
+                        IconButton(onClick = {
+                            viewModel.shareImages(selectedItems()) { intent -> context.startActivity(intent) }
+                            selected = emptySet()
+                        }) { Icon(Icons.Default.Share, "Share") }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                )
+            } else {
+                TopAppBar(
+                    title = { Text(if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SETTINGS) ActiveMenu.NONE else ActiveMenu.SETTINGS }) {
+                            Icon(Icons.Default.Settings, "Settings")
+                        }
+                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SORT) ActiveMenu.NONE else ActiveMenu.SORT }) {
+                            Icon(Icons.Default.Sort, "Sort")
+                        }
+                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.FILTER) ActiveMenu.NONE else ActiveMenu.FILTER }) {
+                            Icon(
+                                Icons.Default.FilterList,
+                                "Filter",
+                                tint = if (isSearch) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                            )
+                        }
+                        IconButton(onClick = { viewModel.triggerManualGallerySync() }) {
+                            Icon(Icons.Default.Sync, "Sync Database")
+                        }
+                        IconButton(onClick = { viewModel.fetchGalleryFolder(currentPath) }) {
+                            Icon(Icons.Default.Refresh, "Refresh")
+                        }
                     }
-                },
-                actions = {
-                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SETTINGS) ActiveMenu.NONE else ActiveMenu.SETTINGS }) {
-                        Icon(Icons.Default.Settings, "Settings")
-                    }
-                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SORT) ActiveMenu.NONE else ActiveMenu.SORT }) {
-                        Icon(Icons.Default.Sort, "Sort")
-                    }
-                    IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.FILTER) ActiveMenu.NONE else ActiveMenu.FILTER }) {
-                        Icon(
-                            Icons.Default.FilterList,
-                            "Filter",
-                            tint = if (isSearch) MaterialTheme.colorScheme.primary else LocalContentColor.current,
-                        )
-                    }
-                    IconButton(onClick = { viewModel.triggerManualGallerySync() }) {
-                        Icon(Icons.Default.Sync, "Sync Database")
-                    }
-                    IconButton(onClick = { viewModel.fetchGalleryFolder(currentPath) }) {
-                        Icon(Icons.Default.Refresh, "Refresh")
-                    }
-                }
-            )
+                )
+            }
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
@@ -620,10 +657,15 @@ fun GalleryScreen(
                             }
                         } else {
                             val isFavorite = favoritePaths.contains(item.fullpath) || currentPath == ForgeGalleryManager.FAVORITES
+                            val isSelected = item.fullpath in selected
 
                             // A still gold frame: the animated one kept redrawing every favorite as long as the gallery was open.
                             val frameModifier =
-                                if (isFavorite) Modifier.border(4.dp, FavoriteGold, MaterialTheme.shapes.small) else Modifier
+                                when {
+                                    isSelected -> Modifier.border(4.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
+                                    isFavorite -> Modifier.border(4.dp, FavoriteGold, MaterialTheme.shapes.small)
+                                    else -> Modifier
+                                }
 
                             Box(
                                 modifier =
@@ -632,18 +674,34 @@ fun GalleryScreen(
                                         .aspectRatio(1f)
                                         .then(frameModifier)
                                         .clip(MaterialTheme.shapes.small)
-                                        .clickable {
-                                            if (galleryMode == GalleryMode.PROMPT_PICKER) {
-                                                viewModel.recoverPromptFromImage(item)
-                                                if (navController.currentDestination?.route == "gallery") {
-                                                    navController.popBackStack()
+                                        .combinedClickable(
+                                            onLongClick = {
+                                                if (galleryMode != GalleryMode.PROMPT_PICKER) selected = selected + item.fullpath
+                                            },
+                                            onClick = {
+                                                when {
+                                                    selectionMode ->
+                                                        selected = if (isSelected) selected - item.fullpath else selected + item.fullpath
+                                                    galleryMode == GalleryMode.PROMPT_PICKER -> {
+                                                        viewModel.recoverPromptFromImage(item)
+                                                        if (navController.currentDestination?.route == "gallery") {
+                                                            navController.popBackStack()
+                                                        }
+                                                    }
+                                                    else -> fullscreenIndex = index
                                                 }
-                                            } else {
-                                                fullscreenIndex = index
-                                            }
-                                        },
+                                            },
+                                        ),
                             ) {
                                 GalleryThumbnail(viewModel, item)
+                                if (isSelected) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).background(Color.White, CircleShape),
+                                    )
+                                }
                                 Box(
                                     modifier =
                                         Modifier

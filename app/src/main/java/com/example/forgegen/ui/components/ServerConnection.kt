@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Sync
@@ -40,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -142,7 +142,11 @@ fun ServerConnectionDialog(
             Column {
                 when {
                     !phoneOnline -> Text("The phone has no network connection. Turn on Wi-Fi or mobile data.")
-                    offline -> Text("The server did not answer for a minute, so the app stopped asking. Check its address and that Forge is running.")
+                    offline ->
+                        Text(
+                            "The server did not answer for a minute, so the app stopped asking. " +
+                                "Check its address and that Forge is running.",
+                        )
                     else -> ConnectionStatus(connection, pingMs, searchEndsAt, onClick = {})
                 }
                 OutlinedTextField(

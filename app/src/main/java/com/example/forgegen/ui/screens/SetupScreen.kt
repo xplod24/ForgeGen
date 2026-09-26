@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -153,6 +155,15 @@ fun SetupScreen(
     // --- SYSTEM SERVICES ---
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // "Backup": the settings, presets, server profiles and wildcards to a file of the user's choice, and back.
+    val exportLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) viewModel.exportBackup(uri)
+        }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    val importLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> importUri = uri }
 
     val keyguardManager = remember { context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
     val isDeviceSecure = remember { keyguardManager.isDeviceSecure }
@@ -675,6 +686,30 @@ fun SetupScreen(
              * CATEGORY: DANGER ZONE
              * ========================================================== */            }
 
+            item { ExpandableCategoryHeader("Backup", appState, viewModel) }
+            if ("Backup" in appState.setupExpandedSections) {
+                item {
+                    TextPreference(
+                        title = "Export Settings",
+                        subtitle = "Settings, presets, server profiles and wildcards to a file",
+                        value = "",
+                    ) {
+                        val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+                        exportLauncher.launch("forgegen-backup-$date.json")
+                    }
+                }
+                item {
+                    TextPreference(
+                        title = "Import Settings",
+                        subtitle = "Replaces the settings, presets and server profiles; adds the wildcards",
+                        value = "",
+                    ) {
+                        importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                    }
+                }
+            }
+            item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+
             // The Debug section, only after unlocking the debug mode; placed above the Danger Zone.
             if (debugUnlocked) {
                 item { ExpandableCategoryHeader("Debug", appState, viewModel) }
@@ -751,7 +786,27 @@ fun SetupScreen(
             )
         }
 
-        if (showWipeDataDialog) {
+        importUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { importUri = null },
+            title = { Text("Import Settings?") },
+            text = {
+                Text(
+                    "The settings, presets and server profiles on this phone are replaced by the ones in the file. " +
+                        "Its wildcards are added (a wildcard with the same name is replaced).",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.importBackup(uri)
+                    importUri = null
+                }) { Text("Import") }
+            },
+            dismissButton = { TextButton(onClick = { importUri = null }) { Text("Cancel") } },
+        )
+    }
+
+    if (showWipeDataDialog) {
             var wipeSettings by remember { mutableStateOf(false) }
             var wipePresets by remember { mutableStateOf(false) }
             var wipeProfiles by remember { mutableStateOf(false) }

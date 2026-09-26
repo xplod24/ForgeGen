@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Quick Settings tile: the anvil of the logo, one colour (the system tints it). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <group
+        android:scaleX="0.15"
+        android:scaleY="0.15"
+        android:translateX="11.25"
+        android:translateY="11.25">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M-60,-40 L40,-40 Q70,-40 70,-10 Q40,-10 30,-10 Q15,-10 15,20 L30,50 L-30,50 L-15,20 Q-15,-10 -60,-10 Z" />
+    </group>
+</vector>

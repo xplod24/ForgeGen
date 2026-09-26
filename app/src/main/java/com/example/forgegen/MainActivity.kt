@@ -1,6 +1,11 @@
 package com.example.forgegen
 
 import android.app.Activity
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import android.app.UiModeManager
 import android.os.SystemClock
 import android.os.VibrationEffect
@@ -83,7 +88,6 @@ import com.example.forgegen.ui.components.*
 import com.example.forgegen.ui.screens.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -195,7 +199,11 @@ fun AppNavigation(
 
     LaunchedEffect(Unit) {
         if (context is MainActivity) {
-            context.navEvents.collect { route ->
+            for (route in context.navEvents) {
+                if (route == "gallery") {
+                    viewModel.setGalleryMode(GalleryMode.NORMAL)
+                    viewModel.fetchGalleryFolder(viewModel.config.value.galleryPath)
+                }
                 if (navController.currentDestination?.route != route) {
                     navController.navigate(route) { popUpTo(navController.graph.startDestinationId) }
                 }
@@ -275,8 +283,17 @@ private fun StartupScreen(status: String) {
 // --- MAIN ACTIVITY ENTRY POINT ---
 
 class MainActivity : ComponentActivity() {
-    val navEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val pendingIntents = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
+    // Kept until the screen takes them: sent from onCreate they used to be lost (a shared flow drops what arrives
+    // before anyone listens), so a share or a shortcut at a cold start did nothing.
+    val navEvents = Channel<String>(Channel.BUFFERED)
+    val pendingIntents = Channel<Intent>(Channel.BUFFERED)
+
+    companion object {
+        // The launcher shortcuts (long press on the icon).
+        const val ACTION_OPEN_QUEUE = "com.example.forgegen.OPEN_QUEUE"
+        const val ACTION_OPEN_GALLERY = "com.example.forgegen.OPEN_GALLERY"
+        const val ACTION_GENERATE_AGAIN = "com.example.forgegen.GENERATE_AGAIN"
+    }
 
     private val viewModel: ForgeViewModel by viewModels()
 
@@ -354,10 +371,50 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.action == "ACTION_OPEN_SETTINGS") {
-            navEvents.tryEmit("setup")
-        } else {
-            pendingIntents.tryEmit(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        when (intent.action) {
+            "ACTION_OPEN_SETTINGS" -> navEvents.trySend("setup")
+            ACTION_OPEN_QUEUE -> navEvents.trySend("queue")
+            ACTION_OPEN_GALLERY -> navEvents.trySend("gallery")
+            ACTION_GENERATE_AGAIN ->
+                lifecycleScope.launch {
+                    viewModel.isStarted.first { it } // the last settings must be loaded
+                    viewModel.queueGeneration()
+                    viewModel.showToast("Queued with the last settings")
+                }
+            else -> pendingIntents.trySend(intent)
+        }
+    }
+
+    /** "Queue", "Gallery" and "Generate Again" under a long press on the app's icon. */
+    private fun publishShortcuts() {
+        fun shortcut(
+            id: String,
+            label: String,
+            longLabel: String,
+            icon: Int,
+            action: String,
+        ) = ShortcutInfoCompat
+            .Builder(this, id)
+            .setShortLabel(label)
+            .setLongLabel(longLabel)
+            .setIcon(IconCompat.createWithResource(this, icon))
+            .setIntent(Intent(this, MainActivity::class.java).setAction(action))
+            .build()
+        try {
+            ShortcutManagerCompat.setDynamicShortcuts(
+                this,
+                listOf(
+                    shortcut("generate", "Generate Again", "Generate with the last settings", R.drawable.ic_shortcut_generate, ACTION_GENERATE_AGAIN),
+                    shortcut("queue", "Queue", "Generation queue", R.drawable.ic_shortcut_queue, ACTION_OPEN_QUEUE),
+                    shortcut("gallery", "Gallery", "Server gallery", R.drawable.ic_shortcut_gallery, ACTION_OPEN_GALLERY),
+                ),
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Could not publish the shortcuts", e)
         }
     }
 
@@ -376,11 +433,9 @@ class MainActivity : ComponentActivity() {
         ForgeSettingsManager.applyCachedThemeMode(this)
         lifecycleScope.launch { viewModel.initializeApp() }
 
-        if (intent?.action == "ACTION_OPEN_SETTINGS") {
-            navEvents.tryEmit("setup")
-        } else if (intent != null) {
-            pendingIntents.tryEmit(intent)
-        }
+        // A recreated screen (e.g. rotation) gets the same intent again: it was handled already.
+        if (savedInstanceState == null) intent?.let { handleIntent(it) }
+        publishShortcuts()
 
         setContent {
             val context = LocalContext.current
@@ -391,7 +446,17 @@ class MainActivity : ComponentActivity() {
 
             // Capture incoming Android Share Intents containing images and extract generation parameters.
             LaunchedEffect(Unit) {
-                pendingIntents.collect { receivedIntent ->
+                for (receivedIntent in pendingIntents) {
+                    // Shared text becomes the prompt (after the start, so the saved state does not overwrite it).
+                    if (receivedIntent.action == Intent.ACTION_SEND && receivedIntent.type?.startsWith("text/") == true) {
+                        val text = receivedIntent.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+                        if (text.isNotEmpty()) {
+                            viewModel.isStarted.first { it }
+                            viewModel.updateState { it.copy(positivePrompt = text) }
+                            viewModel.showToast("Prompt taken from the shared text")
+                        }
+                        continue
+                    }
                     if (receivedIntent.action == Intent.ACTION_SEND && receivedIntent.type?.startsWith("image/") == true) {
                         val uri = receivedIntent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
                         if (uri != null) {

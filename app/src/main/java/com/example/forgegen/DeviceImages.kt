@@ -121,11 +121,7 @@ object DeviceImages {
         name: String,
         write: (OutputStream) -> Unit,
     ): Intent {
-        val dir = File(context.cacheDir, SHARED_DIR).apply { mkdirs() }
-        val file = File(dir, name.substringAfterLast('/').substringAfterLast('\\'))
-        file.outputStream().use(write)
-        // "Share Without Generation Data": the prompt and settings stay behind, the picture is untouched.
-        if (ForgeSettingsManager.config.value.shareWithoutMetadata) file.writeBytes(MetadataStripper.strip(file.readBytes()))
+        val file = sharedCopy(context, name, write)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         val send =
             Intent(Intent.ACTION_SEND).apply {
@@ -134,6 +130,35 @@ object DeviceImages {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         return Intent.createChooser(send, "Share Image")
+    }
+
+    /** A temporary copy for a share sheet ("Share Without Generation Data" applied); [write] fills it. */
+    fun sharedCopy(
+        context: Context,
+        name: String,
+        write: (OutputStream) -> Unit,
+    ): File {
+        val dir = File(context.cacheDir, SHARED_DIR).apply { mkdirs() }
+        val file = File(dir, name.substringAfterLast('/').substringAfterLast('\\'))
+        file.outputStream().use(write)
+        // "Share Without Generation Data": the prompt and settings stay behind, the picture is untouched.
+        if (ForgeSettingsManager.config.value.shareWithoutMetadata) file.writeBytes(MetadataStripper.strip(file.readBytes()))
+        return file
+    }
+
+    /** One share sheet for several copies made by [sharedCopy]. */
+    fun shareManyIntent(
+        context: Context,
+        files: List<File>,
+    ): Intent {
+        val uris = ArrayList(files.map { FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", it) })
+        val send =
+            Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+                type = files.map { mimeType(it.name) }.distinct().singleOrNull() ?: "image/*"
+                putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        return Intent.createChooser(send, "Share ${files.size} Images")
     }
 
     /** Removes the copies of earlier shares; called at start, when no share sheet can still be reading them. */
