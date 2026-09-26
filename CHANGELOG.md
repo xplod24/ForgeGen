@@ -1,3 +1,6 @@
+## 1.3.2
+- The rules that apply in every content mode (no sexual content with a minor, no nudity with the LoRA of a real person, no Civitai preview of a minor above PG) are now kept together in one place in the code, so they are easier to maintain and to extend where a country requires more. Nothing changes in how the app works.
+
 ## 1.3.1
 - Turning on **Unrestricted** now shows a clear warning: you alone are responsible for what you generate and for following the law where you live, as some content can be a criminal offence. It needs a ticked box to confirm.
 - Unrestricted is one-way: once on, it cannot be turned off in the settings. Only wiping "App Settings & State" in the Danger Zone brings back SFW.

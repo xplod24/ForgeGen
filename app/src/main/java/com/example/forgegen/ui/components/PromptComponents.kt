@@ -724,7 +724,7 @@ fun PreviewSection(
     // The content mode decides whether each new image starts blurred; the eye button still toggles it, except for an
     // image refused in every mode.
     val rating = remember(shownPrompt) { ContentFilter.rate(shownPrompt) }
-    val canReveal = ContentFilter.canReveal(rating)
+    val canReveal = BlockingApi.canReveal(rating)
     var isBlurred by remember(shownKey, contentMode, rating) { mutableStateOf(ContentFilter.blurs(rating, contentMode)) }
     var showRecoverMenu by remember { mutableStateOf(false) }
 

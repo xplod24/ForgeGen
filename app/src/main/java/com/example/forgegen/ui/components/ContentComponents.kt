@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.forgegen.ApiResource
+import com.example.forgegen.BlockingApi
 import com.example.forgegen.ContentFilter
 
 /* ============================================================================
@@ -53,7 +54,7 @@ fun ContentGate(
     onReveal: () -> Unit,
     content: @Composable (Modifier) -> Unit,
 ) {
-    val canReveal = ContentFilter.canReveal(rating)
+    val canReveal = BlockingApi.canReveal(rating)
     val blurred = ContentFilter.blurs(rating, mode) && !(revealed && canReveal)
     Box(contentAlignment = Alignment.Center) {
         content(Modifier.contentBlur(blurred))

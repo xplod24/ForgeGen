@@ -7,10 +7,9 @@ package com.example.forgegen
  *  - NSFW: adult content is allowed; the extreme tags (non-consent, gore, bestiality...) are not sent, and images
  *    made with them are blurred.
  *  - Unrestricted: nothing is blocked or blurred.
- * In every mode, also Unrestricted, two things are never sent: sexual content together with a minor, and nudity or
- * sex with the LoRA of a real person (Civitai marks such models). Those are not a matter of taste; they are illegal
- * in most countries. The filter works on words, so it is a safeguard for the user, not an enforcement: the server
- * accepts whatever it is sent.
+ * In every mode, also Unrestricted, the rules of BlockingApi apply on top: they protect third parties, not the user,
+ * and they are all kept in that one file. The filter works on words, so it is a safeguard, not an enforcement: the
+ * server accepts whatever it is sent.
  * Only the positive prompt is checked; the negative prompt usually lists exactly these words.
  * ============================================================================ */
 object ContentFilter {
@@ -171,49 +170,12 @@ object ContentFilter {
             "drugged",
         )
 
-    // Words that make the person a minor; with any sexual word the prompt is never sent.
-    private val MINOR =
-        listOf(
-            "child",
-            "children",
-            "kid",
-            "kids",
-            "toddler",
-            "infant",
-            "newborn",
-            "loli",
-            "lolicon",
-            "shota",
-            "shotacon",
-            "underage",
-            "preteen",
-            "pre teen",
-            "teen",
-            "teens",
-            "teenage",
-            "teenager",
-            "young girl",
-            "young boy",
-            "little girl",
-            "little boy",
-            "schoolchild",
-            "elementary school",
-            "middle school",
-            "kindergarten",
-            "jailbait",
-        )
-
-    // "12 years old", "12yo", "12-year-old": any age under 18.
-    private val MINOR_AGE =
-        Regex("""(?<![a-z0-9])(1[0-7]|[1-9])[^a-z0-9]*(y[^a-z0-9]*o|years?[^a-z0-9]+old)(?![a-z0-9])""", RegexOption.IGNORE_CASE)
-
     private val suggestiveRegex = wordsRegex(SUGGESTIVE)
     private val explicitRegex = wordsRegex(EXPLICIT)
     private val extremeRegex = wordsRegex(EXTREME)
-    private val minorRegex = wordsRegex(MINOR)
 
     /** Whole words (a space in a term also matches "_", "-" and the like), longest first, any case. */
-    private fun wordsRegex(terms: List<String>): Regex {
+    internal fun wordsRegex(terms: List<String>): Regex {
         val alternatives =
             terms.sortedByDescending { it.length }.joinToString("|") { term ->
                 term.split(" ").joinToString("[^a-z0-9]+") { Regex.escape(it) }
@@ -221,9 +183,7 @@ object ContentFilter {
         return Regex("(?<![a-z0-9])(?:$alternatives)(?![a-z0-9])", RegexOption.IGNORE_CASE)
     }
 
-    private fun Regex.terms(text: String) = findAll(text).map { it.value.lowercase() }.distinct().toList()
-
-    private fun minorTerms(text: String) = minorRegex.terms(text) + MINOR_AGE.findAll(text).map { it.value.lowercase() }
+    internal fun Regex.terms(text: String) = findAll(text).map { it.value.lowercase() }.distinct().toList()
 
     fun rate(prompt: String?): Rating {
         if (prompt == null) return Rating.UNKNOWN
@@ -231,7 +191,7 @@ object ContentFilter {
         val explicit = explicitRegex.containsMatchIn(prompt)
         val suggestive = suggestiveRegex.containsMatchIn(prompt)
         return when {
-            (extreme || explicit || suggestive) && minorTerms(prompt).isNotEmpty() -> Rating.FORBIDDEN
+            BlockingApi.isForbidden(prompt, sexual = extreme || explicit || suggestive) -> Rating.FORBIDDEN
             extreme -> Rating.EXTREME
             explicit -> Rating.EXPLICIT
             suggestive -> Rating.SUGGESTIVE
@@ -252,17 +212,8 @@ object ContentFilter {
         val explicit = explicitRegex.terms(prompt)
         val suggestive = suggestiveRegex.terms(prompt)
         val sexual = extreme + explicit + suggestive
-        val minors = minorTerms(prompt)
-        if (sexual.isNotEmpty() && minors.isNotEmpty()) {
-            return Verdict(minors + sexual, "Sexual content with a minor is never sent, in any content mode.")
-        }
-        val people = parseActiveLoras(prompt).map { it.name }.filter { it in realPersonLoras }
-        if (people.isNotEmpty() && (extreme + explicit).isNotEmpty()) {
-            return Verdict(
-                people + extreme + explicit,
-                "Nudity or sex with the LoRA of a real person is never sent, in any content mode.",
-            )
-        }
+        // The rules of every mode first (BlockingApi), then the content mode's own.
+        BlockingApi.check(prompt, sexual = sexual, nudity = extreme + explicit, realPersonLoras = realPersonLoras)?.let { return it }
         val blocked =
             when (mode) {
                 CONTENT_UNRESTRICTED -> emptyList()
@@ -304,14 +255,11 @@ object ContentFilter {
         mode: String,
     ): Boolean =
         when {
-            rating == Rating.FORBIDDEN -> true
+            !BlockingApi.canReveal(rating) -> true
             mode == CONTENT_UNRESTRICTED -> false
             mode == CONTENT_NSFW -> rating == Rating.EXTREME
             else -> true
         }
-
-    /** A blurred image the user may still show; the FORBIDDEN ones stay hidden. */
-    fun canReveal(rating: Rating) = rating != Rating.FORBIDDEN
 
     // --- Civitai ---
     // Civitai rates each image: 1 PG, 2 PG-13, 4 R, 8 X, 16 XXX, 32 blocked by Civitai.
@@ -324,13 +272,13 @@ object ContentFilter {
             else -> 1
         }
 
-    /** The first Civitai image allowed in [mode]; never one Civitai blocked, and never a minor in a non-PG image. */
+    /** The first Civitai image allowed in [mode]; never one Civitai blocked, nor one BlockingApi refuses. */
     fun pickCivitaiPreview(
         images: List<CivitaiImage>,
         mode: String,
     ): CivitaiImage? =
         images.firstOrNull { image ->
-            image.level in 1..civitaiMaxLevel(mode) && !(image.minor && image.level > 1)
+            image.level in 1..civitaiMaxLevel(mode) && BlockingApi.allowsCivitaiImage(image)
         }
 
     /** A model preview of Civitai level [level] (0: not from Civitai, content unknown) is blurred in [mode]. */

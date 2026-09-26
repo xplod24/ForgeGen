@@ -653,7 +653,7 @@ fun GalleryScreen(
                                 val rating = ContentFilter.rate(galleryPrompts[item.fullpath])
                                 val blurred =
                                     ContentFilter.blurs(rating, config.contentMode) &&
-                                        !(item.fullpath in revealedImages && ContentFilter.canReveal(rating))
+                                        !(item.fullpath in revealedImages && BlockingApi.canReveal(rating))
                                 SubcomposeAsyncImage(
                                     model = viewModel.getGalleryThumbnailUrl(item),
                                     contentDescription = item.name,
