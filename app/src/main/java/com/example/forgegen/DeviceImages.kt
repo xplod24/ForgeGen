@@ -23,11 +23,6 @@ object DeviceImages {
 
     private val savesPrivately get() = ForgeSettingsManager.config.value.savePrivately
 
-    const val SHARING_OFF = "Sharing is turned off in the Unrestricted content mode."
-
-    /** Images cannot be shared from the app in the Unrestricted content mode. */
-    fun sharingAllowed(mode: String = ForgeSettingsManager.config.value.contentMode) = mode != CONTENT_UNRESTRICTED
-
     /** Where saved images go, for messages to the user. */
     fun locationName(private: Boolean = savesPrivately) = if (private) "the app's private folder" else "Pictures/ForgeGen"
 
@@ -126,8 +121,6 @@ object DeviceImages {
         name: String,
         write: (OutputStream) -> Unit,
     ): Intent {
-        // The share buttons are hidden in the Unrestricted content mode; this stops any other way in.
-        if (!sharingAllowed()) throw IllegalStateException(SHARING_OFF)
         val dir = File(context.cacheDir, SHARED_DIR).apply { mkdirs() }
         val file = File(dir, name.substringAfterLast('/').substringAfterLast('\\'))
         file.outputStream().use(write)

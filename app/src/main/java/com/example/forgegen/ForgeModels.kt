@@ -67,8 +67,7 @@ data class AppConfig(
     var saveOomLogs: Boolean = false,
     // Samsung One UI 8+: the generation progress as a Live Update in the Now Bar of the lock screen (opt-in).
     var nowBarProgress: Boolean = false,
-    // Content & Privacy (1.3.0). CONTENT_SFW, CONTENT_NSFW or CONTENT_UNRESTRICTED, see ContentFilter.
-    var contentMode: String = CONTENT_SFW,
+    // Privacy (1.3.0).
     var hidePromptsInNotifications: Boolean = true,
     var hideInRecents: Boolean = false,
     var blockScreenshots: Boolean = false,
@@ -77,11 +76,6 @@ data class AppConfig(
     // Shared images leave without their generation data (prompt, seed, model).
     var shareWithoutMetadata: Boolean = false,
 )
-
-// Content modes (ContentFilter): SFW is the default, the other two only after the user confirms being an adult.
-const val CONTENT_SFW = "SFW"
-const val CONTENT_NSFW = "NSFW"
-const val CONTENT_UNRESTRICTED = "Unrestricted"
 
 const val THEME_SYSTEM = "System"
 const val THEME_LIGHT = "Light"
@@ -150,8 +144,7 @@ data class ApiResource(
     val path: String,
     val name: String,
     val hash: String? = null,
-    // Civitai's rating of the preview in [path] (1 PG ... 16 XXX), 0 when it is not from Civitai (content unknown).
-    val previewLevel: Int = 0,
+    // Civitai's labels of the model, shown next to it (ModelBadges).
     val nsfw: Boolean = false,
     val realPerson: Boolean = false,
 )
@@ -203,7 +196,7 @@ data class CivitaiModelEntity(
     // Civitai's sample images with their ratings (JSON list of CivitaiImage); null until synced by 1.3.0 or later.
     val previewImages: String? = null,
     @ColumnInfo(defaultValue = "0") val nsfw: Boolean = false,
-    // Civitai marks models of a real person ("poi"); with nudity or sex they are never sent (ContentFilter).
+    // Civitai marks models of a real person ("poi"); with nudity or sex they are never sent (BlockingApi).
     @ColumnInfo(defaultValue = "0") val realPerson: Boolean = false,
 )
 
@@ -453,6 +446,21 @@ data class CivitaiImageDto(
     val nsfwLevel: Int? = null,
     val minor: Boolean? = null,
 )
+
+/** A Civitai sample image of a model with Civitai's rating (1 PG, 2 PG-13, 4 R, 8 X, 16 XXX, 32 blocked by Civitai). */
+data class CivitaiImage(
+    val url: String,
+    val level: Int,
+    val minor: Boolean = false,
+) {
+    companion object {
+        private const val BLOCKED_BY_CIVITAI = 32
+
+        /** The preview of a model: its first sample image that neither Civitai nor BlockingApi (rule 3) refuses. */
+        fun preview(images: List<CivitaiImage>) =
+            images.firstOrNull { it.level != BLOCKED_BY_CIVITAI && BlockingApi.allowsCivitaiImage(it) }
+    }
+}
 
 // New DTO for memory and global settings queries
 data class MemoryResponseDto(

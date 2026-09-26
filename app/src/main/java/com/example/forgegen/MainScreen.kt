@@ -221,25 +221,7 @@ fun MainScreen(
                 Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
                     OomAlertSection(viewModel)
 
-                    // The image shown and its prompt, for the content mode: the running job's while generating.
-                    val sessionPrompts by viewModel.sessionImagePrompts.collectAsStateWithLifecycle()
-                    val shownPath =
-                        when {
-                            isGenerating -> null
-                            isShowingGridPreview -> sessionImages.getOrNull(batchStart)
-                            else -> sessionImages.getOrNull(currentSessionIndex)
-                        }
-                    val shownPrompt =
-                        if (isGenerating) {
-                            generationQueue.firstOrNull { it.status == GenerationStatus.GENERATING }?.positivePrompt
-                        } else {
-                            shownPath?.let { sessionPrompts[it] }
-                        }
-
                     PreviewSection(
-                        contentMode = config.contentMode,
-                        shownPrompt = shownPrompt,
-                        shownKey = if (isGenerating) "live" else shownPath.orEmpty(),
                         isGenerating = isGenerating,
 
                         livePreviewBase64 = livePreviewBase64,

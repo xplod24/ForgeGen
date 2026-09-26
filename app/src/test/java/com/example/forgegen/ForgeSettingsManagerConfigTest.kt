@@ -39,7 +39,6 @@ class ForgeSettingsManagerConfigTest {
                 autoSaveSince = "2026-09-24 10:00:00",
                 saveOomLogs = true,
                 nowBarProgress = true,
-                contentMode = CONTENT_UNRESTRICTED,
                 hidePromptsInNotifications = false,
                 hideInRecents = true,
                 blockScreenshots = true,
@@ -63,11 +62,9 @@ class ForgeSettingsManagerConfigTest {
     }
 
     @Test
-    fun `the content mode is SFW unless one of the three modes was chosen`() {
-        assertEquals("fresh install", CONTENT_SFW, ForgeSettingsManager.loadConfig(null).contentMode)
-        assertEquals("a config from before 1.3.0", CONTENT_SFW, ForgeSettingsManager.loadConfig("""{"timeout":10}""").contentMode)
-        assertEquals(CONTENT_SFW, ForgeSettingsManager.loadConfig("""{"contentMode":"Anything"}""").contentMode)
-        assertEquals(CONTENT_NSFW, ForgeSettingsManager.loadConfig("""{"contentMode":"NSFW"}""").contentMode)
+    fun `a content mode stored by 1_3 to 1_5 is ignored`() {
+        val old = ForgeSettingsManager.loadConfig("""{"timeout":10,"contentMode":"Unrestricted","blockScreenshots":true}""")
+        assertEquals(AppConfig(timeout = 10, blockScreenshots = true), old)
     }
 
     @Test

@@ -47,7 +47,6 @@ fun QueueScreen(
 
     val models by viewModel.models.collectAsStateWithLifecycle()
     val availableLoras by viewModel.availableLoras.collectAsStateWithLifecycle()
-    val contentMode = viewModel.config.collectAsStateWithLifecycle().value.contentMode
 
     val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
     val timing = queueTimingText(viewModel)
@@ -195,11 +194,7 @@ fun QueueScreen(
                                         AsyncImage(
                                             model = viewModel.getPreviewUrl(modelResource.path, isLora = false),
                                             contentDescription = null,
-                                            modifier =
-                                                Modifier
-                                                    .size(32.dp)
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .previewBlur(modelResource, contentMode),
+                                            modifier = Modifier.size(32.dp).clip(RoundedCornerShape(4.dp)),
                                             contentScale = ContentScale.Crop,
                                         )
                                         Spacer(Modifier.width(8.dp))
@@ -253,8 +248,7 @@ fun QueueScreen(
                                                                 Modifier
                                                                     .size(
                                                                         24.dp,
-                                                                    ).clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp))
-                                                                    .previewBlur(loraResource, contentMode),
+                                                                    ).clip(RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)),
                                                             contentScale = ContentScale.Crop,
                                                         )
                                                     } else {
@@ -293,12 +287,12 @@ fun QueueScreen(
                                     Column(modifier = Modifier.padding(top = 12.dp)) {
                                         HorizontalDivider(modifier = Modifier.padding(bottom = 8.dp))
                                         Text("Positive Prompt", fontSize = 10.sp, color = Color.Gray)
-                                        Text(ContentFilter.mask(item.positivePrompt, contentMode), fontSize = 12.sp)
+                                        Text(item.positivePrompt, fontSize = 12.sp)
                                         Spacer(Modifier.height(4.dp))
 
                                         if (item.payload.negative_prompt.isNotBlank()) {
                                             Text("Negative Prompt", fontSize = 10.sp, color = Color.Gray)
-                                            Text(ContentFilter.mask(item.payload.negative_prompt, contentMode), fontSize = 12.sp)
+                                            Text(item.payload.negative_prompt, fontSize = 12.sp)
                                             Spacer(Modifier.height(4.dp))
                                         }
 

@@ -1,3 +1,11 @@
+## 1.6.0
+- **Your server decides what it generates.** The content modes (SFW, NSFW, Unrestricted) are gone, with the blurred images and hidden tags. Prompts go to the server as you write them; a prompt-checking extension on the server can refuse them.
+- When the server refuses a prompt (HTTP 403), the app says "The prompt does not comply with the server's rules.", with the server's reason when it gives one. Only that job fails: it is set aside in the queue, and the other jobs go on.
+- The app still checks two things before sending, in the same way: sexual content with a minor, and nudity with the LoRA of a real person are never sent.
+- Sharing works again in every case; the Privacy settings (hidden prompts in notifications, Recents, screenshots, saving privately, sharing without generation data) stay as they were.
+- Civitai previews show the model's first sample image again (never one Civitai itself blocks, nor one it marks as showing a minor above PG); the NSFW and "Real person" labels stay.
+- The live preview on the main screen is blurred until you tap the eye, as before 1.3.0.
+
 ## 1.5.0
 - **Start the queue at a set time:** the clock button in the queue picks a time of day (today, or tomorrow when that time has passed). Until then nothing is sent, also jobs added later; a card on the main screen and in the queue shows when the queue starts, with Start Now and Change. The phone may sleep meanwhile; an alarm wakes it at that time (Android may deliver it a few minutes late to save battery). "Keep Screen On" does not keep the screen on while the queue only waits.
 - **When the queue ends:** after the first finished job the app knows how fast your server is, for each model, and the queue shows when it will be done ("Ends around 03:40, 2 h 15 min left"), or how long it will run after its set start.

@@ -111,11 +111,6 @@ class ForgeViewModel(
 
     fun debugSetForceNowBar(on: Boolean) = DebugMode.setForceNowBar(on)
 
-    /** Any content mode, without the confirmations and the one-way lock of Unrestricted. */
-    fun debugSetContentMode(mode: String) {
-        if (!DebugMode.unlocked.value) return
-        ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(contentMode = mode), leaveUnrestricted = true)
-    }
 
     /** The settings as JSON, for the raw editor. */
     fun debugConfigJson(): String =
@@ -136,7 +131,7 @@ class ForgeViewModel(
             } catch (e: Exception) {
                 return "Not valid JSON: ${e.message}"
             }
-        ForgeSettingsManager.saveConfig(ForgeSettingsManager.loadConfig(parsed.toString()), leaveUnrestricted = true)
+        ForgeSettingsManager.saveConfig(ForgeSettingsManager.loadConfig(parsed.toString()))
         return null
     }
 
@@ -366,11 +361,6 @@ class ForgeViewModel(
     val totalQueueSize: StateFlow<Int> = ForgeQueueManager.totalQueueSize
     val completedQueueItems: StateFlow<Int> = ForgeQueueManager.completedQueueItems
     val sessionImages: StateFlow<List<String>> = ForgeQueueManager.sessionImages
-    val sessionImagePrompts: StateFlow<Map<String, String>> = ForgeQueueManager.sessionImagePrompts
-    val galleryPrompts: StateFlow<Map<String, String>> = ForgeGalleryManager.galleryPrompts
-    val revealedImages: StateFlow<Set<String>> = ForgeGalleryManager.revealedImages
-
-    fun revealImage(path: String) = ForgeGalleryManager.revealImage(path)
     val currentSessionIndex: StateFlow<Int> = ForgeQueueManager.currentSessionIndex
     val livePreviewImage: StateFlow<String?> = ForgeQueueManager.livePreviewImage
     val isShowingGridPreview: StateFlow<Boolean> = ForgeQueueManager.isShowingGridPreview

@@ -78,6 +78,25 @@ object ForgeQueueManager {
     }
 
     const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
+
+    // The server refuses a prompt against its rules with HTTP 403 (BlockingApi's extra check answers the same way).
+    private const val HTTP_FORBIDDEN = 403
+    const val PROMPT_REFUSED = "The prompt does not comply with the server's rules."
+
+    /** The server's own explanation of a refusal ("detail" of FastAPI's error answer), when it is short text. */
+    fun serverDetail(body: String): String? =
+        try {
+            com.google.gson.JsonParser
+                .parseString(body)
+                .asJsonObject
+                .get("detail")
+                ?.takeIf { it.isJsonPrimitive }
+                ?.asString
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it.length <= 300 }
+        } catch (e: Exception) {
+            null
+        }
     private const val MAX_AUTO_RETRIES = 3
     private const val AUTO_RETRY_DELAY_MS = 5_000L
 
@@ -143,10 +162,6 @@ object ForgeQueueManager {
 
     private val _sessionImages = MutableStateFlow<List<String>>(emptyList())
     val sessionImages: StateFlow<List<String>> = _sessionImages.asStateFlow()
-
-    // The prompt of each generated image of the session, for the content mode's blur (ContentFilter.rate).
-    private val _sessionImagePrompts = MutableStateFlow<Map<String, String>>(emptyMap())
-    val sessionImagePrompts: StateFlow<Map<String, String>> = _sessionImagePrompts.asStateFlow()
 
     private val _currentSessionIndex = MutableStateFlow(-1)
     val currentSessionIndex: StateFlow<Int> = _currentSessionIndex.asStateFlow()
@@ -438,18 +453,9 @@ object ForgeQueueManager {
         val state = ForgeRepository.appState.value
         val currentModel = ForgeRepository.selectedModel.value.ifEmpty { null }
         val wildcards = ForgePromptManager.wildcards.value
-        val contentMode = ForgeRepository.config.value.contentMode
-        val realPersonLoras = ForgeModelManager.realPersonLoras.value
         ForgeRepository.repositoryScope.launch(queueingDispatcher) {
             val finalPositive = applyWildcards(state.positivePrompt, wildcards)
             val finalNegative = applyWildcards(state.negativePrompt, wildcards)
-
-            // The content mode (after the wildcards, which may add words): a refused prompt is not queued.
-            val verdict = ContentFilter.check(finalPositive, contentMode, realPersonLoras)
-            if (verdict != null) {
-                ForgeRepository.showToast("Not sent. ${verdict.reason} (${verdict.terms.joinToString(", ")})")
-                return@launch
-            }
 
             val payload =
                 Txt2ImgPayloadDto(
@@ -541,13 +547,19 @@ object ForgeQueueManager {
         var connectionLost = false
         val startedAt = System.currentTimeMillis()
         try {
-            val answer = requestWithWatchdog(job, shouldSaveToDevice)
+            // The extra check of BlockingApi goes the way of the server's own refusal (HTTP 403), without sending.
+            val refused = BlockingApi.check(job.payload.prompt, ForgeModelManager.realPersonLoras.value)
+            val answer =
+                if (refused != null) {
+                    Answer.Failed(HTTP_FORBIDDEN, gson.toJson(mapOf("detail" to "${refused.reason} (${refused.terms.joinToString(", ")})")))
+                } else {
+                    requestWithWatchdog(job, shouldSaveToDevice)
+                }
             if (answer is Answer.Images) {
                 if (answer.files.isNotEmpty()) {
                     val currentList = _sessionImages.value.toMutableList()
                     val startIndex = currentList.size
                     currentList += answer.files.map { it.absolutePath }
-                    _sessionImagePrompts.update { prompts -> prompts + answer.files.associate { it.absolutePath to job.positivePrompt } }
 
                     val endIndex = currentList.size - 1
                     _sessionImages.value = currentList
@@ -568,7 +580,14 @@ object ForgeQueueManager {
                 val errorBody = answer.body
                 // Forge answers most failures (bad sampler, missing model, ...) with HTTP 500, so the status code
                 // alone must not raise the out-of-memory alarm.
-                if (errorBody.contains("OutOfMemoryError", true) ||
+                if (answer.code == HTTP_FORBIDDEN) {
+                    // The server's rules refused the prompt (a prompt-checking extension on the server, or BlockingApi's
+                    // check before sending): only this job fails, set aside with the reason; the queue goes on.
+                    val reason = PROMPT_REFUSED + (serverDetail(errorBody)?.let { " $it" } ?: "")
+                    _statusText.value = PROMPT_REFUSED
+                    ForgeRepository.showToast(reason)
+                    setAsideReason = reason
+                } else if (errorBody.contains("OutOfMemoryError", true) ||
                     errorBody.contains("out of memory", true)
                 ) {
                     _statusText.value = "SERVER OUT OF MEMORY (OOM)"
@@ -905,11 +924,11 @@ object ForgeQueueManager {
     ) {
         val config = ForgeRepository.config.value
         val title = if (isQueueFinished) "Queue Completed" else "Batch Completed"
-        // The prompt only when the user wants it ("Hide Prompts in Notifications" off), with the words the content
-        // mode hides masked, and never on the lock screen (the public version there has no prompt).
+        // The prompt only when the user wants it ("Hide Prompts in Notifications" off), and never on the lock screen
+        // (the public version there has no prompt).
         val showPrompt = !isQueueFinished && !config.hidePromptsInNotifications
         val generic = if (isQueueFinished) "All generation jobs have finished." else "A batch has finished."
-        val text = if (showPrompt) "Finished: ${ContentFilter.mask(prompt.take(35), config.contentMode)}..." else generic
+        val text = if (showPrompt) "Finished: ${prompt.take(35)}..." else generic
         val builder = ForgeNotifications.builder(ForgeNotifications.CHANNEL_RESULTS) ?: return
         val lockScreen =
             ForgeNotifications

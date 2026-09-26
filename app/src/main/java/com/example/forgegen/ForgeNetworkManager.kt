@@ -52,13 +52,7 @@ class ForgeNetworkManager(
         managerScope.launch(Dispatchers.IO) {
             var currentUrl = ""
             var currentTimeout = -1
-            var currentMode: String? = null
             ForgeRepository.config.collect { config ->
-                // The model previews depend on the content mode, so the lists are rebuilt when it changes.
-                if (currentMode != null && currentMode != config.contentMode && ForgeRepository.isConnected.value) {
-                    fetchApiData()
-                }
-                currentMode = config.contentMode
                 val timeoutChanged = currentTimeout != config.timeout
                 if (timeoutChanged) {
                     currentTimeout = config.timeout
@@ -115,25 +109,20 @@ class ForgeNetworkManager(
             .build()
     }
 
-    private val civitaiApis = java.util.concurrent.ConcurrentHashMap<String, CivitaiApi>()
+    // Civitai's API. civitai.com and civitai.red share the database and their APIs answer the same (the website of
+    // civitai.com shows only safe content since April 2026); civitai.red would be the one to use if that changes.
+    private val civitaiApi: CivitaiApi by lazy {
+        Retrofit
+            .Builder()
+            .baseUrl("https://civitai.com/")
+            .client(civitaiClient)
+            .addConverterFactory(GsonConverterFactory.create(gson))
+            .build()
+            .create(CivitaiApi::class.java)
+    }
 
-    /** Civitai's API on the domain of the content mode: civitai.com (safe content only) or civitai.red (all). */
-    private fun civitaiApi(mode: String): CivitaiApi =
-        civitaiApis.getOrPut(ContentFilter.civitaiBaseUrl(mode)) {
-            Retrofit
-                .Builder()
-                .baseUrl(ContentFilter.civitaiBaseUrl(mode))
-                .client(civitaiClient)
-                .addConverterFactory(GsonConverterFactory.create(gson))
-                .build()
-                .create(CivitaiApi::class.java)
-        }
-
-    /** The preview of a synced model allowed in [mode]; a model synced before 1.3.0 has one of unknown rating. */
-    private fun civitaiPreview(
-        entity: CivitaiModelEntity,
-        mode: String,
-    ): CivitaiImage? {
+    /** The preview of a synced model (CivitaiImage.preview); a model synced before 1.3.0 has only the one it stored. */
+    private fun civitaiPreview(entity: CivitaiModelEntity): CivitaiImage? {
         val images =
             entity.previewImages?.let {
                 try {
@@ -142,7 +131,7 @@ class ForgeNetworkManager(
                     null
                 }
             } ?: return entity.previewImage?.let { CivitaiImage(it, level = 0) }
-        return ContentFilter.pickCivitaiPreview(images, mode)
+        return CivitaiImage.preview(images)
     }
 
     // --- STATIC CACHE STATES (Model list, Samplers, Schedulers) ---
@@ -430,18 +419,15 @@ class ForgeNetworkManager(
 
                                         val updatedDbModels = getDb().civitaiModelDao().getAllModels().associateBy { it.sha256 }
 
-                                        // The preview Civitai allows in the content mode, else the server's own (rating unknown).
-                                        val mode = getConfig().contentMode
-
+                                        // Civitai's preview, else the server's own.
                                         fun resource(cam: CustomApiModelDto): ApiResource {
                                             val dbEntity = updatedDbModels[cam.sha256]
-                                            val preview = dbEntity?.let { civitaiPreview(it, mode) }
+                                            val preview = dbEntity?.let { civitaiPreview(it) }
                                             return ApiResource(
                                                 title = dbEntity?.name ?: cam.name ?: "Unknown",
                                                 name = cam.name ?: "Unknown",
                                                 path = preview?.url ?: cam.filename ?: "",
                                                 hash = cam.sha256,
-                                                previewLevel = preview?.level ?: 0,
                                                 nsfw = dbEntity?.nsfw == true,
                                                 realPerson = dbEntity?.realPerson == true,
                                             )
@@ -461,6 +447,7 @@ class ForgeNetworkManager(
 
                                         _models.value = checkpoints
                                         _availableLoras.value = loras
+                                        // For rule 2 of BlockingApi (nudity with a real person's LoRA).
                                         ForgeModelManager.setRealPersonLoras(loras.filter { it.realPerson }.map { it.name }.toSet())
                                         customApiSuccess = true
                                     }
@@ -582,14 +569,12 @@ class ForgeNetworkManager(
                         var previewImages: String? = null
                         var nsfw = false
                         var realPerson = false
-                        val mode = getConfig().contentMode
 
-                        // Model names can be explicit too: shown with the words the content mode hides masked.
-                        _civitaiSyncCurrentModel.value = ContentFilter.mask(civName, mode)
+                        _civitaiSyncCurrentModel.value = civName
                         _civitaiSyncProgress.value = index to missingOrIncomplete.size
                         notifyCivitaiSync(
                             title = "Syncing Civitai models (${index + 1}/${missingOrIncomplete.size})",
-                            text = ContentFilter.mask(civName, mode),
+                            text = civName,
                             progress = index to missingOrIncomplete.size,
                         )
 
@@ -601,13 +586,13 @@ class ForgeNetworkManager(
                         }
 
                         try {
-                            val civRes = civitaiApi(mode).getModelByHash(sha256)
+                            val civRes = civitaiApi.getModelByHash(sha256)
                             if (civRes.isSuccessful) {
                                 val civBody = civRes.body()
                                 if (civBody?.model != null) civName = civBody.model.name ?: civName
                                 trainedWords = civBody?.trainedWords?.joinToString(", ") ?: ""
-                                // Every sample image with Civitai's rating; which one is shown depends on the content
-                                // mode at the time (ContentFilter.pickCivitaiPreview), so all of them are kept.
+                                // Every sample image with Civitai's rating; CivitaiImage.preview picks the one shown
+                                // (never one BlockingApi's rule 3 refuses).
                                 val images =
                                     civBody?.images.orEmpty().mapNotNull { image ->
                                         image.url?.let {
@@ -616,7 +601,7 @@ class ForgeNetworkManager(
                                         }
                                     }
                                 previewImages = gson.toJson(images)
-                                previewImage = ContentFilter.pickCivitaiPreview(images, CONTENT_SFW)?.url
+                                previewImage = CivitaiImage.preview(images)?.url
                                 nsfw = civBody?.model?.nsfw == true
                                 realPerson = civBody?.model?.poi == true
                                 _civitaiSyncLastResult.value = "Downloaded successfully"

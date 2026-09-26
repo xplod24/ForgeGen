@@ -292,7 +292,6 @@ object ForgeSettingsManager {
             autoSaveSince = parsed?.autoSaveSince ?: "",
             saveOomLogs = parsed?.saveOomLogs ?: false,
             nowBarProgress = parsed?.nowBarProgress ?: false,
-            contentMode = parsed?.contentMode?.takeIf { it in listOf(CONTENT_SFW, CONTENT_NSFW, CONTENT_UNRESTRICTED) } ?: CONTENT_SFW,
             hidePromptsInNotifications = parsed?.hidePromptsInNotifications ?: true,
             hideInRecents = parsed?.hideInRecents ?: false,
             blockScreenshots = parsed?.blockScreenshots ?: false,
@@ -301,14 +300,7 @@ object ForgeSettingsManager {
         )
     }
 
-    /**
-     * Stores [newConfig]. The Unrestricted content mode is one-way: once on, it stays on, and only wiping the
-     * settings ([resetSettings], which passes [leaveUnrestricted]) turns it off.
-     */
-    fun saveConfig(
-        newConfig: AppConfig,
-        leaveUnrestricted: Boolean = false,
-    ) {
+    fun saveConfig(newConfig: AppConfig) {
         var cleanUrl = newConfig.apiUrl.trim()
         if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
             cleanUrl = "http://$cleanUrl"
@@ -316,12 +308,10 @@ object ForgeSettingsManager {
 
         val oldUrl = _config.value.apiUrl
         val oldTimeout = _config.value.timeout
-        val keepUnrestricted = _config.value.contentMode == CONTENT_UNRESTRICTED && !leaveUnrestricted
         val updatedConfig =
             newConfig.copy(
                 apiUrl = cleanUrl,
                 timeout = newConfig.timeout.coerceIn(MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS),
-                contentMode = if (keepUnrestricted) CONTENT_UNRESTRICTED else newConfig.contentMode,
             )
 
         _config.value = updatedConfig
@@ -390,7 +380,6 @@ object ForgeSettingsManager {
                 serverProfiles = current.serverProfiles,
                 presets = current.presets,
             ),
-            leaveUnrestricted = true,
         )
         resetToDefaults()
     }

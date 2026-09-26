@@ -169,7 +169,6 @@ fun HybridPromptEditor(
     onDisabledTagsChange: (Set<String>) -> Unit,
     label: String,
     showTagEditor: Boolean = true,
-    contentMode: String = CONTENT_UNRESTRICTED,
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         UndoRedoTextField(
@@ -357,7 +356,6 @@ fun HybridPromptEditor(
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                                             fontWeight = FontWeight.Medium,
-                                            modifier = Modifier.tagBlur(ContentFilter.isHidden(baseName, contentMode)),
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Icon(
@@ -427,12 +425,7 @@ fun HybridPromptEditor(
                                         tint = Color.Gray,
                                     )
                                     Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        baseName,
-                                        fontSize = 11.sp,
-                                        color = Color.Gray,
-                                        modifier = Modifier.tagBlur(ContentFilter.isHidden(baseName, contentMode)),
-                                    )
+                                    Text(baseName, fontSize = 11.sp, color = Color.Gray)
                                 }
                             }
                         }
@@ -492,7 +485,6 @@ fun HybridPromptEditor(
 fun PromptHistoryCarousel(
     history: List<PromptHistoryItem>,
     onSelect: (PromptHistoryItem) -> Unit,
-    contentMode: String = CONTENT_UNRESTRICTED,
 ) {
     if (history.isEmpty()) return
 
@@ -517,7 +509,7 @@ fun PromptHistoryCarousel(
                         Text(timeFormat, fontSize = 9.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            ContentFilter.mask(item.positivePrompt, contentMode),
+                            item.positivePrompt,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             fontSize = 11.sp,
@@ -718,16 +710,8 @@ fun PreviewSection(
     onNext: () -> Unit,
     onRecoverLast: () -> Unit,
     onRecoverFromGallery: () -> Unit,
-    contentMode: String = CONTENT_UNRESTRICTED,
-    // The prompt of the image shown (null: unknown) and a key that changes with the image.
-    shownPrompt: String? = null,
-    shownKey: String = "",
 ) {
-    // The content mode decides whether each new image starts blurred; the eye button still toggles it, except for an
-    // image refused in every mode.
-    val rating = remember(shownPrompt) { ContentFilter.rate(shownPrompt) }
-    val canReveal = BlockingApi.canReveal(rating)
-    var isBlurred by remember(shownKey, contentMode, rating) { mutableStateOf(ContentFilter.blurs(rating, contentMode)) }
+    var isBlurred by remember { mutableStateOf(true) }
     var showRecoverMenu by remember { mutableStateOf(false) }
 
     Box(
@@ -738,7 +722,7 @@ fun PreviewSection(
                 .clip(MaterialTheme.shapes.medium)
                 .background(Color.DarkGray),
     ) {
-        val blurModifier = if (isBlurred || !canReveal) Modifier.blur(25.dp) else Modifier
+        val blurModifier = if (isBlurred) Modifier.blur(25.dp) else Modifier
 
         Box(modifier = Modifier.fillMaxSize().then(blurModifier)) {
             if (isGenerating && livePreviewBase64.isNullOrEmpty()) {
@@ -842,23 +826,21 @@ fun PreviewSection(
             }
         }
 
-        if (canReveal) {
-            IconButton(
-                onClick = { isBlurred = !isBlurred },
-                modifier =
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                        .size(32.dp),
-            ) {
-                Icon(
-                    imageVector = if (isBlurred) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                    contentDescription = "Toggle Blur",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
+        IconButton(
+            onClick = { isBlurred = !isBlurred },
+            modifier =
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                    .size(32.dp),
+        ) {
+            Icon(
+                imageVector = if (isBlurred) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                contentDescription = "Toggle Blur",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
         }
 
         Row(
@@ -931,7 +913,6 @@ fun PromptsSection(
                     disabledPosTags = emptySet()
                     disabledNegTags = emptySet()
                 },
-                contentMode = config.contentMode,
             )
 
             HybridPromptEditor(
@@ -943,7 +924,6 @@ fun PromptsSection(
                 onDisabledTagsChange = { disabledPosTags = it },
                 label = "Positive Prompt",
                 showTagEditor = config.showActiveTagsUI,
-                contentMode = config.contentMode,
             )
 
             Row(
@@ -978,7 +958,6 @@ fun PromptsSection(
                 onDisabledTagsChange = { disabledNegTags = it },
                 label = "Negative Prompt",
                 showTagEditor = config.showActiveTagsUI,
-                contentMode = config.contentMode,
             )
 
             Row(
@@ -1083,8 +1062,7 @@ fun GenerationSettingsSection(
                                     .size(32.dp)
                                     .padding(end = 8.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.DarkGray)
-                                    .previewBlur(currentModelResource, config.contentMode),
+                                    .background(Color.DarkGray),
                             contentScale = ContentScale.Crop,
                         )
                     }
@@ -1128,8 +1106,7 @@ fun GenerationSettingsSection(
                                                 40.dp,
                                             ).padding(end = 8.dp)
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.DarkGray)
-                                            .previewBlur(mod, config.contentMode),
+                                            .background(Color.DarkGray),
                                     contentScale = ContentScale.Crop,
                                 )
                                 Column {
@@ -1503,8 +1480,7 @@ fun LorasSection(
                                                 40.dp,
                                             ).padding(end = 8.dp)
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(Color.DarkGray)
-                                            .previewBlur(loraData, config.contentMode),
+                                            .background(Color.DarkGray),
                                     contentScale = ContentScale.Crop,
                                 )
                                 Column {
@@ -1549,8 +1525,7 @@ fun LorasSection(
                                     .size(50.dp)
                                     .padding(end = 8.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.DarkGray)
-                                    .previewBlur(loraResource, config.contentMode),
+                                    .background(Color.DarkGray),
                             contentScale = ContentScale.Crop,
                         )
                     }
@@ -1964,15 +1939,12 @@ fun FullscreenImageViewer(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                 )
 
-                // No sharing in the Unrestricted content mode.
-                if (DeviceImages.sharingAllowed(config.contentMode)) {
-                    IconButton(onClick = {
-                        viewModel.shareSessionImage(currentFile) { intent ->
-                            context.startActivity(intent)
-                        }
-                    }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
+                IconButton(onClick = {
+                    viewModel.shareSessionImage(currentFile) { intent ->
+                        context.startActivity(intent)
                     }
+                }) {
+                    Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                 }
 
                 val showMetadata by viewModel.showGalleryMetadata.collectAsStateWithLifecycle()
@@ -1993,45 +1965,27 @@ fun FullscreenImageViewer(
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                // Blurred as the content mode wants, until the user shows the image.
-                val sessionPrompts by viewModel.sessionImagePrompts.collectAsStateWithLifecycle()
-                val revealed by viewModel.revealedImages.collectAsStateWithLifecycle()
                 if (config.swipeToBrowseGallery) {
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                        val path = sessionImages[page]
-                        ContentGate(
-                            rating = ContentFilter.rate(sessionPrompts[path]),
-                            mode = config.contentMode,
-                            revealed = path in revealed,
-                            onReveal = { viewModel.revealImage(path) },
-                        ) {
-                            AsyncImage(
-                                model = path,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxWidth().then(it),
-                                contentScale = ContentScale.Fit,
-                                alignment = Alignment.TopCenter,
-                            )
-                        }
+                        AsyncImage(
+                            model = sessionImages[page],
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxWidth(),
+                            contentScale = ContentScale.Fit,
+                            alignment = Alignment.TopCenter,
+                        )
                     }
                 } else {
                     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                         val item = sessionImages.getOrNull(pagerState.currentPage)
                         if (item != null) {
-                            ContentGate(
-                                rating = ContentFilter.rate(sessionPrompts[item]),
-                                mode = config.contentMode,
-                                revealed = item in revealed,
-                                onReveal = { viewModel.revealImage(item) },
-                            ) {
-                                AsyncImage(
-                                    model = item,
-                                    contentDescription = null,
-                                    modifier = Modifier.fillMaxWidth().then(it),
-                                    contentScale = ContentScale.Fit,
-                                    alignment = Alignment.TopCenter,
-                                )
-                            }
+                            AsyncImage(
+                                model = item,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxWidth(),
+                                contentScale = ContentScale.Fit,
+                                alignment = Alignment.TopCenter,
+                            )
                         }
                     }
                 }
@@ -2093,8 +2047,6 @@ fun AppMetadataAlertDialog(
     onApplyModel: (String) -> Unit,
     onApplyLoras: (List<String>) -> Unit,
     onApplyAll: (() -> Unit)? = null,
-    // The words the content mode hides are masked on screen; "Apply" still uses the full text.
-    contentMode: String = ForgeSettingsManager.config.value.contentMode,
 ) {
     var posPrompt = ""
     var negPrompt = ""
@@ -2155,7 +2107,7 @@ fun AppMetadataAlertDialog(
                             .padding(8.dp),
                 ) {
                     Text(
-                        text = metadata?.let { ContentFilter.mask(it, contentMode) } ?: "Loading...",
+                        text = metadata ?: "Loading...",
                         fontSize = 11.sp,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         modifier = Modifier.verticalScroll(rememberScrollState()),

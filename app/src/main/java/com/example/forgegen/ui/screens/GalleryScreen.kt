@@ -136,8 +136,6 @@ fun GalleryScreen(
 
     // Subscription to the list of favorite paths
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
-    val galleryPrompts by viewModel.galleryPrompts.collectAsStateWithLifecycle()
-    val revealedImages by viewModel.revealedImages.collectAsStateWithLifecycle()
 
     var fullscreenIndex by remember { mutableIntStateOf(-1) }
 
@@ -649,11 +647,6 @@ fun GalleryScreen(
                                             }
                                         },
                             ) {
-                                // Blurred as the content mode wants; opening the image offers to show it.
-                                val rating = ContentFilter.rate(galleryPrompts[item.fullpath])
-                                val blurred =
-                                    ContentFilter.blurs(rating, config.contentMode) &&
-                                        !(item.fullpath in revealedImages && BlockingApi.canReveal(rating))
                                 SubcomposeAsyncImage(
                                     model = viewModel.getGalleryThumbnailUrl(item),
                                     contentDescription = item.name,
@@ -669,22 +662,9 @@ fun GalleryScreen(
                                             contentScale = ContentScale.Crop,
                                         )
                                     },
-                                    modifier = Modifier.fillMaxSize().contentBlur(blurred),
+                                    modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop,
                                 )
-                                if (blurred) {
-                                    Icon(
-                                        Icons.Default.VisibilityOff,
-                                        contentDescription = "Blurred",
-                                        tint = Color.White,
-                                        modifier =
-                                            Modifier
-                                                .align(Alignment.Center)
-                                                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                                                .padding(6.dp)
-                                                .size(18.dp),
-                                    )
-                                }
                                 Box(
                                     modifier =
                                         Modifier
@@ -915,15 +895,12 @@ fun FullscreenGalleryViewer(
                     )
                 }
 
-                // No sharing in the Unrestricted content mode.
-                if (DeviceImages.sharingAllowed(config.contentMode)) {
-                    IconButton(onClick = {
-                        currentItem?.let {
-                            viewModel.shareImage(it) { intent -> context.startActivity(intent) }
-                        }
-                    }) {
-                        Icon(Icons.Default.Share, "Share", tint = Color.White)
+                IconButton(onClick = {
+                    currentItem?.let {
+                        viewModel.shareImage(it) { intent -> context.startActivity(intent) }
                     }
+                }) {
+                    Icon(Icons.Default.Share, "Share", tint = Color.White)
                 }
 
                 IconButton(onClick = { viewModel.toggleGalleryMetadata() }) {
@@ -1020,21 +997,6 @@ private fun FullImage(
     viewModel: ForgeViewModel,
     item: GalleryItem,
 ) {
-    // Blurred as the content mode wants, until the user shows it.
-    val mode = viewModel.config.collectAsStateWithLifecycle().value.contentMode
-    val prompt = viewModel.galleryPrompts.collectAsStateWithLifecycle().value[item.fullpath]
-    val revealed = item.fullpath in viewModel.revealedImages.collectAsStateWithLifecycle().value
-    ContentGate(ContentFilter.rate(prompt), mode, revealed, { viewModel.revealImage(item.fullpath) }) { gate ->
-        FullImageContent(viewModel, item, gate)
-    }
-}
-
-@Composable
-private fun FullImageContent(
-    viewModel: ForgeViewModel,
-    item: GalleryItem,
-    gate: Modifier,
-) {
     SubcomposeAsyncImage(
         model = viewModel.getGalleryImageUrl(item),
         contentDescription = null,
@@ -1050,7 +1012,7 @@ private fun FullImageContent(
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         },
-        modifier = Modifier.fillMaxWidth().then(gate),
+        modifier = Modifier.fillMaxWidth(),
         contentScale = ContentScale.Fit,
         alignment = Alignment.TopCenter,
     )

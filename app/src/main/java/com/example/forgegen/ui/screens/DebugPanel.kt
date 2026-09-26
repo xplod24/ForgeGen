@@ -1,9 +1,7 @@
 package com.example.forgegen
 
 import android.os.Build
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -11,7 +9,6 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -35,7 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 /* ============================================================================
  * DEBUG PANEL
  * The "Debug" section of the settings, shown only after unlocking the debug mode (DebugMode). Its actions work at
- * once, without the usual confirmations; the rules of BlockingApi stay on.
+ * once, without the usual confirmations; the rules of BlockingApi (the check before a job is sent) stay on.
  * ============================================================================ */
 @Composable
 fun DebugPanel(viewModel: ForgeViewModel) {
@@ -64,8 +61,8 @@ fun DebugPanel(viewModel: ForgeViewModel) {
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            "Everything here acts at once, without the usual confirmations. The rules kept in every content mode " +
-                "(BlockingApi) stay on.",
+            "Everything here acts at once, without the usual confirmations. The check before a job is sent " +
+                "(BlockingApi) stays on.",
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.error,
         )
@@ -92,7 +89,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
                 appendLine("  generating=$isGenerating active=$isQueueActive paused=$isQueuePaused")
                 pauseReason?.let { appendLine("  pause reason: $it") }
                 appendLine("Lists: ${models.size} models, ${loras.size} LoRAs, ${samplers.size} samplers")
-                appendLine("Content mode: ${config.contentMode}, real-person LoRAs: ${realPersonLoras.size}")
+                appendLine("Real-person LoRAs (BlockingApi rule 2): ${realPersonLoras.size}")
                 appendLine(
                     "Civitai: " +
                         (civitai?.let { (all, unrated) -> "$all entries, $unrated without image ratings" } ?: "..."),
@@ -115,16 +112,6 @@ fun DebugPanel(viewModel: ForgeViewModel) {
             checked = forceNowBar,
             onCheckedChange = { viewModel.debugSetForceNowBar(it) },
         )
-        Text("Content mode (no confirmation, no one-way lock)", fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(CONTENT_SFW, CONTENT_NSFW, CONTENT_UNRESTRICTED).forEach { mode ->
-                FilterChip(
-                    selected = config.contentMode == mode,
-                    onClick = { viewModel.debugSetContentMode(mode) },
-                    label = { Text(mode) },
-                )
-            }
-        }
         DebugButton("Edit Raw Settings") { showRawEditor = true }
 
         DebugTitle("Tests")
