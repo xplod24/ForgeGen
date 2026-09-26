@@ -1165,7 +1165,15 @@ fun GenerationSettingsSection(
             }
         }
 
-        Text("Aspect Ratio", fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Text("Aspect Ratio", fontSize = 12.sp, modifier = Modifier.weight(1f))
+            // Portrait and landscape in one tap.
+            TextButton(onClick = { viewModel.updateState { it.withSwappedSize() } }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Swap ${state.width}×${state.height}", fontSize = 12.sp)
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1780,13 +1788,19 @@ fun FullscreenImageViewer(
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 if (config.swipeToBrowseGallery) {
+                    val zoomSize = zoomableImageSizePx()
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                        // Pinch or double tap to zoom; decoded big enough to stay sharp when zoomed.
                         AsyncImage(
-                            model = sessionImages[page],
+                            model =
+                                ImageRequest
+                                    .Builder(LocalContext.current)
+                                    .data(sessionImages[page])
+                                    .size(zoomSize)
+                                    .build(),
                             contentDescription = null,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxSize().zoomable(sessionImages[page]),
                             contentScale = ContentScale.Fit,
-                            alignment = Alignment.TopCenter,
                         )
                     }
                 } else {
@@ -1794,9 +1808,9 @@ fun FullscreenImageViewer(
                         val item = sessionImages.getOrNull(pagerState.currentPage)
                         if (item != null) {
                             AsyncImage(
-                                model = item,
+                                model = ImageRequest.Builder(LocalContext.current).data(item).size(zoomableImageSizePx()).build(),
                                 contentDescription = null,
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier.fillMaxWidth().zoomable(item),
                                 contentScale = ContentScale.Fit,
                                 alignment = Alignment.TopCenter,
                             )

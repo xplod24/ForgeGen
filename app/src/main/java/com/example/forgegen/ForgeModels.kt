@@ -72,6 +72,8 @@ data class AppConfig(
     var savePrivately: Boolean = false,
     // Shared images leave without their generation data (prompt, seed, model).
     var shareWithoutMetadata: Boolean = false,
+    // A short vibration when a batch finishes while the app is on screen (2.0.0).
+    var vibrateOnFinish: Boolean = true,
 )
 
 const val THEME_SYSTEM = "System"
@@ -104,6 +106,12 @@ data class AppState(
     var saveImages: Boolean = true,
     var saveToDevice: Boolean = false,
 )
+
+/** Width and height swapped (portrait and landscape), the aspect ratio with them ("Custom" stays). */
+fun AppState.withSwappedSize(): AppState {
+    val ratio = aspectRatio.split(":").takeIf { it.size == 2 }?.let { (w, h) -> "$h:$w" } ?: aspectRatio
+    return copy(width = height, height = width, aspectRatio = ratio)
+}
 
 data class PhystonHistoryDto(
     val prompt: String,

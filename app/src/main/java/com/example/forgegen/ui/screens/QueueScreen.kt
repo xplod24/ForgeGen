@@ -6,7 +6,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -22,6 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import kotlinx.coroutines.launch
 
 /* ============================================================================
  * QUEUE SCREEN COMPOSABLE
@@ -55,6 +61,30 @@ fun QueueScreen(
     var editItemId by remember { mutableStateOf<String?>(null) }
     var editPosPrompt by remember { mutableStateOf("") }
     var editNegPrompt by remember { mutableStateOf("") }
+
+    // "Undo" after a job was removed or the queue cleared.
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    fun offerUndo(
+        message: String,
+        removed: ForgeQueueManager.RemovedJobs?,
+    ) {
+        if (removed == null) return
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar(message, actionLabel = "Undo", duration = SnackbarDuration.Short)
+            if (result == SnackbarResult.ActionPerformed) viewModel.restoreJobs(removed)
+        }
+    }
+
+    // Reordering by dragging a job's handle: the dragged card follows the finger and trades places with the card
+    // under its middle.
+    val listState = rememberLazyListState()
+    var draggedId by remember { mutableStateOf<String?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var awaitedIndex by remember { mutableIntStateOf(-1) } // the dragged card's place after a move, until laid out
+    val currentQueue by rememberUpdatedState(queue)
 
     val onBackClick =
         remember {
@@ -104,7 +134,10 @@ fun QueueScreen(
                         )
                     }
                     if (queue.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.clearQueue() }) {
+                        IconButton(onClick = {
+                            val removed = viewModel.clearQueue()
+                            offerUndo("Queue cleared (${removed?.jobs?.size ?: 0} jobs)", removed)
+                        }) {
                             Icon(Icons.Default.Delete, "Clear Queue")
                         }
                     }
@@ -112,6 +145,7 @@ fun QueueScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (queue.isEmpty()) {
@@ -125,6 +159,7 @@ fun QueueScreen(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -136,8 +171,18 @@ fun QueueScreen(
                         val isActive = isFirst && isGenerating
                         val isFailed = item.status == GenerationStatus.FAILED
                         var isExpanded by remember { mutableStateOf(false) }
+                        val isDragged = item.id == draggedId
 
                         Card(
+                            modifier =
+                                if (isDragged) {
+                                    Modifier.zIndex(1f).graphicsLayer {
+                                        translationY = dragOffset
+                                        shadowElevation = 24f
+                                    }
+                                } else {
+                                    Modifier.animateItem()
+                                },
                             colors =
                                 CardDefaults.cardColors(
                                     containerColor = if (isActive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
@@ -311,20 +356,78 @@ fun QueueScreen(
                                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                 ) {
-                                    Row {
-                                        IconButton(
-                                            onClick = { viewModel.moveQueueItemUp(item.id) },
-                                            enabled = !isFirst,
-                                            modifier = Modifier.size(32.dp),
-                                        ) {
-                                            Icon(Icons.Default.KeyboardArrowUp, "Move Up")
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (!isActive) {
+                                            Icon(
+                                                Icons.Default.DragHandle,
+                                                contentDescription = "Drag to Reorder",
+                                                tint = Color.Gray,
+                                                modifier =
+                                                    Modifier
+                                                        .size(36.dp)
+                                                        .padding(6.dp)
+                                                        .pointerInput(item.id) {
+                                                            detectDragGestures(
+                                                                onDragStart = {
+                                                                    draggedId = item.id
+                                                                    dragOffset = 0f
+                                                                    awaitedIndex = -1
+                                                                },
+                                                                onDragEnd = {
+                                                                    draggedId = null
+                                                                    dragOffset = 0f
+                                                                },
+                                                                onDragCancel = {
+                                                                    draggedId = null
+                                                                    dragOffset = 0f
+                                                                },
+                                                                onDrag = { change, amount ->
+                                                                    change.consume()
+                                                                    dragOffset += amount.y
+                                                                    val visible = listState.layoutInfo.visibleItemsInfo
+                                                                    val current = visible.firstOrNull { it.key == item.id } ?: return@detectDragGestures
+                                                                    if (awaitedIndex >= 0 && current.index != awaitedIndex) return@detectDragGestures
+                                                                    awaitedIndex = -1
+                                                                    val middle = current.offset + dragOffset + current.size / 2f
+                                                                    val target =
+                                                                        visible.firstOrNull {
+                                                                            it.key != item.id && it.key != "schedule" &&
+                                                                                middle > it.offset && middle < it.offset + it.size
+                                                                        } ?: return@detectDragGestures
+                                                                    val targetIndex = currentQueue.indexOfFirst { it.id == target.key }
+                                                                    val runningFirst = currentQueue.firstOrNull()?.status == GenerationStatus.GENERATING
+                                                                    if (targetIndex < 0 || (targetIndex == 0 && runningFirst)) return@detectDragGestures
+                                                                    viewModel.moveQueueItem(item.id, targetIndex)
+                                                                    dragOffset += current.offset - target.offset
+                                                                    awaitedIndex = target.index
+                                                                },
+                                                            )
+                                                        },
+                                            )
                                         }
-                                        IconButton(
-                                            onClick = { viewModel.moveQueueItemDown(item.id) },
-                                            enabled = queue.lastOrNull()?.id != item.id,
-                                            modifier = Modifier.size(32.dp),
-                                        ) {
-                                            Icon(Icons.Default.KeyboardArrowDown, "Move Down")
+                                        var duplicateMenu by remember { mutableStateOf(false) }
+                                        Box {
+                                            IconButton(onClick = { duplicateMenu = true }, modifier = Modifier.size(32.dp)) {
+                                                Icon(Icons.Default.ContentCopy, "Duplicate", modifier = Modifier.size(18.dp))
+                                            }
+                                            DropdownMenu(expanded = duplicateMenu, onDismissRequest = { duplicateMenu = false }) {
+                                                DropdownMenuItem(
+                                                    text = { Text("Duplicate") },
+                                                    onClick = {
+                                                        duplicateMenu = false
+                                                        viewModel.duplicateJob(item.id, newSeed = false)
+                                                    },
+                                                )
+                                                if (item.payload.seed != -1L) {
+                                                    DropdownMenuItem(
+                                                        text = { Text("Duplicate with a New Seed") },
+                                                        onClick = {
+                                                            duplicateMenu = false
+                                                            viewModel.duplicateJob(item.id, newSeed = true)
+                                                        },
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
 
@@ -347,7 +450,7 @@ fun QueueScreen(
                                             }
                                             Spacer(Modifier.width(8.dp))
                                             IconButton(
-                                                onClick = { viewModel.removeFromQueue(item.id) },
+                                                onClick = { offerUndo("Job removed", viewModel.removeFromQueue(item.id)) },
                                                 modifier = Modifier.size(32.dp),
                                             ) {
                                                 Icon(Icons.Default.Delete, "Remove", tint = MaterialTheme.colorScheme.error)

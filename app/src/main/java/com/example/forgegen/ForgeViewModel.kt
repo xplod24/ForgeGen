@@ -404,6 +404,7 @@ class ForgeViewModel(
     val sessionImages: StateFlow<List<String>> = ForgeQueueManager.sessionImages
     val currentSessionIndex: StateFlow<Int> = ForgeQueueManager.currentSessionIndex
     val livePreviewImage: StateFlow<LivePreview?> = ForgeQueueManager.livePreviewImage
+    val batchFinished: SharedFlow<Unit> = ForgeQueueManager.batchFinished
     val isShowingGridPreview: StateFlow<Boolean> = ForgeQueueManager.isShowingGridPreview
     val currentBatchStartIndex: StateFlow<Int> = ForgeQueueManager.currentBatchStartIndex
     val currentBatchEndIndex: StateFlow<Int> = ForgeQueueManager.currentBatchEndIndex
@@ -518,6 +519,18 @@ class ForgeViewModel(
     fun clearQueue() = ForgeQueueManager.clearQueue()
 
     fun removeFromQueue(id: String) = ForgeQueueManager.removeFromQueue(id)
+
+    fun restoreJobs(removed: ForgeQueueManager.RemovedJobs) = ForgeQueueManager.restoreJobs(removed)
+
+    fun duplicateJob(
+        id: String,
+        newSeed: Boolean,
+    ) = ForgeQueueManager.duplicateJob(id, newSeed)
+
+    fun moveQueueItem(
+        id: String,
+        toIndex: Int,
+    ) = ForgeQueueManager.moveQueueItem(id, toIndex)
 
     fun moveQueueItemUp(id: String) = ForgeQueueManager.moveQueueItemUp(id)
 

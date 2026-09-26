@@ -11,7 +11,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.File
-import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -168,6 +167,10 @@ object ForgeQueueManager {
 
     private val _completedQueueItems = MutableStateFlow(0)
     val completedQueueItems: StateFlow<Int> = _completedQueueItems.asStateFlow()
+
+    // A batch finished with images (the screen vibrates if the user wants it).
+    private val _batchFinished = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val batchFinished: SharedFlow<Unit> = _batchFinished.asSharedFlow()
 
     private val _sessionImages = MutableStateFlow<List<String>>(emptyList())
     val sessionImages: StateFlow<List<String>> = _sessionImages.asStateFlow()
@@ -583,6 +586,7 @@ object ForgeQueueManager {
                     }
 
                     succeeded = true
+                    _batchFinished.tryEmit(Unit)
                     learnSpeed(job, (System.currentTimeMillis() - startedAt) / 1000.0)
                 }
             } else if (answer is Answer.Failed) {
@@ -1023,15 +1027,80 @@ object ForgeQueueManager {
         saveQueueState()
     }
 
-    fun clearQueue() {
+    /** Jobs taken out of the queue with their places, so "Undo" can put them back. */
+    class RemovedJobs(
+        val jobs: List<IndexedValue<QueuedGeneration>>,
+    )
+
+    /** Removes every job but the running one; returns what was removed (for "Undo"), null when nothing was. */
+    fun clearQueue(): RemovedJobs? {
         ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
         // The running job stays: the server is already working on it and the worker removes it when it is done.
-        _generationQueue.update { q -> q.filter { it.status == GenerationStatus.GENERATING } }
+        var removed = emptyList<IndexedValue<QueuedGeneration>>()
+        _generationQueue.update { q ->
+            removed = q.withIndex().filter { it.value.status != GenerationStatus.GENERATING }
+            q.filter { it.status == GenerationStatus.GENERATING }
+        }
         _totalQueueSize.value = _generationQueue.value.size
         _completedQueueItems.value = 0
         runSucceeded.set(0)
         runFailed.set(0)
         saveQueueState()
+        return RemovedJobs(removed).takeIf { removed.isNotEmpty() }
+    }
+
+    /** Puts removed jobs back at their places (never before the running job); jobs already back are skipped. */
+    fun restoreJobs(removed: RemovedJobs) {
+        var restored = 0
+        _generationQueue.update { q ->
+            val list = q.toMutableList()
+            for ((index, job) in removed.jobs.sortedBy { it.index }) {
+                if (list.any { it.id == job.id }) continue
+                val first = if (list.firstOrNull()?.status == GenerationStatus.GENERATING) 1 else 0
+                list.add(index.coerceIn(first, list.size), job)
+                if (job.isRunnable()) restored++
+            }
+            list
+        }
+        if (restored > 0) {
+            if (_totalQueueSize.value == 0) _completedQueueItems.value = 0
+            _totalQueueSize.update { it + restored }
+            ForgeRepository.reconnect()
+        }
+        saveQueueState()
+    }
+
+    /**
+     * A copy of the job [id] after the jobs still to run (before the failed ones set aside), with the same settings;
+     * with [newSeed] a random seed instead of the job's own.
+     */
+    fun duplicateJob(
+        id: String,
+        newSeed: Boolean,
+    ) {
+        var added = false
+        _generationQueue.update { q ->
+            val original = q.firstOrNull { it.id == id } ?: return@update q
+            val copy =
+                original.copy(
+                    id = UUID.randomUUID().toString(),
+                    status = GenerationStatus.QUEUED,
+                    error = null,
+                    payload = if (newSeed) original.payload.copy(seed = -1L) else original.payload,
+                )
+            added = true
+            val firstFailed = q.indexOfFirst { !it.isRunnable() }
+            if (firstFailed < 0) q + copy else q.take(firstFailed) + copy + q.drop(firstFailed)
+        }
+        if (!added) return
+        if (_generationQueue.value.count { it.isRunnable() } == 1) {
+            _totalQueueSize.value = 1
+            _completedQueueItems.value = 0
+        } else {
+            _totalQueueSize.update { it + 1 }
+        }
+        saveQueueState()
+        ForgeRepository.reconnect()
     }
 
     /** The job being sent to the server; it stays first until it is done. */
@@ -1040,45 +1109,40 @@ object ForgeQueueManager {
         index: Int,
     ) = queue.getOrNull(index)?.status == GenerationStatus.GENERATING
 
-    fun removeFromQueue(id: String) {
-        var removed = false
+    /** Removes the job [id] unless it is running; returns it with its place (for "Undo"), null when nothing was removed. */
+    fun removeFromQueue(id: String): RemovedJobs? {
+        var removed: IndexedValue<QueuedGeneration>? = null
         _generationQueue.update { currentQueue ->
             // Decided inside the update, so the worker cannot claim the job between the check and the removal.
-            val newQueue = currentQueue.filter { it.id != id || it.status == GenerationStatus.GENERATING }
-            removed = newQueue.size < currentQueue.size
-            newQueue
+            val index = currentQueue.indexOfFirst { it.id == id && it.status != GenerationStatus.GENERATING }
+            removed = if (index >= 0) IndexedValue(index, currentQueue[index]) else null
+            if (index >= 0) currentQueue.filterIndexed { i, _ -> i != index } else currentQueue
         }
-        if (removed) _totalQueueSize.update { maxOf(_completedQueueItems.value, it - 1) }
+        val job = removed
+        if (job != null && job.value.isRunnable()) _totalQueueSize.update { maxOf(_completedQueueItems.value, it - 1) }
+        saveQueueState()
+        return job?.let { RemovedJobs(listOf(it)) }
+    }
+
+    /** Moves the job [id] to [toIndex] (dragged in the queue); the running job stays first and cannot be moved. */
+    fun moveQueueItem(
+        id: String,
+        toIndex: Int,
+    ) {
+        _generationQueue.update { q ->
+            val from = q.indexOfFirst { it.id == id }
+            if (from < 0 || isActiveItem(q, from)) return@update q
+            val first = if (isActiveItem(q, 0)) 1 else 0
+            val to = toIndex.coerceIn(first, q.size - 1)
+            if (to == from) return@update q
+            q.toMutableList().apply { add(to, removeAt(from)) }
+        }
         saveQueueState()
     }
 
-    fun moveQueueItemUp(id: String) {
-        _generationQueue.update { q ->
-            val idx = q.indexOfFirst { it.id == id }
-            if (idx > 0 && !isActiveItem(q, idx - 1)) {
-                val list = q.toMutableList()
-                Collections.swap(list, idx, idx - 1)
-                list
-            } else {
-                q
-            }
-        }
-        saveQueueState()
-    }
+    fun moveQueueItemUp(id: String) = moveQueueItem(id, _generationQueue.value.indexOfFirst { it.id == id } - 1)
 
-    fun moveQueueItemDown(id: String) {
-        _generationQueue.update { q ->
-            val idx = q.indexOfFirst { it.id == id }
-            if (idx in 0 until q.size - 1 && !isActiveItem(q, idx)) {
-                val list = q.toMutableList()
-                Collections.swap(list, idx, idx + 1)
-                list
-            } else {
-                q
-            }
-        }
-        saveQueueState()
-    }
+    fun moveQueueItemDown(id: String) = moveQueueItem(id, _generationQueue.value.indexOfFirst { it.id == id } + 1)
 
     fun resumeQueue() {
         // A manual resume also gives a job whose connection kept failing its automatic retries back.

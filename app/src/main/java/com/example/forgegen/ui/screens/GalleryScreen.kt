@@ -59,6 +59,7 @@ import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING)
@@ -901,11 +902,11 @@ fun FullscreenGalleryViewer(
                 if (config.swipeToBrowseGallery) {
                     // The neighbouring images load in advance, so swiping does not wait for the network.
                     HorizontalPager(state = pagerState, beyondViewportPageCount = 1, modifier = Modifier.fillMaxSize()) { page ->
-                        FullImage(viewModel, images[page])
+                        FullImage(viewModel, images[page], Modifier.fillMaxSize())
                     }
                 } else {
                     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        if (currentItem != null) FullImage(viewModel, currentItem)
+                        if (currentItem != null) FullImage(viewModel, currentItem, Modifier.fillMaxWidth())
                     }
                 }
 
@@ -1001,9 +1002,13 @@ private fun GalleryThumbnail(
 private fun FullImage(
     viewModel: ForgeViewModel,
     item: GalleryItem,
+    modifier: Modifier,
 ) {
+    val context = LocalContext.current
+    val size = zoomableImageSizePx()
+    val request = remember(item.fullpath, item.date, size) { ImageRequest.Builder(context).data(viewModel.getGalleryImageUrl(item)).size(size).build() }
     SubcomposeAsyncImage(
-        model = viewModel.getGalleryImageUrl(item),
+        model = request,
         contentDescription = null,
         loading = {
             Box(modifier = Modifier.fillMaxWidth().heightIn(min = 400.dp), contentAlignment = Alignment.Center) {
@@ -1017,8 +1022,8 @@ private fun FullImage(
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         },
-        modifier = Modifier.fillMaxWidth(),
+        // Pinch or double tap to zoom.
+        modifier = modifier.zoomable(item.fullpath),
         contentScale = ContentScale.Fit,
-        alignment = Alignment.TopCenter,
     )
 }

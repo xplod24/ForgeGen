@@ -487,6 +487,14 @@ fun SetupScreen(
             }
             item {
                 SwitchPreference(
+                    title = "Vibrate on Batch Finish",
+                    subtitle = "A short vibration when a batch is done while the app is on screen",
+                    checked = config.vibrateOnFinish,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(vibrateOnFinish = it)) },
+                )
+            }
+            item {
+                SwitchPreference(
                     title = "Notify on Queue Finish",
                     subtitle = "Get alerted when all queued jobs are finished",
                     checked = config.notifOnQueueFinish,

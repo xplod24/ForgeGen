@@ -3,6 +3,8 @@ package com.example.forgegen
 import android.app.Activity
 import android.app.UiModeManager
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.VibratorManager
 import android.view.animation.AccelerateInterpolator
 import androidx.activity.viewModels
 import androidx.compose.animation.core.Animatable
@@ -335,6 +337,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun vibrateBriefly() {
+        try {
+            getSystemService(VibratorManager::class.java)
+                ?.defaultVibrator
+                ?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_DOUBLE_CLICK))
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Could not vibrate", e)
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         syncSplashNightMode(viewModel.config.value.themeMode)
@@ -560,6 +572,16 @@ class MainActivity : ComponentActivity() {
             val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
             val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
             val updateDownloadStats by viewModel.updateDownloadStats.collectAsStateWithLifecycle()
+
+            // "Vibrate on Batch Finish": a short vibration when a batch is done while the app is on screen.
+            val lifecycle = LocalLifecycleOwner.current.lifecycle
+            LaunchedEffect(Unit) {
+                viewModel.batchFinished.collect {
+                    if (viewModel.config.value.vibrateOnFinish && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                        vibrateBriefly()
+                    }
+                }
+            }
 
             // Global Toast event bus
             LaunchedEffect(Unit) {

@@ -335,6 +335,7 @@ object ForgeSettingsManager {
             blockScreenshots = parsed?.blockScreenshots ?: false,
             savePrivately = parsed?.savePrivately ?: false,
             shareWithoutMetadata = parsed?.shareWithoutMetadata ?: false,
+            vibrateOnFinish = parsed?.vibrateOnFinish ?: true,
         )
     }
 
