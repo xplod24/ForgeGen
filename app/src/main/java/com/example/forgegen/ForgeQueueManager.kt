@@ -261,6 +261,7 @@ object ForgeQueueManager {
         _scheduledStart.value = null
         saveSchedule()
         if (::application.isInitialized) QueueSchedule.cancelAlarm(application)
+        ForgeRepository.reconnect() // the server was not asked while the queue waited
     }
 
     /** The scheduled time has come (the alarm, or the watcher while the phone is awake). */

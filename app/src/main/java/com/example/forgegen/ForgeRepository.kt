@@ -355,8 +355,11 @@ object ForgeRepository {
         _connection.value = ServerConnection.SEARCHING
     }
 
-    /** Jobs are waiting or running: the queue needs the server, so it is never given up. */
-    private fun queueNeedsServer() = ForgeQueueManager.isQueueActive.value
+    /**
+     * Jobs are waiting or running: the queue needs the server, so it is never given up. Not while it only waits for
+     * its scheduled start ("Start at"), maybe for hours; it asks again when that time comes.
+     */
+    private fun queueNeedsServer() = ForgeQueueManager.isQueueActive.value && !ForgeQueueManager.isWaitingForSchedule.value
 
     private fun connectionFailed(failCount: Int) {
         _isConnected.value = false
@@ -384,13 +387,13 @@ object ForgeRepository {
      */
     private suspend fun awaitPingNeeded() {
         combine(
+            combine(ForgeQueueManager.isQueueActive, ForgeQueueManager.isWaitingForSchedule) { active, waiting -> active && !waiting },
             _connection,
             _isAppInForeground,
-            ForgeQueueManager.isQueueActive,
             ForgeQueueManager.isGenerating,
             _isServerBusy,
-        ) { connection, foreground, queueActive, generating, busy ->
-            val working = queueActive || generating || busy
+        ) { queueWorking, connection, foreground, generating, busy ->
+            val working = queueWorking || generating || busy
             (connection != ServerConnection.OFFLINE || working) && (foreground || working)
         }.first { it }
     }

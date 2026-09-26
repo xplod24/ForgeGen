@@ -8,7 +8,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Queue:** `ForgeQueueManager` has one worker (`startQueueWorker`) that waits for `nextJob()` (first job, queue not paused, server not busy), claims it atomically (status GENERATING) and runs `executeGeneration`; nothing else may start a job. The GENERATING job cannot be removed, moved or cleared. The queue is saved only by `startQueueWriter` (conflated channel). txt2img goes through `ForgeRepository.generationApi`, whose client has `retryOnConnectionFailure(false)`: OkHttp silently re-sent dropped txt2img requests. Connection loss never costs a job: `nextJob()` also waits for `isConnected`; a network error of the request (only `ConnectionLost`, not other IOExceptions such as a full disk) keeps the job first as SUSPENDED and pauses with `CONNECTION_LOST_REASON`; `startReconnectWatcher` resumes 5 s after the server is back and idle, at most `MAX_AUTO_RETRIES` (3) per job. `requestWithWatchdog` cancels a request orphaned by an outage (server back and idle for 10 s). HTTP errors from the server remove the job and pause the queue (overnight mode sets the job aside instead, see below). `generateImage` is `@Streaming` (`ResponseBody`): `readImages` reads the answer with a JsonReader and writes each image to the cache at once (never parse the whole answer into objects: a batch of big images took ~3x the memory). The watchdog stops once the server has answered. The ping asks for the live preview only in the foreground and for memory stats every 5th ping; `GenerationService` updates its notification from a flow, not a 1 s loop.
 - **Foreground Service:** `GenerationService` (type `specialUse`: `dataSync` stops after 6 h a day on Android 15+, which cut overnight queues) runs only while `ForgeQueueManager.isQueueActive` (a job runs, or runnable jobs wait and the queue is not stopped; a `CONNECTION_LOST_REASON` pause counts). The queue starts it per job (`ACTION_START_GENERATION`); it stops itself when the queue is no longer active (never before `startForeground`, which would crash), holds a non-reference-counted wake lock renewed every 5 min while active, and returns `START_NOT_STICKY` (a restarted empty service did nothing). "Run in Background" (a permanent idle service) was removed in 1.1.5 at the owner's request. "Exit App" is handled by the service (kills the process); MainActivity only closes its task.
 - **Notifications:** always go through `ForgeNotifications` (channels created at app start: `forge_high` errors, `forge_default` finished jobs, `forge_low` silent progress; fixed ids for service/queue alert/gallery). Each finished job produces at most one notification (error alert, queue completed or batch completed).
-- **Start ("Ready"):** `ForgeViewModel.initializeApp` runs once per ViewModel (a `Deferred` in `viewModelScope`, so a recreated welcome screen waits for the same start) and returns only when every part is loaded; each step is awaited: database/settings, wildcards (`ForgePromptManager.init`), API clients and ping, the saved queue (`ForgeQueueManager.start`), gallery favorites/index (`ForgeGalleryManager.start`), What's New, then `awaitServer`: the first ping (`ForgeRepository.awaitServerCheck`, at most the connection timeout, capped at 10 s, + 1 s) and, when connected, the first fetch of the lists (`ForgeNetworkManager.awaitServerData`, at most 15 s). The status is "Ready" only if the models and samplers were loaded; otherwise "Server not reachable", "Connected, but the model list failed to load" or "Connected, model lists still loading", and the app opens anyway. `isInitialized` is set at the very end. The update check stays in the background.
+- **Start ("Ready"):** `ForgeViewModel.initializeApp` runs once per ViewModel (a `Deferred` in `viewModelScope`, so a recreated screen waits for the same start) and returns when the phone's part is loaded, each step awaited: database/settings, wildcards (`ForgePromptManager.init`), API clients and ping, the saved queue (`ForgeQueueManager.start`), gallery favorites/index (`ForgeGalleryManager.start`), What's New; then `isInitialized` is set. The server's part (`awaitServer`, see "Start and connection (2.0.0)") runs after it without holding the screen: the first ping (`ForgeRepository.awaitServerCheck`, at most the connection timeout, capped at 10 s, + 1 s) and, when connected, the first fetch of the lists (`ForgeNetworkManager.awaitServerData`, at most 15 s); `awaitServerCheck()` of the ViewModel waits for it. The status is "Ready" only if the models and samplers were loaded; otherwise "Server not reachable", "Connected, but the model list failed to load" or "Connected, model lists still loading". The update check stays in the background.
 - **Reopening:** when the process outlives the activity, `initializeApp` only starts the new ViewModel's `ForgeNetworkManager` and waits for the server as above; that manager fetches lists itself if already connected (isConnected emits only on changes).
 - **No Civitai (1.6.1, owner's decision):** the app has no Civitai sync any more (model data belongs to the server). Model lists come only from the server (`/customapi/v1/all-models-hashes`, else `sd-models`/`loras`), with the server's names and previews; `MIGRATION_11_12` drops the old `civitai_models` table (`MIGRATION_10_11` still alters it on the way from older versions). Picking a LoRA adds `<lora:name:1.0>` to the prompt (`ForgeRepository.addLora`); the trigger-word dialogs, the NSFW/"Real person" labels and the sync overlay, settings and notifications are gone.
 - **Out-of-memory logs:** `OomLogs` writes a report (reason, app/device/memory info, job settings without prompts, server answer, then the app's own `logcat -d --pid` streamed into the file) to Downloads as `ForgeGen-OOM-<date>.txt` through MediaStore (no permission needed on Android 10+), only when `AppConfig.saveOomLogs` is on (Settings > Permissions). Called for server OOM and the app's `OutOfMemoryError` in `executeGeneration`, and by the default uncaught-exception handler (`OomLogs.install`, from the ViewModel) for OOM crashes, which then continue to the previous handler.
@@ -38,6 +38,39 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **ForgeRepository** only owns the database, the Retrofit client, the ping loop (connection, RAM/VRAM, external jobs) and the service toggle. Queue, gallery, models and prompts live in their managers; don't add delegating copies back.
 - **Prompt tag helpers** (`parseTags`, `splitTagWeight`, `withTagWeight`, `adjustTagStrength`) live in the Compose-free `ui/components/PromptTags.kt` (tested by `PromptTagsTest`). LoRA tags are parsed only by `parseActiveLoras` in `ForgeRepository.kt`.
 - **Notification modes:** the strings in `GenerationService` must match the options in `SetupScreen` ("Simple", "Verbose", "Disabled").
+- **Start and connection (2.0.0, owner's design):** no welcome screen. The Android 12+ splash (`Theme.ForgeGen.Starting`,
+  `drawable/splash_anvil_animated.xml` over `splash_anvil.xml`: the hammer strikes, sparks, ~0.9 s) stays at least
+  `SPLASH_MIN_MS` and until `viewModel.isStarted` (= `ForgeSettingsManager.isInitialized`: the phone's part of the start)
+  and the main screen's first frame, at most `SPLASH_MAX_MS` (then `StartupScreen` shows `initStatus`). It leaves by
+  scaling/fading while `MainActivity.circularReveal` opens the content from the middle. `initializeApp()` returns after
+  the phone's part; `awaitServerCheck()` waits for the server's part (statuses "Connecting to Server..." -> "Ready").
+  `syncSplashNightMode` (UiModeManager.setApplicationNightMode on stop) makes the next splash follow the app's theme.
+  `ForgeRepository.connection`: CONNECTED / SEARCHING (every `searchPingMs` = 2 s until `searchEndsAt`, 1 min) /
+  OFFLINE (no pings). A loss, `reconnect()` (foreground, network back via `isOnline`, "Retry"/"Connect", a queued job,
+  the scheduled start) starts a new minute. An active queue (`queueNeedsServer`: active and not waiting for its
+  scheduled start) never goes OFFLINE and backs off 5/10/30/60 s. `pingDelay`: 1 s generating, 2 s on screen, 10 s in
+  the background with work; `awaitPingNeeded` sends nothing in the background without work. Pings use a 3 s connect
+  timeout (`isPingPath`). UI: `ConnectionStatus` in the top bar (tap = `openServerDialog`), `ServerConnectionDialog`
+  (address, profiles, Test = `testServer`, Connect/Retry = `connectTo`, Settings, Close) shown by MainActivity when
+  OFFLINE (closable, `offlineDialogClosed`) or asked for. Tests: G31 (window shortened), G21/G22 (start).
+- **Performance rules (2.0.0):** one OkHttp client (`ForgeSettingsManager.createClient`: timeouts, gallery cookie, HTTP
+  log without image/txt2img bodies, error bodies logged up to 64 KB) shared by the APIs and Coil; one Coil ImageLoader
+  (`ForgeApp`). AppState is written by a debounced writer (500 ms, `flushState` on stop). txt2img images are streamed
+  to files by `Txt2ImgImages` (never a whole base64 string); the live preview is a `LivePreview` (bytes decoded once,
+  same text skipped) downsampled by the UI; the session keeps `MAX_SESSION_IMAGES` = 100 (never the newest batch)
+  and deletes older files. The gallery keeps `IndexedImage` (no prompts) in memory; prompt search =
+  `findPathsByPrompt` (SQL LIKE, escaped); sync reads `getAllPaths`. Grid: `GalleryThumbnail` (AsyncImage) +
+  `Modifier.shimmer()` (draw phase). Models/LoRAs: `ResourcePickerSheet` (lazy, searchable). Undo history: 100 steps,
+  typing grouped (800 ms). `PromptHighlighting` is an object. Tests: G32 (session, debounce, answer order).
+- **2.0.0 conveniences:** queue Undo (`RemovedJobs`, `restoreJobs`), `duplicateJob` (before failed jobs), drag
+  (`moveQueueItem`, the running job stays first); `AppState.withSwappedSize`; `vibrateOnFinish` (`batchFinished`,
+  VIBRATE); `Modifier.zoomable` (pinch/double tap, 1x swipes left to the pager; images decoded at
+  `zoomableImageSizePx`); gallery multi-select (`downloadImages`, `addFavorites`, `shareImages`/`shareManyIntent`);
+  dynamic launcher shortcuts (`publishShortcuts`, actions `ACTION_OPEN_QUEUE`/`OPEN_GALLERY`/`GENERATE_AGAIN`);
+  `QueueTileService` (tap: `pauseByUser` with `USER_PAUSED_REASON` / `resumeQueue` / open the app); shared
+  `text/plain` = the prompt; `Backup` (write/read JSON with config + wildcards; import keeps `lastUpdateCheckDate`,
+  replaces config, adds wildcards). Intents reach the screen through Channels (`navEvents`, `pendingIntents`): the
+  shared flows lost what came at a cold start. Tests: G33.
 - **Dead code:** `ForgeModels.kt` has `@file:Suppress("unused")` (for Gson DTO fields), so the IDE won't flag unused classes or DAO methods there; check references by hand.
 
 ## 2. User Preferences & UI Principles
@@ -59,50 +92,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Build 277 fixes:** see CHANGELOG.md (generation timeout, checkpoint override, progress, settings persistence, lock on cold start, PNG metadata, queue pause UX). Unit tests: `PngMetadataTest`, `ForgeSettingsManagerConfigTest`; `ForgeUpdateManagerTest` fixed to the list-based changelog.
 
 ## 4. Current Outstanding Tasks
-- **Planned for 2.0.0 (owner accepted all, after 1.6.2), with a full optimization pass and a new start animation:**
-  1. Undo after removing a job or clearing the queue (a bar with "Undo"; today the queue's bin clears everything at once, without asking).
-  2. Duplicate a job to the end of the queue (same seed or a new random one).
-  3. Reorder the queue by dragging instead of the up/down arrows.
-  4. Swap width and height with one button.
-  5. Vibration when a batch finishes while the app is on screen (with a switch).
-  6. Pinch and double-tap zoom in the image viewer.
-  7. Multi-select in the gallery (long press): share, save, favorite at once.
-  8. Launcher shortcuts (long press on the icon): Queue, Gallery, Generate Again.
-  9. Quick Settings tile with the queue's progress; a tap pauses or resumes it.
-  10. Take shared text as a prompt (`ACTION_SEND` `text/plain`; today only `image/*`).
-  11. Export and import of settings, presets, wildcards and server profiles to a file.
-- **2.0.0 optimization plan (review after 1.6.2; approved by the owner, in progress). Owner's decisions:**
-  - The release build type stays as it is for now (postponed): releases are debuggable debug builds without R8
-    (APK 68 MB, ~65 MB of it dex, mostly material-icons-extended; Compose runs much slower when debuggable). The
-    proposal for later: a non-debuggable, R8-minified build signed with the same debug.keystore, same `.debug` app id,
-    still published as `app-debug.apk` (Gson DTOs need keep rules).
-  - The start no longer waits for the server. After the splash the main screen shows at once; the app pings every
-    2 s for 1 minute ("Connecting... 0:42" in the top bar, tap = quick server settings: address, profiles, Test),
-    then stops pinging and shows a closable modal "No connection to the server" (address, profiles, Retry, Settings,
-    Close; closed -> "Offline" in the top bar, tap reopens it). The same after every loss of connection. A new minute
-    starts by itself when the app returns to the foreground or the phone's network comes back. An active queue is the
-    exception: it keeps pinging (backoff up to 60 s), so overnight mode survives outages. Pings get a short connect
-    timeout (the user's timeout stays for other calls).
-  - The start animation: accepted as proposed (below).
-  - The owner wants a progress report right before the version bump to 2.0.0 is pushed to master.
-  - Background: `ForgeSettingsManager.updateState` writes AppState to Room on every keystroke / slider step (LoRA
-    strength too) -> debounced writer; the ping runs every 10 s forever in the background -> stop when nothing runs,
-    2-3 s when idle on screen; the live preview is a base64 String flow decoded by the UI each second -> decode once,
-    downsampled, bitmap reuse; three OkHttp clients (settings, network manager, Coil) -> one shared pool; error
-    logging peeks whole bodies -> cap; `readImages` holds each image as base64 text -> stream-decode; session cache
-    keeps every image of a long queue until the next start -> keep the last N batches; recoverLastPrompt/Seed download
-    the whole image -> IIB `image_geninfo`; no `onTrimMemory`.
-  - Gallery: the whole index (prompts included) lives in memory and is filtered on every change, and each sync loads
-    it twice -> SQL queries (LIKE, ORDER BY, index on date), sync reads paths only; the grid uses
-    SubcomposeAsyncImage with one shimmer animation per cell -> AsyncImage + one shared shimmer, contentType; the
-    viewer decodes full-size images (3 pages) -> cap at screen size; Coil's ImageLoader is built per activity -> one
-    per app.
-  - UI: LoRA and model dropdowns compose every item with its preview at once -> lazy searchable sheet; the undo
-    history copies a growing list per keystroke -> cap; `PromptVisualTransformation()` is a new object per
-    recomposition; the live preview/progress recompose the main column -> read state where it is used.
-  - Start: WelcomeScreen always plays 3 s, then waits for the server (up to ~26 s). Proposal: Android 12+ splash with
-    an animated anvil icon (hammer strike, sparks, ~0.8 s), exit by scale + circular reveal into the main screen, no
-    fixed wait; status under the logo only when the start is slow.
+- **Release build type (postponed by the owner at 2.0.0):** releases are debuggable debug builds without R8 (APK about
+  70 MB, nearly all of it dex, mostly material-icons-extended; Compose runs much slower when debuggable). The proposal
+  for later: a non-debuggable, R8-minified build signed with the same debug.keystore, the same `.debug` app id, still
+  published as `app-debug.apk` (Gson DTOs need keep rules). Don't change it without the owner.
 - **Now Bar: work in progress (owner, 1.5.0).** The setting is labelled "(Work in Progress)". Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.

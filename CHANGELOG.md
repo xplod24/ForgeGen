@@ -1,3 +1,28 @@
+## 2.0.0
+### Faster and lighter
+- **A new start:** the hammer strikes the anvil and the main screen opens from the middle, in under a second. The app no longer plays a 3-second intro and no longer waits for the server before showing the main screen.
+- **Less work in the background:** the server is asked every 2 s while the app is on screen (every second while generating), and not at all in the background when nothing runs. The prompt and the sliders are saved when you pause, not on every keystroke.
+- **Less memory for big images:** images are written to the phone while they arrive from the server, the live preview is decoded once at the size of its box, and the session keeps the latest 100 images.
+- **Gallery:** the index stays in memory without the prompts (a prompt search asks the database), and the grid scrolls more smoothly.
+- **Models and LoRAs** are picked in a sheet with a search field; long lists no longer load every preview at once.
+
+### Connection
+- The top bar shows "Connecting... 0:42" while the app looks for your server. After a minute without an answer it stops asking and shows "No connection to the server" with the address, your saved server profiles, a Test button and Retry. Close it to keep working without the server; "Offline" in the top bar opens it again.
+- A new minute of tries starts when you come back to the app, when the phone's network comes back, or when you queue a job. A queue that is running never gives up.
+- Tap the connection status in the top bar for quick server settings.
+
+### New
+- **Undo** after removing a job or clearing the queue.
+- **Duplicate** a job (with the same seed or a new one), and **drag** jobs to reorder the queue.
+- **Swap** width and height with one tap.
+- **Vibration** when a batch finishes while the app is open ("Vibrate on Batch Finish" in Push Notifications).
+- **Zoom** in the image viewer: pinch, or double tap.
+- **Select** several gallery images with a long press, then save, share or add them to the favorites at once.
+- **Shortcuts** on the app icon (long press): Generate Again, Queue, Gallery.
+- **Quick Settings tile** with the queue's progress; tap it to pause or resume the queue.
+- **Share text** to ForgeGen to use it as the prompt.
+- **Backup** in the settings: export and import your settings, presets, server profiles and wildcards.
+
 ## 1.6.2
 - The app no longer checks prompts itself: your server alone decides what it generates. A prompt it refuses (HTTP 403) is set aside in the queue with "The prompt does not comply with the server's rules." and the server's reason; the other jobs go on.
 
