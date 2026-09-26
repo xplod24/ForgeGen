@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- The window and the system splash follow the phone's dark mode before the app draws its own theme. -->
-    <style name="Theme.ForgeGen" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.ForgeGen" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/splash_background</item>
+    </style>
 </resources>

@@ -34,6 +34,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:theme="@style/Theme.ForgeGen.Starting"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

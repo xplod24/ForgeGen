@@ -544,8 +544,10 @@ fun PromptHistoryCarousel(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ForgeTopAppBar(
-    isConnected: Boolean,
+    connection: ServerConnection,
     pingMs: Long,
+    searchEndsAt: Long,
+    onConnectionClick: () -> Unit,
     vram: String?,
     isActivelyGenerating: Boolean,
     onUnloadClick: () -> Unit,
@@ -556,26 +558,7 @@ fun ForgeTopAppBar(
         title = {
             Column {
                 Text("Forge Generator", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier =
-                        Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .padding(horizontal = 4.dp, vertical = 0.dp),
-                ) {
-                    Icon(
-                        imageVector = if (isConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
-                        contentDescription = null,
-                        tint = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(12.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = if (isConnected) "${pingMs}ms" else "Offline",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Normal,
-                    )
-                }
+                ConnectionStatus(connection, pingMs, searchEndsAt, onClick = onConnectionClick)
                 // The server memory line already contains both RAM and VRAM ("RAM: x/yGB | VRAM: x/yGB").
                 if (vram != null) {
                     Row(

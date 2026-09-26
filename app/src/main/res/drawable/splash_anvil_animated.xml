@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash: the hammer lifts, strikes the anvil (which gives a little), sparks fly, the hammer rests. About 0.9 s. -->
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:drawable="@drawable/splash_anvil">
+    <target android:name="hammer">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="rotation" android:valueFrom="34" android:valueTo="44" android:startOffset="0" android:duration="140" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="rotation" android:valueFrom="44" android:valueTo="0" android:startOffset="140" android:duration="240" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+                <objectAnimator android:propertyName="rotation" android:valueFrom="0" android:valueTo="14" android:startOffset="380" android:duration="150" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="rotation" android:valueFrom="14" android:valueTo="8" android:startOffset="530" android:duration="220" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_decelerate" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="anvil">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="scaleY" android:valueFrom="0.85" android:valueTo="0.8" android:startOffset="380" android:duration="70" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="scaleY" android:valueFrom="0.8" android:valueTo="0.85" android:startOffset="450" android:duration="220" android:valueType="floatType" android:interpolator="@android:interpolator/overshoot" />
+                <objectAnimator android:propertyName="scaleX" android:valueFrom="0.85" android:valueTo="0.875" android:startOffset="380" android:duration="70" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="scaleX" android:valueFrom="0.875" android:valueTo="0.85" android:startOffset="450" android:duration="220" android:valueType="floatType" android:interpolator="@android:interpolator/overshoot" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="flash">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="0.9" android:startOffset="380" android:duration="40" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0.9" android:valueTo="0" android:startOffset="420" android:duration="320" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="glow">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0.7" android:valueTo="1" android:startOffset="380" android:duration="60" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0.7" android:startOffset="440" android:duration="400" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray0">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="450" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray1">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="395" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="465" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray2">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="410" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="480" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray3">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="450" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray4">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="395" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="465" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray5">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="410" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="480" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray6">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="450" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="ray7">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="trimPathEnd" android:valueFrom="0" android:valueTo="1" android:startOffset="395" android:duration="200" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="trimPathStart" android:valueFrom="0" android:valueTo="1" android:startOffset="465" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot0">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="-60.1" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-21.9" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill0">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot1">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="-45.0" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-53.6" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill1">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot2">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="-5.8" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-65.7" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill2">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot3">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="24.6" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-67.7" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill3">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot4">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="50.6" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-42.4" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill4">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dot5">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="translateX" android:valueFrom="0" android:valueTo="57.1" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+                <objectAnimator android:propertyName="translateY" android:valueFrom="0" android:valueTo="-18.5" android:startOffset="380" android:duration="420" android:valueType="floatType" android:interpolator="@android:interpolator/decelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+    <target android:name="dotfill5">
+        <aapt:attr name="android:animation">
+            <set android:ordering="together">
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="0" android:valueTo="1" android:startOffset="380" android:duration="20" android:valueType="floatType" />
+                <objectAnimator android:propertyName="fillAlpha" android:valueFrom="1" android:valueTo="0" android:startOffset="620" android:duration="260" android:valueType="floatType" android:interpolator="@android:interpolator/accelerate_quad" />
+            </set>
+        </aapt:attr>
+    </target>
+</animated-vector>

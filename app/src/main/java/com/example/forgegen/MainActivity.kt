@@ -1,6 +1,21 @@
 package com.example.forgegen
 
 import android.app.Activity
+import android.app.UiModeManager
+import android.os.SystemClock
+import android.view.animation.AccelerateInterpolator
+import androidx.activity.viewModels
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.res.painterResource
+import androidx.core.splashscreen.SplashScreenViewProvider
+import androidx.lifecycle.lifecycleScope
+import kotlin.math.hypot
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.ContextWrapper
@@ -24,7 +39,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,7 +53,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
@@ -190,13 +203,12 @@ fun AppNavigation(
 
     NavHost(
         navController = navController,
-        startDestination = "welcome",
+        startDestination = "main",
         enterTransition = { fadeIn(animationSpec = tween(200)) },
         exitTransition = { fadeOut(animationSpec = tween(200)) },
         popEnterTransition = { fadeIn(animationSpec = tween(200)) },
         popExitTransition = { fadeOut(animationSpec = tween(200)) },
     ) {
-        composable("welcome") { WelcomeScreen(viewModel, navController) }
         composable("setup") { SetupScreen(viewModel, onDismiss = { navController.popBackStack() }) }
         composable("main") { MainScreen(viewModel, navController) }
         composable(
@@ -227,11 +239,106 @@ private fun AppLockScreen(onUnlock: () -> Unit) {
     }
 }
 
+// The splash plays its animation (the hammer's strike) at least this long, and waits for the app's own data at most
+// SPLASH_MAX_MS; after that StartupScreen shows what the start is doing.
+private const val SPLASH_MIN_MS = 850L
+private const val SPLASH_MAX_MS = 1_500L
+
+/** Shows the content only inside a circle growing from the middle of the screen ([progress] 0..1). */
+private fun Modifier.circularReveal(progress: () -> Float): Modifier =
+    drawWithContent {
+        val p = progress()
+        if (p >= 1f) {
+            drawContent()
+        } else {
+            val radius = hypot(size.width, size.height) / 2f * p
+            clipPath(Path().apply { addOval(Rect(center, radius)) }) { this@drawWithContent.drawContent() }
+        }
+    }
+
+/** A start slower than the splash may stay: the anvil and what the app is loading. */
+@Composable
+private fun StartupScreen(status: String) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Image(painter = painterResource(R.drawable.splash_anvil), contentDescription = null, modifier = Modifier.size(160.dp))
+        LinearProgressIndicator(modifier = Modifier.width(120.dp).padding(top = 8.dp))
+        Text(status, fontSize = 12.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f), modifier = Modifier.padding(top = 12.dp))
+    }
+}
+
 // --- MAIN ACTIVITY ENTRY POINT ---
 
 class MainActivity : ComponentActivity() {
     val navEvents = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val pendingIntents = MutableSharedFlow<Intent>(extraBufferCapacity = 1)
+
+    private val viewModel: ForgeViewModel by viewModels()
+
+    // The main screen has drawn its first frame: the splash leaves only then, so the reveal shows a finished screen.
+    @Volatile private var mainShown = false
+
+    // How far the screen is revealed from the middle when the splash leaves (1 = all of it).
+    private val reveal = Animatable(1f)
+
+    /**
+     * The splash leaves: the anvil grows and fades while the main screen opens in a circle from the middle. The
+     * screen is hidden first (under the splash, so nothing flashes) and revealed while the splash fades out.
+     */
+    private fun playSplashExit(provider: SplashScreenViewProvider) {
+        lifecycleScope.launch {
+            reveal.snapTo(0f)
+            reveal.animateTo(1f, tween(durationMillis = 650, easing = FastOutSlowInEasing))
+        }
+        try {
+            provider.iconView
+                .animate()
+                .scaleX(1.8f)
+                .scaleY(1.8f)
+                .alpha(0f)
+                .setDuration(320)
+                .setInterpolator(AccelerateInterpolator())
+                .start()
+        } catch (_: Exception) {
+            // no icon on this splash (e.g. a start from a notification)
+        }
+        provider.view
+            .animate()
+            .alpha(0f)
+            .setStartDelay(60)
+            .setDuration(360)
+            .withEndAction { provider.remove() }
+            .start()
+    }
+
+    /**
+     * The system draws the splash before the app runs, in the phone's light or dark mode; telling it the app's own
+     * choice (Light, Dark or System in the settings) makes the next splash match the app.
+     */
+    private fun syncSplashNightMode(themeMode: String) {
+        val mode =
+            when (themeMode) {
+                THEME_DARK -> UiModeManager.MODE_NIGHT_YES
+                THEME_LIGHT -> UiModeManager.MODE_NIGHT_NO
+                else -> UiModeManager.MODE_NIGHT_AUTO
+            }
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        if (prefs.getInt("splash_night_mode", UiModeManager.MODE_NIGHT_AUTO) == mode) return
+        try {
+            getSystemService(UiModeManager::class.java)?.setApplicationNightMode(mode)
+            prefs.edit().putInt("splash_night_mode", mode).apply()
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Could not set the splash's night mode", e)
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        syncSplashNightMode(viewModel.config.value.themeMode)
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -243,13 +350,19 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Immediately dismiss the system splash screen to pass composition control to the custom WelcomeScreen.
-        installSplashScreen().apply {
-            setKeepOnScreenCondition { false }
+        // The system splash (the animated anvil) stays until the app's own data is loaded and the main screen is drawn,
+        // at most SPLASH_MAX_MS; a slower start then shows its status (StartupScreen). The server is not waited for.
+        val splash = installSplashScreen()
+        val splashShownAt = SystemClock.uptimeMillis()
+        splash.setKeepOnScreenCondition {
+            val shownFor = SystemClock.uptimeMillis() - splashShownAt
+            shownFor < SPLASH_MIN_MS || (!(viewModel.isStarted.value && mainShown) && shownFor < SPLASH_MAX_MS)
         }
+        splash.setOnExitAnimationListener { provider -> playSplashExit(provider) }
 
         super.onCreate(savedInstanceState)
         ForgeSettingsManager.applyCachedThemeMode(this)
+        lifecycleScope.launch { viewModel.initializeApp() }
 
         if (intent?.action == "ACTION_OPEN_SETTINGS") {
             navEvents.tryEmit("setup")
@@ -260,6 +373,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val viewModel: ForgeViewModel = viewModel()
+            val isStarted by viewModel.isStarted.collectAsStateWithLifecycle()
             val config by viewModel.config.collectAsStateWithLifecycle()
             val activity = context.findActivity() ?: return@setContent
 
@@ -352,7 +466,6 @@ class MainActivity : ComponentActivity() {
             }
 
             val isOnline by currentConnectivityStatus(this)
-            val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
             val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
             val isQueueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
             val isWaitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
@@ -439,11 +552,8 @@ class MainActivity : ComponentActivity() {
             val navController = rememberNavController()
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentRoute = navBackStackEntry?.destination?.route
-            val isSessionActive =
-                currentRoute == "main" || currentRoute == "gallery" || currentRoute == "queue" || currentRoute == "wildcards"
-
-            val shouldBlur = (!isOnline || (!isConnected && !isServerBusy)) && isSessionActive
-            val onSetupClick = rememberDebounced { navController.navigate("setup") }
+            // The phone's network came back: the server may be reachable again (a new minute of tries).
+            LaunchedEffect(isOnline) { if (isOnline) viewModel.reconnect() }
 
             // GLOBAL UPDATER STATES
             val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
@@ -461,79 +571,46 @@ class MainActivity : ComponentActivity() {
             }
 
             MaterialTheme(colorScheme = defaultColorScheme, typography = defaultTypography, shapes = defaultShapes) {
-                // The overlays below fade in and out, so the blur behind them follows instead of snapping.
-                val backgroundBlur by animateDpAsState(
-                    targetValue = if (shouldBlur) 15.dp else 0.dp,
-                    animationSpec = tween(OVERLAY_FADE_MS),
-                    label = "background_blur",
-                )
                 Box(modifier = Modifier.fillMaxSize()) {
                     Surface(
-                        modifier =
-                            Modifier
-                                .fillMaxSize()
-                                .then(if (backgroundBlur > 0.dp) Modifier.blur(backgroundBlur) else Modifier),
+                        modifier = Modifier.fillMaxSize().circularReveal { reveal.value },
                         color = MaterialTheme.colorScheme.background,
                     ) {
-                        AppNavigation(viewModel = viewModel, navController = navController)
+                        if (isStarted) {
+                            AppNavigation(viewModel = viewModel, navController = navController)
+                            LaunchedEffect(Unit) {
+                                withFrameNanos { } // drawn once: the splash may leave
+                                mainShown = true
+                            }
+                        } else {
+                            // The start took longer than the splash may stay: say what it is doing.
+                            val initStatus by ForgeSettingsManager.initStatus.collectAsStateWithLifecycle()
+                            StartupScreen(initStatus)
+                        }
                     }
 
-                    AnimatedVisibility(
-                        visible = shouldBlur,
-                        enter = fadeIn(tween(OVERLAY_FADE_MS)),
-                        exit = fadeOut(tween(OVERLAY_FADE_MS)),
-                    ) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Black.copy(alpha = 0.5f))
-                                    .clickable(enabled = false) {},
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Card(
-                                shape = MaterialTheme.shapes.large,
-                                elevation = CardDefaults.cardElevation(8.dp),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            ) {
-                                Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                    if (!isOnline) {
-                                        Icon(
-                                            Icons.Default.SignalWifiOff,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(48.dp),
-                                            tint = MaterialTheme.colorScheme.error,
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("No Internet Connection", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Turn on the internet to use the app", textAlign = TextAlign.Center)
-                                    } else {
-                                        Icon(
-                                            Icons.Default.CloudOff,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(48.dp),
-                                            tint = MaterialTheme.colorScheme.error,
-                                        )
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Server Not Found", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Make sure the API server is running.", textAlign = TextAlign.Center)
-                                    }
-
-                                    Spacer(modifier = Modifier.height(16.dp))
-
-                                    Button(
-                                        onClick = onSetupClick,
-                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                                    ) {
-                                        Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("Open Settings")
-                                    }
-                                }
-                            }
-                        }
+                    // The app stopped looking for the server (a minute without an answer), or the connection status was
+                    // tapped: its address, the saved profiles, a test and another try. Closing it keeps the app usable.
+                    val connection by viewModel.connection.collectAsStateWithLifecycle()
+                    val serverDialogRequested by viewModel.serverDialogRequested.collectAsStateWithLifecycle()
+                    var offlineDialogClosed by rememberSaveable { mutableStateOf(false) }
+                    LaunchedEffect(connection) { if (connection != ServerConnection.OFFLINE) offlineDialogClosed = false }
+                    val offline = connection == ServerConnection.OFFLINE
+                    if (isStarted && !isLocked && (serverDialogRequested || (offline && !offlineDialogClosed))) {
+                        ServerConnectionDialog(
+                            viewModel = viewModel,
+                            offline = offline,
+                            phoneOnline = isOnline,
+                            onDismiss = {
+                                viewModel.closeServerDialog()
+                                if (offline) offlineDialogClosed = true
+                            },
+                            onOpenSettings = {
+                                viewModel.closeServerDialog()
+                                if (offline) offlineDialogClosed = true
+                                navController.navigate("setup")
+                            },
+                        )
                     }
 
                     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
@@ -642,7 +719,7 @@ class MainActivity : ComponentActivity() {
                     // WHAT'S NEW after an update: once the app is unlocked and past the start animation.
                     val whatsNew by viewModel.whatsNew.collectAsStateWithLifecycle()
                     whatsNew?.let { notes ->
-                        if (!isLocked && currentRoute != null && currentRoute != "welcome") {
+                        if (!isLocked && isStarted && currentRoute != null) {
                             WhatsNewDialog(markdown = notes, onDismiss = { viewModel.dismissWhatsNew() })
                         }
                     }

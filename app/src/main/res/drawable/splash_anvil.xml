@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash logo (and its resting frame for a slow start): an anvil, a hammer and the sparks of its strike.
+     splash_anvil_animated.xml animates the named parts. Drawn in the 192 dp circle the splash shows. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <path
+        android:name="glow"
+        android:fillAlpha="0.7"
+        android:pathData="M64,150 a80,80 0 1,0 160,0 a80,80 0 1,0 -160,0">
+        <aapt:attr name="android:fillColor">
+            <gradient android:type="radial" android:centerX="144" android:centerY="150" android:gradientRadius="80">
+                <item android:offset="0" android:color="#806A3DE8" />
+                <item android:offset="0.6" android:color="#306A3DE8" />
+                <item android:offset="1" android:color="#006A3DE8" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <group
+        android:name="anvil"
+        android:pivotX="5"
+        android:pivotY="50"
+        android:scaleX="0.85"
+        android:scaleY="0.85"
+        android:translateX="139"
+        android:translateY="166.25">
+        <path android:pathData="M-60,-40 L40,-40 Q70,-40 70,-10 Q40,-10 30,-10 Q15,-10 15,20 L30,50 L-30,50 L-15,20 Q-15,-10 -60,-10 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="0" android:startY="-40" android:endX="0" android:endY="50">
+                    <item android:offset="0" android:color="#FF8CC4F5" />
+                    <item android:offset="0.45" android:color="#FF3F86CF" />
+                    <item android:offset="1" android:color="#FF24508F" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path
+            android:pathData="M-56,-37 L40,-37"
+            android:strokeWidth="3"
+            android:strokeAlpha="0.8"
+            android:strokeColor="#FFE3F1FF"
+            android:strokeLineCap="round" />
+    </group>
+    <path
+        android:name="flash"
+        android:fillAlpha="0"
+        android:fillColor="#FFFFE9A8"
+        android:pathData="M114,139 a26,8 0 1,0 52,0 a26,8 0 1,0 -52,0" />
+    <group android:name="sparks" android:translateX="140.0" android:translateY="138.5">
+        <path
+            android:name="ray0"
+            android:pathData="M-9.9,-1.4 L-49.5,-7.0"
+            android:strokeColor="#4FE3FF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray1"
+            android:pathData="M-8.5,-5.3 L-42.4,-26.5"
+            android:strokeColor="#B06CFF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray2"
+            android:pathData="M-5.6,-8.3 L-28.0,-41.5"
+            android:strokeColor="#FFC857"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray3"
+            android:pathData="M-2.1,-9.8 L-10.4,-48.9"
+            android:strokeColor="#4FE3FF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray4"
+            android:pathData="M1.7,-9.8 L8.7,-49.2"
+            android:strokeColor="#FFC857"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray5"
+            android:pathData="M5.3,-8.5 L26.5,-42.4"
+            android:strokeColor="#B06CFF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray6"
+            android:pathData="M8.3,-5.6 L41.5,-28.0"
+            android:strokeColor="#4FE3FF"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <path
+            android:name="ray7"
+            android:pathData="M9.8,-1.7 L49.2,-8.7"
+            android:strokeColor="#FFC857"
+            android:strokeWidth="3.5"
+            android:strokeLineCap="round"
+            android:trimPathEnd="0" />
+        <group android:name="dot0">
+            <path
+                android:name="dotfill0"
+                android:fillAlpha="0"
+                android:fillColor="#FFC857"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+        <group android:name="dot1">
+            <path
+                android:name="dotfill1"
+                android:fillAlpha="0"
+                android:fillColor="#4FE3FF"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+        <group android:name="dot2">
+            <path
+                android:name="dotfill2"
+                android:fillAlpha="0"
+                android:fillColor="#B06CFF"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+        <group android:name="dot3">
+            <path
+                android:name="dotfill3"
+                android:fillAlpha="0"
+                android:fillColor="#FFC857"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+        <group android:name="dot4">
+            <path
+                android:name="dotfill4"
+                android:fillAlpha="0"
+                android:fillColor="#4FE3FF"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+        <group android:name="dot5">
+            <path
+                android:name="dotfill5"
+                android:fillAlpha="0"
+                android:fillColor="#B06CFF"
+                android:pathData="M-2.5,0 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+        </group>
+    </group>
+    <group
+        android:name="hammer"
+        android:pivotX="218"
+        android:pivotY="116"
+        android:rotation="8">
+        <path android:fillColor="#FF4B3F72" android:pathData="M152,112 L218,112 A4,4 0 0 1 218,120 L152,120 Z" />
+        <path android:pathData="M128,98 h24 a4,4 0 0 1 4,4 v32 a4,4 0 0 1 -4,4 h-24 a4,4 0 0 1 -4,-4 v-32 a4,4 0 0 1 4,-4 z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:type="linear" android:startX="124" android:startY="0" android:endX="156" android:endY="0">
+                    <item android:offset="0" android:color="#FF9FB4DA" />
+                    <item android:offset="1" android:color="#FF55688F" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>

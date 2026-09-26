@@ -302,8 +302,53 @@ class ForgeViewModel(
     val connection: StateFlow<ServerConnection> = ForgeRepository.connection
     val searchEndsAt: StateFlow<Long> = ForgeRepository.searchEndsAt
 
+    // The server dialog asked for from the connection status (the app opens it by itself when it goes offline).
+    private val _serverDialogRequested = MutableStateFlow(false)
+    val serverDialogRequested: StateFlow<Boolean> = _serverDialogRequested.asStateFlow()
+
+    fun openServerDialog() {
+        _serverDialogRequested.value = true
+    }
+
+    fun closeServerDialog() {
+        _serverDialogRequested.value = false
+    }
+
     /** Another minute of tries to reach the server ("Retry", the network is back). */
     fun reconnect() = ForgeRepository.reconnect()
+
+    /** Uses [address] (a changed one is saved, which restarts the pings) and tries again at once. */
+    fun connectTo(address: String) {
+        val current = ForgeSettingsManager.config.value
+        val clean = address.trim()
+        if (clean.isNotEmpty() && clean != current.apiUrl) ForgeSettingsManager.saveConfig(current.copy(apiUrl = clean))
+        ForgeRepository.reconnect()
+    }
+
+    /** One question to the server at [address] (the connection dialog's Test): how long the answer took, or why none came. */
+    suspend fun testServer(address: String): String =
+        withContext(Dispatchers.IO) {
+            val clean = address.trim().trimEnd('/').let { if (it.startsWith("http://") || it.startsWith("https://")) it else "http://$it" }
+            val request =
+                try {
+                    okhttp3.Request.Builder().url("$clean/sdapi/v1/progress?skip_current_image=true").build()
+                } catch (e: IllegalArgumentException) {
+                    return@withContext "Not a valid address"
+                }
+            val start = System.currentTimeMillis()
+            try {
+                client.newCall(request).awaitResponse().use { response ->
+                    if (response.isSuccessful) {
+                        "Answered in ${System.currentTimeMillis() - start} ms"
+                    } else {
+                        "The server answered HTTP ${response.code}"
+                    }
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                "No answer (${e.message ?: e.javaClass.simpleName})"
+            }
+        }
 
     val isServerBusy: StateFlow<Boolean> = ForgeRepository.isServerBusy
     val vramUsage: StateFlow<String?> = ForgeRepository.vramUsage

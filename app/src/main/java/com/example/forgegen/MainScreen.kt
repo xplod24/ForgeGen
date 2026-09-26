@@ -45,7 +45,8 @@ fun MainScreen(
 ) {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val state by viewModel.appState.collectAsStateWithLifecycle()
-    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
+    val connection by viewModel.connection.collectAsStateWithLifecycle()
+    val searchEndsAt by viewModel.searchEndsAt.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
@@ -127,7 +128,7 @@ fun MainScreen(
             navController.navigate("gallery")
         }
 
-    var showSettingsOverlay by remember { mutableStateOf(false) }
+    var showSettingsOverlay by rememberSaveable { mutableStateOf(false) }
     val onSettingsClick = rememberDebounced { showSettingsOverlay = !showSettingsOverlay }
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
@@ -188,8 +189,10 @@ fun MainScreen(
             topBar = {
                 val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
                 ForgeTopAppBar(
-                    isConnected = isConnected,
+                    connection = connection,
                     pingMs = pingMs,
+                    searchEndsAt = searchEndsAt,
+                    onConnectionClick = { viewModel.openServerDialog() },
                     vram = vram,
                     isActivelyGenerating = isActivelyGenerating,
                     onUnloadClick = { showUnloadDialog = true },
