@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -145,6 +146,12 @@ fun SetupScreen(
     var testStatus by remember { mutableStateOf<String?>(null) }
     var testResults by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var showWipeDataDialog by remember { mutableStateOf(false) }
+
+    // Debug mode (DebugMode): 8 quick taps on "App Version", then the password.
+    val debugUnlocked by viewModel.debugUnlocked.collectAsStateWithLifecycle()
+    var versionTaps by remember { mutableIntStateOf(0) }
+    var lastVersionTap by remember { mutableLongStateOf(0L) }
+    var showDebugPasswordDialog by remember { mutableStateOf(false) }
 
     // --- SYSTEM SERVICES ---
     val scope = rememberCoroutineScope()
@@ -653,6 +660,21 @@ fun SetupScreen(
 
             item {
                 TextPreference(
+                    title = "App Version",
+                    subtitle = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                    value = "",
+                ) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    versionTaps = if (now - lastVersionTap <= DebugMode.TAP_WINDOW_MS) versionTaps + 1 else 1
+                    lastVersionTap = now
+                    if (versionTaps >= DebugMode.TAPS_TO_UNLOCK) {
+                        versionTaps = 0
+                        if (debugUnlocked) viewModel.showToast("Debug mode is already on") else showDebugPasswordDialog = true
+                    }
+                }
+            }
+            item {
+                TextPreference(
                     title = "Check for Updates",
                     subtitle = "Look for a newer release on GitHub",
                     value = "",
@@ -701,6 +723,15 @@ fun SetupScreen(
              * CATEGORY: DANGER ZONE
              * ========================================================== */            }
 
+            // The Debug section, only after unlocking the debug mode; placed above the Danger Zone.
+            if (debugUnlocked) {
+                item { ExpandableCategoryHeader("Debug", appState, viewModel) }
+                if ("Debug" in appState.setupExpandedSections) {
+                    item { DebugPanel(viewModel) }
+                }
+                item { HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp)) }
+            }
+
             item { ExpandableCategoryHeader("Danger Zone", appState, viewModel) }
             if ("Danger Zone" in appState.setupExpandedSections) {
 
@@ -721,6 +752,52 @@ fun SetupScreen(
         /* ==========================================================
          * DIALOG BUILDERS
          * ========================================================== */
+
+        if (showDebugPasswordDialog) {
+            var password by remember { mutableStateOf("") }
+            var checking by remember { mutableStateOf(false) }
+            var error by remember { mutableStateOf<String?>(null) }
+            AlertDialog(
+                onDismissRequest = { if (!checking) showDebugPasswordDialog = false },
+                title = { Text("Debug Mode") },
+                text = {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = {
+                            password = it
+                            error = null
+                        },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = error != null,
+                        supportingText = error?.let { { Text(it) } },
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = password.isNotEmpty() && !checking,
+                        onClick = {
+                            checking = true
+                            scope.launch {
+                                val result = viewModel.debugUnlock(password)
+                                checking = false
+                                when (result) {
+                                    DebugMode.UnlockResult.UNLOCKED -> {
+                                        showDebugPasswordDialog = false
+                                        viewModel.showToast("Debug mode on: see the Debug section")
+                                    }
+                                    DebugMode.UnlockResult.WRONG_PASSWORD -> error = "Wrong password"
+                                    DebugMode.UnlockResult.TOO_MANY_ATTEMPTS -> error = "Too many attempts, try again in a minute"
+                                }
+                            }
+                        },
+                    ) { Text("Unlock") }
+                },
+                dismissButton = { TextButton(onClick = { showDebugPasswordDialog = false }) { Text("Cancel") } },
+            )
+        }
 
         if (showWipeDataDialog) {
             var wipeSettings by remember { mutableStateOf(false) }
@@ -744,7 +821,8 @@ fun SetupScreen(
                             Checkbox(checked = wipeSettings, onCheckedChange = { wipeSettings = it })
                             Text(
                                 "App Settings & State (1 item" +
-                                    (if (config.contentMode == CONTENT_UNRESTRICTED) ", turns Unrestricted off)" else ")"),
+                                    (if (config.contentMode == CONTENT_UNRESTRICTED) ", turns Unrestricted off" else "") +
+                                    (if (debugUnlocked) ", turns the debug mode off)" else ")"),
                                 fontSize = 14.sp,
                             )
                         }

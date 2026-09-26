@@ -59,7 +59,10 @@ class ForgeUpdateManager(
      * Checks for available updates. When 'manual' is false, it verifies if a check has
      * already occurred today (GitHub allows 60 anonymous API calls per hour and IP).
      */
-    fun checkForUpdates(manual: Boolean = false) {
+    fun checkForUpdates(
+        manual: Boolean = false,
+        offerAnyRelease: Boolean = false,
+    ) {
         scope.launch(Dispatchers.IO) {
             val config = getConfig()
             val todayDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
@@ -77,7 +80,8 @@ class ForgeUpdateManager(
                     val installed = application.packageManager.getPackageInfo(application.packageName, 0)
                     val currentVersionCode = installed.longVersionCode.toInt()
 
-                    if (manifest != null && manifest.versionCode > currentVersionCode) {
+                    // The debug mode can offer the latest release even when it is not newer (to reinstall it).
+                    if (manifest != null && (manifest.versionCode > currentVersionCode || offerAnyRelease)) {
                         _updateManifest.value = manifest
                         if (manual) showToast("Update available: ${manifest.versionName}")
                     } else if (manual) {

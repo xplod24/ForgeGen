@@ -762,6 +762,15 @@ object ForgeQueueManager {
         ForgeNotifications.post(ForgeNotifications.ID_QUEUE_PAUSED, notification)
     }
 
+    /** The debug mode's test notifications: "batch", "queue" or "failed", each as a real one would look. */
+    fun debugNotify(kind: String) {
+        when (kind) {
+            "batch" -> launchNotification("debug test prompt", isQueueFinished = false)
+            "queue" -> launchNotification("", isQueueFinished = true)
+            "failed" -> notifyFailedJobs(succeeded = 3, failed = 1)
+        }
+    }
+
     /** Puts failed jobs ([id], or all of them) back in the queue, after the jobs already waiting. */
     fun retryFailed(id: String? = null) {
         var retried = 0

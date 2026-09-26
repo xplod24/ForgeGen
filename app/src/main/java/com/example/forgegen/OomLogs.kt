@@ -23,6 +23,7 @@ import java.util.Locale
  * When the app or the server runs out of memory, a report with the app's log is written to Downloads, if the
  * user allowed it ("Save Logs on Out of Memory" in the Permissions settings). Since Android 10 a file the app
  * creates in Downloads needs no storage permission, so the setting is the only consent asked for.
+ * The debug mode's "Save Full Log" writes the same kind of file on request, with the complete log.
  * ============================================================================ */
 object OomLogs {
     private const val TAG = "OomLogs"
@@ -75,10 +76,26 @@ object OomLogs {
     fun write(
         reason: String,
         details: String,
+    ): String? = if (allowed) writeFile("ForgeGen-OOM", "ForgeGen out-of-memory report", reason, details, fullLog = false) else null
+
+    /** The debug mode's "Save Full Log": the whole log, HTTP content included, to Downloads; says where it went. */
+    fun saveDebugLog() {
+        if (!::application.isInitialized) return
+        scope.launch {
+            val name = writeFile("ForgeGen-Debug", "ForgeGen debug log", "Saved from the debug mode.", "-", fullLog = true)
+            ForgeSettingsManager.showToast(if (name != null) "Debug log saved to Downloads: $name" else "The debug log could not be saved")
+        }
+    }
+
+    private fun writeFile(
+        prefix: String,
+        title: String,
+        reason: String,
+        details: String,
+        fullLog: Boolean,
     ): String? {
-        if (!allowed) return null
         val now = Date()
-        val name = "ForgeGen-OOM-${SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(now)}.txt"
+        val name = "$prefix-${SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(now)}.txt"
         return try {
             val resolver = application.contentResolver
             val values =
@@ -94,8 +111,8 @@ object OomLogs {
             try {
                 val stream = resolver.openOutputStream(uri) ?: throw IOException("Cannot write $name")
                 stream.use { out ->
-                    out.write(header(now, reason, details).toByteArray())
-                    copyLog(out)
+                    out.write(header(title, now, reason, details, fullLog).toByteArray())
+                    copyLog(out, fullLog)
                 }
                 resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
                 name
@@ -104,21 +121,23 @@ object OomLogs {
                 throw e
             }
         } catch (e: Throwable) {
-            Log.e(TAG, "Cannot save the out-of-memory log", e)
+            Log.e(TAG, "Cannot save $name", e)
             null
         }
     }
 
     private fun header(
+        title: String,
         time: Date,
         reason: String,
         details: String,
+        fullLog: Boolean,
     ): String {
         val runtime = Runtime.getRuntime()
         val phone = ActivityManager.MemoryInfo()
         (application.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.getMemoryInfo(phone)
         return buildString {
-            appendLine("ForgeGen out-of-memory report")
+            appendLine(title)
             appendLine("Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(time)}")
             appendLine("Reason: $reason")
             appendLine()
@@ -136,7 +155,11 @@ object OomLogs {
             appendLine("Details:")
             appendLine(details)
             appendLine()
-            appendLine("Log of the app (without the content of HTTP requests and answers, which can hold prompts):")
+            if (fullLog) {
+                appendLine("Log of the app (complete, with the content of HTTP requests and answers):")
+            } else {
+                appendLine("Log of the app (without the content of HTTP requests and answers, which can hold prompts):")
+            }
         }
     }
 
@@ -147,14 +170,19 @@ object OomLogs {
     private const val API_ERROR = "API ERROR ["
 
     /** The app's own log (logcat), streamed line by line into the file instead of being held in memory. */
-    private fun copyLog(out: OutputStream) {
+    private fun copyLog(
+        out: OutputStream,
+        fullLog: Boolean,
+    ) {
         try {
             val process =
                 ProcessBuilder("logcat", "-d", "-v", "threadtime", "--pid=${android.os.Process.myPid()}")
                     .redirectErrorStream(true)
                     .start()
             val writer = out.bufferedWriter()
-            process.inputStream.bufferedReader().useLines { lines -> filterLog(lines).forEach { writer.appendLine(it) } }
+            process.inputStream.bufferedReader().useLines { lines ->
+                (if (fullLog) lines else filterLog(lines)).forEach { writer.appendLine(it) }
+            }
             writer.flush()
             process.waitFor()
         } catch (e: Exception) {

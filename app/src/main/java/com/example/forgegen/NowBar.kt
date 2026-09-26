@@ -18,9 +18,10 @@ object NowBar {
     private val ONE_UI_FEATURES =
         listOf("com.samsung.feature.samsung_experience_mobile", "com.samsung.feature.samsung_experience_mobile_lite")
 
-    /** A phone with Samsung's One UI 8 or newer; One UI 8 is the first One UI on Android 16. */
+    /** A phone with Samsung's One UI 8 or newer (One UI 8 is the first One UI on Android 16), or forced in debug mode. */
     fun isSupported(context: Context): Boolean =
-        Build.MANUFACTURER.equals("samsung", ignoreCase = true) &&
+        DebugMode.forceNowBar.value ||
+            Build.MANUFACTURER.equals("samsung", ignoreCase = true) &&
             ONE_UI_FEATURES.any { context.packageManager.hasSystemFeature(it) } &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
 

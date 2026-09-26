@@ -100,6 +100,85 @@ class ForgeViewModel(
         }
     }
 
+    // --- DEBUG MODE (DebugMode; the rules of BlockingApi stay on) ---
+    val debugUnlocked: StateFlow<Boolean> = DebugMode.unlocked
+    val debugForceNowBar: StateFlow<Boolean> = DebugMode.forceNowBar
+
+    /** Checks the password off the main thread (PBKDF2 is slow on purpose). */
+    suspend fun debugUnlock(password: String): DebugMode.UnlockResult = withContext(Dispatchers.Default) { DebugMode.unlock(password) }
+
+    fun debugLock() = DebugMode.lock()
+
+    fun debugSetForceNowBar(on: Boolean) = DebugMode.setForceNowBar(on)
+
+    /** Any content mode, without the confirmations and the one-way lock of Unrestricted. */
+    fun debugSetContentMode(mode: String) {
+        if (!DebugMode.unlocked.value) return
+        ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(contentMode = mode), leaveUnrestricted = true)
+    }
+
+    /** The settings as JSON, for the raw editor. */
+    fun debugConfigJson(): String =
+        com.google.gson
+            .GsonBuilder()
+            .setPrettyPrinting()
+            .create()
+            .toJson(ForgeSettingsManager.config.value)
+
+    /** Stores settings edited as JSON (checked like stored settings are); returns an error, or null when saved. */
+    fun debugApplyConfigJson(json: String): String? {
+        if (!DebugMode.unlocked.value) return "The debug mode is locked"
+        val parsed =
+            try {
+                com.google.gson.JsonParser
+                    .parseString(json)
+                    .asJsonObject
+            } catch (e: Exception) {
+                return "Not valid JSON: ${e.message}"
+            }
+        ForgeSettingsManager.saveConfig(ForgeSettingsManager.loadConfig(parsed.toString()), leaveUnrestricted = true)
+        return null
+    }
+
+    /** Shows the "What's New" dialog of the installed version again. */
+    fun debugShowWhatsNew() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val assets = getApplication<Application>().assets
+                val changelog = assets.open(WhatsNew.CHANGELOG_ASSET).bufferedReader().use { it.readText() }
+                _whatsNew.value = WhatsNew.notesFor(changelog, installedVersion, null, wasUpdated = true)
+                    ?: "No notes for $installedVersion in the changelog."
+            } catch (e: Exception) {
+                ForgeSettingsManager.showToast("Cannot read the changelog: ${e.message}")
+            }
+        }
+    }
+
+    /** Offers the latest release even when it is not newer, to reinstall it. */
+    fun debugOfferLatestRelease() = updateManager.checkForUpdates(manual = true, offerAnyRelease = true)
+
+    fun debugTestNotification(kind: String) = ForgeQueueManager.debugNotify(kind)
+
+    fun debugSaveFullLog() = OomLogs.saveDebugLog()
+
+    fun debugRebuildModelLists() = networkManager.fetchApiData()
+
+    /** Forgets everything synced from Civitai; the next sync downloads it all again. */
+    fun debugForgetCivitaiData() {
+        viewModelScope.launch(Dispatchers.IO) {
+            ForgeRepository.db.civitaiModelDao().deleteAll()
+            networkManager.fetchApiData()
+            ForgeSettingsManager.showToast("Civitai data forgotten; the next sync downloads it again")
+        }
+    }
+
+    /** Civitai entries in the database: all, and those still without image ratings (synced before 1.3.0 or failed). */
+    suspend fun debugCivitaiCounts(): Pair<Int, Int> =
+        withContext(Dispatchers.IO) {
+            val all = ForgeRepository.db.civitaiModelDao().getAllModels()
+            all.size to all.count { it.previewImages == null }
+        }
+
     // --- INITIALIZATION OF MANAGERS ---
 
     val networkManager: ForgeNetworkManager
@@ -109,6 +188,7 @@ class ForgeViewModel(
     init {
         ForgeNotifications.init(getApplication())
         OomLogs.install(getApplication())
+        DebugMode.init(getApplication())
 
         // Create managers but do NOT start them yet.
         networkManager =
@@ -360,8 +440,11 @@ class ForgeViewModel(
     fun putSyncToBackground() {
         ForgeGalleryManager.putSyncToBackground()
     }
-    
-    fun wipeSettings() = ForgeSettingsManager.resetSettings()
+
+    fun wipeSettings() {
+        ForgeSettingsManager.resetSettings()
+        DebugMode.lock()
+    }
 
     fun wipePresets() = ForgeSettingsManager.saveConfig(ForgeSettingsManager.config.value.copy(presets = emptyList()))
 

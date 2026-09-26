@@ -1,3 +1,7 @@
+## 1.4.0
+- The settings show the app version under App Updates.
+- A hidden debug mode for maintaining the app, locked with a password. It shows the app's state and offers developer tools: editing all settings as text, HTTP logging, test notifications, saving the full log, and more. It stays hidden during normal use.
+
 ## 1.3.2
 - The rules that apply in every content mode (no sexual content with a minor, no nudity with the LoRA of a real person, no Civitai preview of a minor above PG) are now kept together in one place in the code, so they are easier to maintain and to extend where a country requires more. Nothing changes in how the app works.
 

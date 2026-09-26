@@ -217,6 +217,9 @@ interface CivitaiModelDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertModels(models: List<CivitaiModelEntity>)
+
+    @Query("DELETE FROM civitai_models")
+    suspend fun deleteAll()
 }
 
 @Entity(tableName = "favorite_images")
