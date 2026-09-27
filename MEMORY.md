@@ -65,7 +65,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   The setting is mirrored to SharedPreferences `updates`/`auto_install` (the job has no database). The in-app check
   runs at every start, throttled to 15 min (`updates`/`last_check_ms`; `lastUpdateCheckDate` is no longer used), and
   "Install Update" goes through `SelfUpdate.install` (the old ACTION_VIEW screen only if a session cannot be opened).
-  Unverified on a phone: whether Samsung installs silently. `GitHubApi.baseUrl` is overridable for tests (G34).
+  Tested by the owner with 2.0.3 (an empty release) on the Samsung phone: the silent update works; only Google Play
+  Protect shows its prompt (sideloaded, debug-signed, debuggable app). Fewer prompts would need the postponed
+  release build (own release key, non-debuggable), which is a separate app id and signature: a one-time move with
+  Settings > Backup export/import. `GitHubApi.baseUrl` is overridable for tests (G34).
 - **Compose animations outside composition (2.0.1):** `Animatable.animateTo` (and anything using `withFrameNanos`) needs
   Compose's frame clock: run it in a `LaunchedEffect` or with `AndroidUiDispatcher.Main`, never in a plain
   `lifecycleScope`/`Dispatchers.Main` coroutine. 2.0.0 did that for the splash's reveal and crashed at every start
