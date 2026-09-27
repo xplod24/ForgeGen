@@ -138,4 +138,20 @@ class ImageJobsTest {
         assertFalse(plain, plain.contains("randn_source"))
         assertFalse(plain, plain.contains("sd_model_checkpoint"))
     }
+
+    @Test
+    fun `a job with hires fix goes to the server with Forge's hires modules, one without it unchanged`() {
+        // 2.4.1: Forge's hires pass fails with HTTP 500 without "hr_additional_modules".
+        val upscale = ImageJobs.upscale(ready(base), 2f, "Latent", 0.35f)!!
+        assertNull("not stored with the job", upscale.hr_additional_modules)
+        val json = Gson().toJson(upscale.forServer())
+        assertTrue(json, json.contains("\"hr_additional_modules\":[\"Use same choices\"]"))
+
+        val plain = ready(base).payload
+        assertEquals(plain, plain.forServer())
+        assertFalse(Gson().toJson(plain.forServer()).contains("hr_additional_modules"))
+
+        val chosen = upscale.copy(hr_additional_modules = listOf("ae.safetensors"))
+        assertEquals(chosen, chosen.forServer())
+    }
 }

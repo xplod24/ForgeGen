@@ -397,7 +397,18 @@ data class Txt2ImgPayloadDto(
     val subseed_strength: Float = 0f,
     // Steps of the hires pass; 0 = as many as the first pass.
     val hr_second_pass_steps: Int = 0,
+    // Forge's text encoder/VAE choice for the hires pass; set by forServer() (null is not sent).
+    val hr_additional_modules: List<String>? = null,
 )
+
+/**
+ * The job as the server gets it. Forge's API fails a hires fix without "hr_additional_modules": its hires pass tests
+ * `'Use same choices' not in self.hr_additional_modules`, which is None when not sent (TypeError, HTTP 500; the
+ * owner's "Upscale" hit it in 2.4.0). Forge's UI sends "Use same choices"; so does the app, for every job with hires
+ * fix, also the ones saved before 2.4.1. Servers without the field ignore it.
+ */
+fun Txt2ImgPayloadDto.forServer(): Txt2ImgPayloadDto =
+    if (enable_hr && hr_additional_modules == null) copy(hr_additional_modules = listOf("Use same choices")) else this
 
 data class ProgressStateDto(
     @SerializedName("job_count") val jobCount: Int = 0,

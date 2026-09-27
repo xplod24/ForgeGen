@@ -1,6 +1,7 @@
 package com.example.forgegen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Test
 
@@ -41,5 +42,20 @@ class ForgeQueueManagerTest {
 
         // Assert
         assertEquals("Status text should be successfully updated", newStatus, ForgeQueueManager.statusText.value)
+    }
+
+    @Test
+    fun `the server's own error text is read from Forge's and FastAPI's error answers`() {
+        val forge = """{"error": "TypeError", "detail": "", "body": "", "errors": "argument of type 'NoneType' is not iterable"}"""
+        assertEquals("TypeError: argument of type 'NoneType' is not iterable", ForgeQueueManager.serverError(forge))
+        val trimmed = """{"error": "HTTPException", "errors": " Sampler not found "}"""
+        assertEquals("HTTPException: Sampler not found", ForgeQueueManager.serverError(trimmed))
+        assertEquals("Not Found", ForgeQueueManager.serverError("""{"detail": "Not Found"}"""))
+        assertEquals(300, ForgeQueueManager.serverError("""{"error": "E", "errors": "${"x".repeat(1000)}"}""")?.length)
+        // A FastAPI validation error lists its problems instead of a text: nothing is added then.
+        assertNull(ForgeQueueManager.serverError("""{"detail": [{"loc": ["body"], "msg": "field required"}]}"""))
+        assertNull(ForgeQueueManager.serverError("Internal Server Error"))
+        assertNull(ForgeQueueManager.serverError(""))
+        assertNull(ForgeQueueManager.serverError("[1, 2]"))
     }
 }

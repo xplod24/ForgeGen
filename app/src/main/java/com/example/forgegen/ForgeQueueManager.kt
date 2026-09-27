@@ -113,6 +113,35 @@ object ForgeQueueManager {
         } catch (e: Exception) {
             null
         }
+
+    /**
+     * The server's own error message from Forge's API error answer ({"error": "TypeError", "errors": "..."}), or a
+     * FastAPI "detail" text; null when the answer has neither.
+     */
+    fun serverError(body: String): String? =
+        try {
+            val answer =
+                com.google.gson.JsonParser
+                    .parseString(body)
+                    .asJsonObject
+
+            fun text(key: String) =
+                answer
+                    .get(key)
+                    ?.takeIf { it.isJsonPrimitive }
+                    ?.asString
+                    ?.trim()
+                    .orEmpty()
+            val message = text("errors").ifEmpty { text("detail") }
+            listOf(text("error"), message)
+                .filter { it.isNotEmpty() }
+                .joinToString(": ")
+                .take(300)
+                .ifEmpty { null }
+        } catch (e: Exception) {
+            null
+        }
+
     private const val MAX_AUTO_RETRIES = 3
     private const val AUTO_RETRY_DELAY_MS = 5_000L
 
@@ -669,7 +698,8 @@ object ForgeQueueManager {
                     )
                 } else {
                     _statusText.value = "Error: HTTP ${answer.code}"
-                    val reason = "The server returned HTTP ${answer.code}."
+                    // With the server's own explanation, when it gives one (2.4.1).
+                    val reason = "The server returned HTTP ${answer.code}." + (serverError(errorBody)?.let { " $it" } ?: "")
                     if (config.overnightMode) {
                         setAsideReason = reason
                     } else {
@@ -771,7 +801,7 @@ object ForgeQueueManager {
                 async {
                     try {
                         val api = ForgeRepository.generationApi ?: throw java.io.IOException("Not connected to the server")
-                        val response = api.generateImage(job.payload)
+                        val response = api.generateImage(job.payload.forServer())
                         answered.set(true)
                         if (response.isSuccessful) {
                             Answer.Images(response.body()?.use { readImages(it, saveToDevice) }.orEmpty())
@@ -1055,6 +1085,7 @@ object ForgeQueueManager {
             builder
                 .setContentTitle(title)
                 .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text)) // the whole server error, when expanded
                 .setColor(0xFFFF0000.toInt())
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true) // repeated connection losses update the alert without sounding again

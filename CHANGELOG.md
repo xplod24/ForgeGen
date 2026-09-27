@@ -1,3 +1,7 @@
+## 2.4.1
+- **Fixed "The server returned HTTP 500" with hires fix:** Forge's API fails the hires pass unless the request names its text encoder/VAE choice, so "Upscale" from the gallery and hires fix on the main screen stopped with this error. The app now sends Forge's "Use same choices", also for jobs already waiting in the queue.
+- Server errors now say what went wrong: the pause card and the notification show the server's own message after "The server returned HTTP 500." (for example "RuntimeError: ..."). Expand the notification to read all of it.
+
 ## 2.4.0
 ### Gallery
 - **Upscale Selected:** select images in the gallery and tap Upscale (or Upscale in the image viewer). Each image is made again with its own seed and settings plus hires fix, one job after another in the queue, and the results appear in the gallery. Choose ×1.5 to ×3, the upscaler (your hires fix one by default) and the denoising. Images already that large, without generation data, or made with a model the server does not have are left out, and the dialog says why.
