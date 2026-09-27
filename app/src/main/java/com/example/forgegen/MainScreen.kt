@@ -123,8 +123,7 @@ fun MainScreen(
 
     val onGalleryClick =
         rememberDebounced {
-            viewModel.setGalleryMode(GalleryMode.NORMAL)
-            viewModel.fetchGalleryFolder(config.galleryPath)
+            viewModel.openGallery(GalleryMode.NORMAL)
             navController.navigate("gallery")
         }
 
@@ -234,8 +233,7 @@ fun MainScreen(
                         onNext = { viewModel.sessionNext() },
                         onRecoverLast = { viewModel.recoverLastPrompt() },
                         onRecoverFromGallery = {
-                            viewModel.setGalleryMode(com.example.forgegen.GalleryMode.PROMPT_PICKER)
-                            viewModel.fetchGalleryFolder(config.galleryPath)
+                            viewModel.openGallery(GalleryMode.PROMPT_PICKER)
                             navController.navigate("gallery")
                         },
                     )

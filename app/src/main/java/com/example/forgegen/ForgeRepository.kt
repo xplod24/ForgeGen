@@ -113,8 +113,6 @@ object ForgeRepository {
 
     val repositoryScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    private fun showSnackbar(message: String) = ForgeSettingsManager.showSnackbar(message)
-
     fun showToast(message: String) = ForgeSettingsManager.showToast(message)
 
     // --- DELEGATED SETTINGS / STATE FROM ForgeSettingsManager ---
@@ -250,48 +248,6 @@ object ForgeRepository {
     fun loadPreset(name: String) = ForgeSettingsManager.loadPreset(name)
 
     fun deletePreset(name: String) = ForgeSettingsManager.deletePreset(name)
-
-    /** Reads the server's working folder and txt2img output folder from the gallery extension ([galleryPrefix]). */
-    fun fetchAutoConfig(galleryPrefix: String) {
-        repositoryScope.launch(Dispatchers.IO) {
-            try {
-                val response = forgeApi?.getGlobalSettingsDynamic("$galleryPrefix/global_setting")
-                if (response?.isSuccessful == true) {
-                    val body = response.body()
-                    val sdCwd = body?.sdCwd ?: ""
-                    val outdirTxt2Img = body?.globalSetting?.outdirTxt2ImgSamples ?: ""
-
-                    if (sdCwd.isNotEmpty()) {
-                        val separator = if (sdCwd.contains("\\")) "\\" else "/"
-                        val cleanOutdir = outdirTxt2Img.trimStart('/', '\\')
-                        // An output folder set as an absolute path in Forge must not be put under the working folder.
-                        val isAbsolute = outdirTxt2Img.startsWith("/") || Regex("^[A-Za-z]:[\\\\/]").containsMatchIn(outdirTxt2Img)
-                        val galleryPath =
-                            when {
-                                isAbsolute -> outdirTxt2Img
-                                cleanOutdir.isNotEmpty() -> "$sdCwd$separator$cleanOutdir"
-                                else -> sdCwd
-                            }
-
-                        val newConfig =
-                            config.value.copy(
-                                serverBasePath = sdCwd,
-                                galleryPath = galleryPath,
-                            )
-                        ForgeSettingsManager.saveConfig(newConfig)
-                        showSnackbar("Auto-config applied successfully")
-                    } else {
-                        showSnackbar("Failed to read path from server")
-                    }
-                } else {
-                    showSnackbar("Server returned HTTP ${response?.code()}")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to auto configure", e)
-                showSnackbar("Network error during auto-config")
-            }
-        }
-    }
 
     fun getPreviewUrl(
         originalPath: String,

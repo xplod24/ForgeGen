@@ -203,10 +203,7 @@ fun AppNavigation(
     LaunchedEffect(Unit) {
         if (context is MainActivity) {
             for (route in context.navEvents) {
-                if (route == "gallery") {
-                    viewModel.setGalleryMode(GalleryMode.NORMAL)
-                    viewModel.fetchGalleryFolder(viewModel.config.value.galleryPath)
-                }
+                if (route == "gallery") viewModel.openGallery(GalleryMode.NORMAL)
                 if (navController.currentDestination?.route != route) {
                     navController.navigate(route) { popUpTo(navController.graph.startDestinationId) }
                 }

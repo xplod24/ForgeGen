@@ -364,8 +364,6 @@ class ForgeViewModel(
     val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NEW (optimized filtering)
     val currentGalleryPath: StateFlow<String> = ForgeGalleryManager.currentGalleryPath
     val isGalleryLoading: StateFlow<Boolean> = ForgeGalleryManager.isGalleryLoading
-    val isGallerySyncing: StateFlow<IndicatorState> = ForgeGalleryManager.isGallerySyncing
-    val gallerySyncCurrentFile: StateFlow<String> = ForgeGalleryManager.gallerySyncCurrentFile
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = ForgeGalleryManager.gallerySyncProgress
     val galleryError: StateFlow<String?> = ForgeGalleryManager.galleryError
     val showGalleryMetadata: StateFlow<Boolean> = ForgeGalleryManager.showGalleryMetadata
@@ -373,6 +371,8 @@ class ForgeViewModel(
     val galleryMode: StateFlow<GalleryMode> = ForgeGalleryManager.galleryMode
 
     val isGalleryIndexing: StateFlow<Boolean> = ForgeGalleryManager.isIndexing
+    val galleryIndexError: StateFlow<String?> = ForgeGalleryManager.indexError
+    val galleryExtension: StateFlow<ForgeGalleryManager.ExtensionStatus> = ForgeGalleryManager.extension
     val galleryIndexedImageCount: StateFlow<Int> = ForgeGalleryManager.indexedImageCount
     val favoritePaths: StateFlow<Set<String>> = ForgeGalleryManager.favoritePaths
     val isRestoringPrompt: StateFlow<IndicatorState> = ForgeGalleryManager.isRestoringPrompt
@@ -455,8 +455,6 @@ class ForgeViewModel(
         updated: GenerationPreset,
     ) = ForgeSettingsManager.updatePreset(oldName, updated)
 
-    fun fetchAutoConfig() = ForgeRepository.fetchAutoConfig(networkManager.galleryApiPrefix.value)
-
     fun getPreviewUrl(
         originalPath: String,
         isLora: Boolean = false,
@@ -471,14 +469,6 @@ class ForgeViewModel(
 
     fun wipeGalleryIndex() {
         ForgeGalleryManager.clearDatabase()
-    }
-    
-    fun cancelManualGallerySync() {
-        ForgeGalleryManager.cancelManualGallerySync()
-    }
-    
-    fun putSyncToBackground() {
-        ForgeGalleryManager.putSyncToBackground()
     }
 
     fun wipeSettings() {
@@ -647,7 +637,19 @@ class ForgeViewModel(
 
     fun fetchGalleryFolder(path: String) = ForgeGalleryManager.fetchGalleryFolder(path)
 
-    fun triggerManualGallerySync() = ForgeGalleryManager.triggerManualGallerySync()
+    /** Opens the gallery at its top folder (or shows why it cannot: no gallery extension on the server). */
+    fun openGallery(mode: GalleryMode) = ForgeGalleryManager.openGallery(mode)
+
+    fun refreshGallery() = ForgeGalleryManager.refreshGallery()
+
+    /** "Check Again" in the gallery: asks the server for its gallery extension, or first tries to reach the server. */
+    fun checkGalleryExtension() {
+        if (ForgeRepository.isConnected.value) ForgeGalleryManager.checkExtension() else ForgeRepository.reconnect()
+    }
+
+    fun readyGalleryRoot(): String? = ForgeGalleryManager.readyRoot()
+
+    suspend fun galleryPositivePrompt(path: String): String = ForgeGalleryManager.positivePrompt(path)
 
     suspend fun extractMetadataFromUri(uri: android.net.Uri): String? = ForgeGalleryManager.extractMetadataFromUri(uri)
 
@@ -655,7 +657,6 @@ class ForgeViewModel(
         _importedImageMetadata.value = data
     }
 
-    fun setGalleryMode(mode: GalleryMode) = ForgeGalleryManager.setGalleryMode(mode)
 
     fun addLora(name: String) = ForgeRepository.addLora(name)
 

@@ -31,6 +31,8 @@ data class GenerationPreset(
 
 data class AppConfig(
     var apiUrl: String = "http://192.168.1.90:7860",
+    // Both read from the server's gallery extension when it is found (ForgeGalleryManager.detectExtension, 2.1.0):
+    // Forge's working folder, and the folder its txt2img images are saved to (the gallery's top folder).
     var serverBasePath: String = "",
     var galleryPath: String = "",
     // THEME_SYSTEM, THEME_LIGHT or THEME_DARK (was the switch "isDarkMode" up to 1.1.4-1).
@@ -76,7 +78,33 @@ data class AppConfig(
     var vibrateOnFinish: Boolean = true,
     // New releases are downloaded and installed in the background (SelfUpdate, 2.0.2); off: only a notification.
     var autoInstallUpdates: Boolean = true,
+    // Full-screen images zoom with a pinch or a double tap (2.1.0).
+    var pinchToZoom: Boolean = true,
+    // The gallery's layout, a GalleryView name (2.1.0).
+    var galleryView: String = GalleryView.GRID_3.name,
 )
+
+/** The gallery's layouts: a grid of 2 to 5 columns, or a list with small, medium or large thumbnails. */
+enum class GalleryView(
+    val label: String,
+    val columns: Int,
+) {
+    GRID_2("2 Columns", 2),
+    GRID_3("3 Columns", 3),
+    GRID_4("4 Columns", 4),
+    GRID_5("5 Columns", 5),
+    LIST_SMALL("Small", 0),
+    LIST_MEDIUM("Medium", 0),
+    LIST_LARGE("Large", 0),
+    ;
+
+    val isList: Boolean get() = columns == 0
+
+    companion object {
+        /** The saved layout; an unknown name (e.g. from a newer version) is the default grid. */
+        fun of(name: String?): GalleryView = entries.firstOrNull { it.name == name } ?: GRID_3
+    }
+}
 
 const val THEME_SYSTEM = "System"
 const val THEME_LIGHT = "Light"
@@ -223,6 +251,7 @@ data class GalleryImageEntity(
     val sampler: String,
     val seed: String,
     val loras: String,
+    // When the generation data was read; 0 while it could not be read (the image is shown, the data is tried again).
     val savedAt: Long,
 )
 
@@ -246,6 +275,14 @@ interface GalleryImageDao {
 
     @Query("SELECT fullpath FROM gallery_images")
     suspend fun getAllPaths(): List<String>
+
+    /** Images whose generation data could not be read yet ([GalleryImageEntity.savedAt] 0); tried again by each sync. */
+    @Query("SELECT fullpath FROM gallery_images WHERE savedAt = 0")
+    suspend fun getUnreadPaths(): List<String>
+
+    /** The positive prompt of one image (the gallery's list shows it); null when the image is not indexed. */
+    @Query("SELECT positivePrompt FROM gallery_images WHERE fullpath = :path LIMIT 1")
+    suspend fun getPositivePrompt(path: String): String?
 
     /** Images whose positive or negative prompt matches the LIKE [pattern] (with '\' as the escape character). */
     @Query("SELECT fullpath FROM gallery_images WHERE positivePrompt LIKE :pattern ESCAPE '\\' OR negativePrompt LIKE :pattern ESCAPE '\\'")
@@ -438,7 +475,9 @@ data class GlobalSettingResponseDto(
 )
 
 data class GlobalSettingInnerDto(
-    @SerializedName("outdir_txt2img_samples") val outdirTxt2ImgSamples: String?,
+    // Forge saves every image here when it is set, otherwise txt2img images go to outdirTxt2ImgSamples.
+    @SerializedName("outdir_samples") val outdirSamples: String? = null,
+    @SerializedName("outdir_txt2img_samples") val outdirTxt2ImgSamples: String? = null,
 )
 
 /* ============================================================================

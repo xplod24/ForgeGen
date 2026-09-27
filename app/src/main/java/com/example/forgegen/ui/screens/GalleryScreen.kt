@@ -2,11 +2,13 @@ package com.example.forgegen.ui.screens
 import com.example.forgegen.*
 import com.example.forgegen.ui.components.*
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -18,16 +20,20 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -35,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,11 +53,14 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -61,6 +71,9 @@ import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 /* ============================================================================
  * SHIMMER EFFECT (SKELETON LOADING)
@@ -89,8 +102,14 @@ enum class ActiveMenu { NONE, FILTER, SORT, SETTINGS }
 
 private val FavoriteGold = Color(0xFFFFD54F)
 
+/** Slide-down panels (sort, search, settings): the same speed in and out. */
+private const val MENU_ANIMATION_MS = 200
+
 /* ============================================================================
  * GALLERY SCREEN COMPOSABLE
+ * The server's images through its Infinite Image Browsing extension (without it the gallery only explains what is
+ * missing). The index behind "All Images" and the search keeps itself up to date; the layout is a grid of 2 to 5
+ * columns or a list with the prompt, date and quick buttons (2.1.0).
  * ============================================================================ */
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,12 +120,8 @@ fun GalleryScreen(
 ) {
     var activeMenu by remember { mutableStateOf(ActiveMenu.NONE) }
     val galleryFilters by viewModel.galleryFilters.collectAsStateWithLifecycle()
-    val availableModels by viewModel.availableModels.collectAsStateWithLifecycle()
-    val availableLoras by viewModel.galleryAvailableLoras.collectAsStateWithLifecycle()
 
     var tempFilters by remember { mutableStateOf(galleryFilters) }
-    var showBasePathDialog by remember { mutableStateOf(false) }
-    var showPathDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeMenu, galleryFilters) {
         if (activeMenu != ActiveMenu.NONE) {
@@ -120,23 +135,38 @@ fun GalleryScreen(
     val error by viewModel.galleryError.collectAsStateWithLifecycle()
     val galleryMode by viewModel.galleryMode.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
+    val extension by viewModel.galleryExtension.collectAsStateWithLifecycle()
+    val isConnected by viewModel.isConnected.collectAsStateWithLifecycle()
 
-    val isGallerySyncing by viewModel.isGallerySyncing.collectAsStateWithLifecycle()
     val isIndexing by viewModel.isGalleryIndexing.collectAsStateWithLifecycle()
+    val indexError by viewModel.galleryIndexError.collectAsStateWithLifecycle()
     val indexedImageCount by viewModel.galleryIndexedImageCount.collectAsStateWithLifecycle()
-    val gallerySyncCurrentFile by viewModel.gallerySyncCurrentFile.collectAsStateWithLifecycle()
     val gallerySyncProgress by viewModel.gallerySyncProgress.collectAsStateWithLifecycle()
 
     // Subscription to the list of favorite paths
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
 
+    val view = GalleryView.of(config.galleryView)
     var fullscreenIndex by remember { mutableIntStateOf(-1) }
 
-    // Keep the index (search, "All Images") up to date: a quick sync that only asks for changed folders.
+    // The index behind search and "All Images" keeps itself up to date: an update when the gallery opens.
     LaunchedEffect(Unit) { viewModel.autoSyncGallery() }
+
+    // The extension was found while the gallery was open (e.g. the server came back): show its top folder.
+    LaunchedEffect(extension.state) {
+        if (extension.state == ForgeGalleryManager.Extension.READY && viewModel.currentGalleryPath.value.isEmpty()) {
+            viewModel.openGallery(galleryMode)
+        }
+    }
 
     val galleryRoot = config.galleryPath.ifEmpty { "Root" }
     val isSearch = galleryFilters.isSearch
+    val isAllImages = currentPath == ForgeGalleryManager.ALL_IMAGES
+    // Without the extension there is nothing to browse: the screen says why instead.
+    val showExtensionStatus =
+        extension.state == ForgeGalleryManager.Extension.MISSING ||
+            extension.state == ForgeGalleryManager.Extension.FAILED ||
+            (currentPath.isEmpty() && extension.state != ForgeGalleryManager.Extension.READY)
 
     val safePopBack = {
         if (navController.currentDestination?.route == "gallery") {
@@ -145,7 +175,7 @@ fun GalleryScreen(
     }
 
     val onBack = {
-        if (error != null) {
+        if (error != null || showExtensionStatus) {
             safePopBack()
         } else if (currentPath.startsWith("virtual://")) {
             // Favorites and All Images are opened from the gallery's top folder, so Back returns there.
@@ -180,14 +210,31 @@ fun GalleryScreen(
     LaunchedEffect(currentPath, galleryFilters) { selected = emptySet() }
 
     BackHandler(onBack = {
-        if (fullscreenIndex >= 0) {
-            fullscreenIndex = -1
-        } else if (selectionMode) {
-            selected = emptySet()
-        } else {
-            onBack()
+        when {
+            fullscreenIndex >= 0 -> fullscreenIndex = -1
+            activeMenu != ActiveMenu.NONE -> activeMenu = ActiveMenu.NONE
+            selectionMode -> selected = emptySet()
+            else -> onBack()
         }
     })
+
+    // A tap on a folder opens it; on an image it selects (in selection mode), picks its prompt or shows it.
+    val onItemClick: (Int, GalleryItem) -> Unit = { index, item ->
+        val isSelected = item.fullpath in selected
+        when {
+            item.isDir -> viewModel.fetchGalleryFolder(item.fullpath)
+            selectionMode -> selected = if (isSelected) selected - item.fullpath else selected + item.fullpath
+            galleryMode == GalleryMode.PROMPT_PICKER -> {
+                viewModel.recoverPromptFromImage(item)
+                safePopBack()
+            }
+            else -> fullscreenIndex = index
+        }
+    }
+    val onItemLongClick: (GalleryItem) -> Unit = { item ->
+        if (!item.isDir && galleryMode != GalleryMode.PROMPT_PICKER) selected = selected + item.fullpath
+    }
+    val toggleMenu: (ActiveMenu) -> Unit = { menu -> activeMenu = if (activeMenu == menu) ActiveMenu.NONE else menu }
 
     Scaffold(
         topBar = {
@@ -225,88 +272,47 @@ fun GalleryScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SETTINGS) ActiveMenu.NONE else ActiveMenu.SETTINGS }) {
+                        IconButton(onClick = { toggleMenu(ActiveMenu.SETTINGS) }) {
                             Icon(Icons.Default.Settings, "Settings")
                         }
-                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.SORT) ActiveMenu.NONE else ActiveMenu.SORT }) {
+                        // "All Images" is always the newest first, so it has nothing to sort.
+                        IconButton(onClick = { toggleMenu(ActiveMenu.SORT) }, enabled = !showExtensionStatus && !isAllImages) {
                             Icon(Icons.Default.Sort, "Sort")
                         }
-                        IconButton(onClick = { activeMenu = if (activeMenu == ActiveMenu.FILTER) ActiveMenu.NONE else ActiveMenu.FILTER }) {
+                        IconButton(onClick = { toggleMenu(ActiveMenu.FILTER) }, enabled = !showExtensionStatus) {
                             Icon(
                                 Icons.Default.FilterList,
                                 "Filter",
                                 tint = if (isSearch) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                             )
                         }
-                        IconButton(onClick = { viewModel.triggerManualGallerySync() }) {
-                            Icon(Icons.Default.Sync, "Sync Database")
-                        }
-                        IconButton(onClick = { viewModel.fetchGalleryFolder(currentPath) }) {
+                        GalleryViewButton(
+                            view = view,
+                            enabled = !showExtensionStatus,
+                            onSelect = { viewModel.saveConfig(config.copy(galleryView = it.name)) },
+                        )
+                        IconButton(onClick = { viewModel.refreshGallery() }) {
                             Icon(Icons.Default.Refresh, "Refresh")
                         }
-                    }
+                    },
                 )
             }
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             // BREADCRUMB NAVIGATION
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isSearch) {
-                    Text(
-                        "Search in the whole gallery: ${displayedFiles.size} found",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                } else if (currentPath == ForgeGalleryManager.FAVORITES) {
-                    Text("⭐ Favorites", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                } else if (currentPath == ForgeGalleryManager.ALL_IMAGES) {
-                    Text("🕒 All Images", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                } else {
-                    val pathSegments = if (currentPath.isEmpty()) listOf("Root") else listOf("Root") + currentPath.split(Regex("[/\\\\]")).filter { it.isNotEmpty() }
-                    pathSegments.forEachIndexed { index, segment ->
-                        val isLast = index == pathSegments.size - 1
-                        Text(
-                            text = segment,
-                            fontSize = 14.sp,
-                            fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isLast) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .clickable(enabled = !isLast) {
-                                    if (index == 0) {
-                                        viewModel.fetchGalleryFolder(galleryRoot)
-                                    } else {
-                                        // Reconstruct path up to this segment; split() dropped the leading "/" of a Linux path.
-                                        val root = if (currentPath.startsWith("/")) "/" else ""
-                                        val subPath = root + pathSegments.drop(1).take(index).joinToString("/")
-                                        viewModel.fetchGalleryFolder(subPath)
-                                    }
-                                }
-                                .padding(vertical = 4.dp)
-                        )
-                        if (!isLast) {
-                            Icon(
-                                Icons.Default.KeyboardArrowRight,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp).padding(horizontal = 4.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+            if (!showExtensionStatus) {
+                Breadcrumbs(
+                    currentPath = currentPath,
+                    isSearch = isSearch,
+                    found = displayedFiles.size,
+                    onOpen = { path -> viewModel.fetchGalleryFolder(path.ifEmpty { galleryRoot }) },
+                )
             }
 
-            // A quiet index sync (or one sent to the background) shows only this thin bar.
+            // The index updates itself; only this thin bar shows it.
             AnimatedVisibility(
-                visible = isIndexing && isGallerySyncing == IndicatorState.IDLE,
+                visible = isIndexing && !showExtensionStatus,
                 enter = fadeIn(tween(OVERLAY_FADE_MS)),
                 exit = fadeOut(tween(OVERLAY_FADE_MS)),
             ) {
@@ -319,416 +325,152 @@ fun GalleryScreen(
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // SLIDE-DOWN MENUS (the plain AnimatedVisibility: the Column's version cannot be used inside this Box)
-            androidx.compose.animation.AnimatedVisibility(
-                visible = activeMenu != ActiveMenu.NONE,
-                enter = expandVertically(animationSpec = tween(200, easing = LinearOutSlowInEasing)),
-                exit = shrinkVertically(animationSpec = tween(200, easing = FastOutLinearInEasing)),
-                modifier = Modifier.align(Alignment.TopCenter).zIndex(100f)
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth().zIndex(100f),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
-                    tonalElevation = 8.dp,
-                    shadowElevation = 8.dp
-                ) {
-                    if (activeMenu == ActiveMenu.SORT) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Sort By", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Button(onClick = { viewModel.applyGalleryFilters(tempFilters); activeMenu = ActiveMenu.NONE }) { Text("Confirm") }
-                            }
-                            Spacer(Modifier.height(8.dp))
-
-                            val sortOptions = listOf(
-                                ForgeGalleryManager.SortOrder.NEWEST to "Newest First",
-                                ForgeGalleryManager.SortOrder.OLDEST to "Oldest First",
-                                ForgeGalleryManager.SortOrder.NAME_ASC to "A-Z (Alphabetical)",
-                                ForgeGalleryManager.SortOrder.NAME_DESC to "Z-A (Reverse Alphabetical)"
-                            )
-
-                            sortOptions.forEach { (order, label) ->
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { tempFilters = tempFilters.copy(sortOrder = order) }.padding(vertical = 4.dp)) {
-                                    RadioButton(selected = tempFilters.sortOrder == order, onClick = { tempFilters = tempFilters.copy(sortOrder = order) })
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(label)
-                                }
-                            }
-                        }
-                    } else if (activeMenu == ActiveMenu.FILTER) {
-                        Column(modifier = Modifier.padding(16.dp).heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Search Gallery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Row {
-                                    TextButton(onClick = {
-                                        viewModel.clearGalleryFilters()
-                                        activeMenu = ActiveMenu.NONE
-                                    }) { Text("Clear All") }
-                                    Spacer(Modifier.width(8.dp))
-                                    Button(onClick = {
-                                        viewModel.applyGalleryFilters(tempFilters)
-                                        activeMenu = ActiveMenu.NONE
-                                    }) { Text("Confirm") }
-                                }
-                            }
-                            Text(
-                                "Searches all indexed images of the gallery, not only this folder ($indexedImageCount indexed).",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(8.dp))
-
-                            OutlinedTextField(
-                                value = tempFilters.name,
-                                onValueChange = { tempFilters = tempFilters.copy(name = it) },
-                                label = { Text("File Name") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-
-                            OutlinedTextField(
-                                value = tempFilters.prompt,
-                                onValueChange = { tempFilters = tempFilters.copy(prompt = it) },
-                                label = { Text("Prompt Tag (Pos/Neg)") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(16.dp))
-
-                            // Models section: an image has one model, so any of the selected ones matches.
-                            var modelsExpanded by remember { mutableStateOf(false) }
-                            Row(modifier = Modifier.fillMaxWidth().clickable { modelsExpanded = !modelsExpanded }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Models (${tempFilters.models.size} selected)", fontWeight = FontWeight.Bold)
-                                Text(if (modelsExpanded) "▲" else "▼")
-                            }
-                            if (modelsExpanded) {
-                                if (availableModels.isEmpty()) {
-                                    Text("No models indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
-                                } else {
-                                    availableModels.forEach { model ->
-                                        val isChecked = tempFilters.models.contains(model)
-                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
-                                            val newModels = tempFilters.models.toMutableSet()
-                                            if (isChecked) newModels.remove(model) else newModels.add(model)
-                                            tempFilters = tempFilters.copy(models = newModels)
-                                        }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)) {
-                                            Checkbox(checked = isChecked, onCheckedChange = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-
-                            // Loras section
-                            var lorasExpanded by remember { mutableStateOf(false) }
-                            Row(modifier = Modifier.fillMaxWidth().clickable { lorasExpanded = !lorasExpanded }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("LoRAs (${tempFilters.loras.size} selected)", fontWeight = FontWeight.Bold)
-                                Text(if (lorasExpanded) "▲" else "▼")
-                            }
-                            if (lorasExpanded) {
-                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
-                                    Text("Match:", style = MaterialTheme.typography.bodySmall)
-                                    Spacer(Modifier.width(8.dp))
-                                    FilterChip(selected = !tempFilters.lorasIsAnd, onClick = { tempFilters = tempFilters.copy(lorasIsAnd = false) }, label = { Text("Any") })
-                                    Spacer(Modifier.width(8.dp))
-                                    FilterChip(selected = tempFilters.lorasIsAnd, onClick = { tempFilters = tempFilters.copy(lorasIsAnd = true) }, label = { Text("All") })
-                                }
-                                if (availableLoras.isEmpty()) {
-                                    Text("No LoRAs indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
-                                } else {
-                                    availableLoras.forEach { lora ->
-                                        val isChecked = tempFilters.loras.contains(lora)
-                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
-                                            val newLoras = tempFilters.loras.toMutableSet()
-                                            if (isChecked) newLoras.remove(lora) else newLoras.add(lora)
-                                            tempFilters = tempFilters.copy(loras = newLoras)
-                                        }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp)) {
-                                            Checkbox(checked = isChecked, onCheckedChange = null)
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(lora, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if (activeMenu == ActiveMenu.SETTINGS) {
-                        Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Gallery Settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                IconButton(onClick = { activeMenu = ActiveMenu.NONE }) {
-                                    Icon(Icons.Default.Close, "Close")
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        viewModel.showToast("Requesting paths from server...")
-                                        viewModel.fetchAutoConfig()
-                                    }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = "Auto-Config Gallery Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(
-                                        text = "Tap to auto-detect base and gallery folders from server",
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                        lineHeight = 18.sp,
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showBasePathDialog = true }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = "Server Base Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(
-                                        text = config.serverBasePath.ifEmpty { "Not set" },
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showPathDialog = true }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = "Gallery Server Path", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(
-                                        text = config.galleryPath.ifEmpty { "Not set" },
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { viewModel.saveConfig(config.copy(swipeToBrowseGallery = !config.swipeToBrowseGallery)) }
-                                    .padding(vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = "Swipe to Browse Images", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                                    Text(
-                                        text = "Use horizontal swiping in fullscreen preview",
-                                        fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                        lineHeight = 18.sp,
-                                    )
-                                }
-                                Switch(
-                                    checked = config.swipeToBrowseGallery,
-                                    onCheckedChange = null,
-                                )
-                            }
-
-                            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-                                Text(text = "Save to Phone Automatically", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
-                                val saveLocation = DeviceImages.locationName(config.savePrivately)
-                                val autoSaveDescription =
-                                    when (config.autoSaveMode) {
-                                        AUTO_SAVE_FAVORITES -> "Images you star are saved to $saveLocation"
-                                        AUTO_SAVE_ALL ->
-                                            "New images from the server are saved to $saveLocation on Wi-Fi, " +
-                                                "while the app runs (also those made on the PC)"
-                                        else -> "Images are only saved when you tap Save"
-                                    }
-                                Text(
-                                    text = autoSaveDescription,
-                                    fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                                    lineHeight = 18.sp,
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    listOf(AUTO_SAVE_OFF, AUTO_SAVE_FAVORITES, AUTO_SAVE_ALL).forEach { mode ->
-                                        FilterChip(
-                                            selected = config.autoSaveMode == mode,
-                                            onClick = { viewModel.setAutoSaveMode(mode) },
-                                            label = { Text(mode) },
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-
-                if (isLoading) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(4.dp),
-                ) {
-                    items(24) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .padding(4.dp)
-                                    .aspectRatio(1f)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .shimmer(),
+                when {
+                    showExtensionStatus ->
+                        ExtensionStatusPanel(
+                            status = extension,
+                            isConnected = isConnected,
+                            onCheckAgain = { viewModel.checkGalleryExtension() },
+                            onOpenPage = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ForgeGalleryManager.EXTENSION_URL)))
+                            },
+                            modifier = Modifier.align(Alignment.Center),
                         )
-                    }
-                }
-            } else if (error != null) {
-                Column(modifier = Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
-                    Spacer(Modifier.height(8.dp))
-                    Text(error!!, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { viewModel.fetchGalleryFolder(currentPath) }) { Text("Retry") }
-                }
-            } else if (displayedFiles.isEmpty()) {
-                val emptyText =
-                    when {
-                        (isSearch || currentPath == ForgeGalleryManager.ALL_IMAGES) && indexedImageCount == 0 ->
-                            if (isIndexing) "Indexing the gallery..." else "The gallery is not indexed yet. Tap Sync to index it."
-                        isSearch -> "No images match the search"
-                        else -> "No files found"
-                    }
-                Text(emptyText, modifier = Modifier.align(Alignment.Center).padding(16.dp), color = Color.Gray, textAlign = TextAlign.Center)
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(4.dp),
-                ) {
-                    itemsIndexed(
-                        displayedFiles,
-                        key = { _, item -> item.fullpath },
-                        contentType = { _, item -> if (item.isDir) "dir" else "image" },
-                    ) { index, item ->
-                        if (item.isDir) {
-                            val folderIcon =
-                                when (item.fullpath) {
-                                    ForgeGalleryManager.FAVORITES -> Icons.Default.Star
-                                    ForgeGalleryManager.ALL_IMAGES -> Icons.Default.Schedule
-                                    else -> Icons.Default.Folder
-                                }
-                            val folderColor = if (item.fullpath == ForgeGalleryManager.FAVORITES) FavoriteGold else MaterialTheme.colorScheme.primary
-                            Card(
-                                modifier = Modifier.padding(4.dp).aspectRatio(1f).clickable { viewModel.fetchGalleryFolder(item.fullpath) },
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxSize().padding(8.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = folderIcon,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(48.dp),
-                                        tint = folderColor,
-                                    )
-                                    Spacer(Modifier.height(8.dp))
-                                    Text(
-                                        item.name,
-                                        fontSize = 12.sp,
-                                        textAlign = TextAlign.Center,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
+                    // The top folder is on its way (the extension was just found): placeholders, not "No files found".
+                    isLoading || (currentPath.isEmpty() && error == null) -> LoadingPlaceholders(view)
+                    error != null ->
+                        Column(modifier = Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
+                            Spacer(Modifier.height(8.dp))
+                            Text(error!!, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(16.dp))
+                            Button(onClick = { viewModel.refreshGallery() }) { Text("Retry") }
+                        }
+                    displayedFiles.isEmpty() -> {
+                        val emptyText =
+                            when {
+                                (isSearch || isAllImages) && indexedImageCount == 0 ->
+                                    when {
+                                        isIndexing -> "Indexing the gallery..."
+                                        indexError != null -> "The gallery could not be indexed: $indexError"
+                                        else -> "No images in the gallery yet"
+                                    }
+                                isSearch -> "No images match the search"
+                                else -> "No files found"
                             }
-                        } else {
-                            val isFavorite = favoritePaths.contains(item.fullpath) || currentPath == ForgeGalleryManager.FAVORITES
-                            val isSelected = item.fullpath in selected
+                        Text(emptyText, modifier = Modifier.align(Alignment.Center).padding(16.dp), color = Color.Gray, textAlign = TextAlign.Center)
+                    }
+                    view.isList ->
+                        GalleryList(
+                            viewModel = viewModel,
+                            view = view,
+                            files = displayedFiles,
+                            favoritePaths = favoritePaths,
+                            inFavorites = currentPath == ForgeGalleryManager.FAVORITES,
+                            selected = selected,
+                            onClick = onItemClick,
+                            onLongClick = onItemLongClick,
+                        )
+                    else ->
+                        GalleryGrid(
+                            viewModel = viewModel,
+                            columns = view.columns,
+                            files = displayedFiles,
+                            favoritePaths = favoritePaths,
+                            inFavorites = currentPath == ForgeGalleryManager.FAVORITES,
+                            selected = selected,
+                            onClick = onItemClick,
+                            onLongClick = onItemLongClick,
+                        )
+                }
 
-                            // A still gold frame: the animated one kept redrawing every favorite as long as the gallery was open.
-                            val frameModifier =
-                                when {
-                                    isSelected -> Modifier.border(4.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
-                                    isFavorite -> Modifier.border(4.dp, FavoriteGold, MaterialTheme.shapes.small)
-                                    else -> Modifier
-                                }
-
-                            Box(
-                                modifier =
-                                    Modifier
-                                        .padding(4.dp)
-                                        .aspectRatio(1f)
-                                        .then(frameModifier)
-                                        .clip(MaterialTheme.shapes.small)
-                                        .combinedClickable(
-                                            onLongClick = {
-                                                if (galleryMode != GalleryMode.PROMPT_PICKER) selected = selected + item.fullpath
-                                            },
-                                            onClick = {
-                                                when {
-                                                    selectionMode ->
-                                                        selected = if (isSelected) selected - item.fullpath else selected + item.fullpath
-                                                    galleryMode == GalleryMode.PROMPT_PICKER -> {
-                                                        viewModel.recoverPromptFromImage(item)
-                                                        if (navController.currentDestination?.route == "gallery") {
-                                                            navController.popBackStack()
-                                                        }
-                                                    }
-                                                    else -> fullscreenIndex = index
-                                                }
-                                            },
-                                        ),
-                            ) {
-                                GalleryThumbnail(viewModel, item)
-                                if (isSelected) {
-                                    Icon(
-                                        Icons.Default.CheckCircle,
-                                        contentDescription = "Selected",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).background(Color.White, CircleShape),
+                // SLIDE-DOWN MENUS over a dimmed gallery; a tap on it closes them. The panel keeps showing its menu
+                // while it closes (it used to empty itself at once, so it vanished instead of sliding up).
+                val shownMenu = rememberLastActive(activeMenu, ActiveMenu.NONE)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = activeMenu != ActiveMenu.NONE,
+                    enter = fadeIn(tween(MENU_ANIMATION_MS)),
+                    exit = fadeOut(tween(MENU_ANIMATION_MS)),
+                    modifier = Modifier.matchParentSize().zIndex(99f),
+                ) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.32f))
+                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                                    activeMenu = ActiveMenu.NONE
+                                },
+                    )
+                }
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = activeMenu != ActiveMenu.NONE,
+                    enter =
+                        expandVertically(tween(MENU_ANIMATION_MS, easing = LinearOutSlowInEasing), expandFrom = Alignment.Top) +
+                            fadeIn(tween(MENU_ANIMATION_MS)),
+                    exit =
+                        shrinkVertically(tween(MENU_ANIMATION_MS, easing = FastOutLinearInEasing), shrinkTowards = Alignment.Top) +
+                            fadeOut(tween(MENU_ANIMATION_MS)),
+                    modifier = Modifier.align(Alignment.TopCenter).zIndex(100f),
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.97f),
+                        tonalElevation = 8.dp,
+                        shadowElevation = 8.dp,
+                    ) {
+                        // Switching from one panel to another cross-fades and resizes instead of jumping.
+                        AnimatedContent(
+                            targetState = shownMenu,
+                            transitionSpec = {
+                                fadeIn(tween(MENU_ANIMATION_MS)) togetherWith fadeOut(tween(MENU_ANIMATION_MS)) using
+                                    SizeTransform(clip = true)
+                            },
+                            label = "gallery_menu",
+                        ) { menu ->
+                            when (menu) {
+                                ActiveMenu.SORT ->
+                                    SortPanel(
+                                        filters = tempFilters,
+                                        onChange = { tempFilters = it },
+                                        onConfirm = {
+                                            viewModel.applyGalleryFilters(tempFilters)
+                                            activeMenu = ActiveMenu.NONE
+                                        },
                                     )
-                                }
-                                Box(
-                                    modifier =
-                                        Modifier
-                                            .align(Alignment.BottomCenter)
-                                            .fillMaxWidth()
-                                            .background(Color.Black.copy(alpha = 0.6f))
-                                            .padding(vertical = 4.dp, horizontal = 2.dp),
-                                ) {
-                                    Text(
-                                        text = item.name,
-                                        color = Color.White,
-                                        fontSize = 9.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth(),
+                                ActiveMenu.FILTER ->
+                                    FilterPanel(
+                                        viewModel = viewModel,
+                                        filters = tempFilters,
+                                        onChange = { tempFilters = it },
+                                        indexedImageCount = indexedImageCount,
+                                        isIndexing = isIndexing,
+                                        indexError = indexError,
+                                        onClear = {
+                                            viewModel.clearGalleryFilters()
+                                            activeMenu = ActiveMenu.NONE
+                                        },
+                                        onConfirm = {
+                                            viewModel.applyGalleryFilters(tempFilters)
+                                            activeMenu = ActiveMenu.NONE
+                                        },
                                     )
-                                }
+                                ActiveMenu.SETTINGS ->
+                                    GallerySettingsPanel(
+                                        viewModel = viewModel,
+                                        config = config,
+                                        extensionReady = extension.state == ForgeGalleryManager.Extension.READY,
+                                        onClose = { activeMenu = ActiveMenu.NONE },
+                                    )
+                                ActiveMenu.NONE -> Spacer(Modifier.fillMaxWidth())
                             }
                         }
                     }
                 }
             }
         }
-    }
 
-    // FAIL-SAFE: IndexOutOfBoundsException Fail-Safe
+        // FAIL-SAFE: IndexOutOfBoundsException Fail-Safe
         if (fullscreenIndex >= 0) {
             if (displayedFiles.isEmpty()) {
                 fullscreenIndex = -1
@@ -747,136 +489,755 @@ fun GalleryScreen(
                 )
             }
         }
+    }
+}
 
-        if (showBasePathDialog) {
-            var tempPath by remember { mutableStateOf(config.serverBasePath) }
-            AlertDialog(
-                onDismissRequest = { showBasePathDialog = false },
-                title = { Text("Server Base Path") },
-                text = { OutlinedTextField(value = tempPath, onValueChange = { tempPath = it }, modifier = Modifier.fillMaxWidth()) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.saveConfig(config.copy(serverBasePath = tempPath))
-                        showBasePathDialog = false
-                    }) { Text("Save") }
-                },
-                dismissButton = { TextButton(onClick = { showBasePathDialog = false }) { Text("Cancel") } },
+/** Where the gallery is: the folder path (each part opens that folder), or the search / a virtual folder. */
+@Composable
+private fun Breadcrumbs(
+    currentPath: String,
+    isSearch: Boolean,
+    found: Int,
+    onOpen: (String) -> Unit,
+) {
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (isSearch) {
+            Text(
+                "Search in the whole gallery: $found found",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
             )
-        }
-
-        if (showPathDialog) {
-            var inputPath by remember { mutableStateOf(config.galleryPath) }
-            AlertDialog(
-                onDismissRequest = { showPathDialog = false },
-                title = { Text("Gallery Server Path") },
-                text = {
-                    Column {
-                        Text("Enter the remote path for IIB gallery.", fontSize = 14.sp)
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = inputPath,
-                            onValueChange = { inputPath = it },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        viewModel.saveConfig(config.copy(galleryPath = inputPath))
-                        showPathDialog = false
-                    }) { Text("Save") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showPathDialog = false }) { Text("Cancel") }
-                }
-            )
-        }
-
-        // GALLERY SYNC PROGRESS OVERLAY (fades in and out like the other overlays)
-        val shownSyncState = rememberLastActive(isGallerySyncing, IndicatorState.IDLE)
-        AnimatedVisibility(
-            visible = isGallerySyncing != IndicatorState.IDLE,
-            modifier = Modifier.zIndex(150f),
-            enter = fadeIn(tween(OVERLAY_FADE_MS)),
-            exit = fadeOut(tween(OVERLAY_FADE_MS)),
-        ) {
-            Box(
-                modifier =
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = 0.7f))
-                        .clickable(enabled = false) {},
-                contentAlignment = Alignment.Center,
-            ) {
-                Card(
+        } else if (currentPath == ForgeGalleryManager.FAVORITES) {
+            Text("⭐ Favorites", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+        } else if (currentPath == ForgeGalleryManager.ALL_IMAGES) {
+            Text("🕒 All Images · newest first", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+        } else {
+            val pathSegments = if (currentPath.isEmpty()) listOf("Root") else listOf("Root") + currentPath.split(Regex("[/\\\\]")).filter { it.isNotEmpty() }
+            pathSegments.forEachIndexed { index, segment ->
+                val isLast = index == pathSegments.size - 1
+                Text(
+                    text = segment,
+                    fontSize = 14.sp,
+                    fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isLast) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.primary,
                     modifier =
                         Modifier
-                            .padding(32.dp)
-                            .fillMaxWidth(0.85f)
-                            .animateContentSize(animationSpec = tween(200, easing = FastOutSlowInEasing)),
-                    shape = MaterialTheme.shapes.large,
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            .clickable(enabled = !isLast) {
+                                if (index == 0) {
+                                    onOpen("")
+                                } else {
+                                    // Reconstruct path up to this segment; split() dropped the leading "/" of a Linux path.
+                                    val root = if (currentPath.startsWith("/")) "/" else ""
+                                    onOpen(root + pathSegments.drop(1).take(index).joinToString("/"))
+                                }
+                            }.padding(vertical = 4.dp),
+                )
+                if (!isLast) {
+                    Icon(
+                        Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp).padding(horizontal = 4.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The layout chooser (where the Sync button was): a grid of 2 to 5 columns, or a small, medium or large list. */
+@Composable
+private fun GalleryViewButton(
+    view: GalleryView,
+    enabled: Boolean,
+    onSelect: (GalleryView) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, enabled = enabled) {
+            Icon(if (view.isList) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView, "Layout")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            MenuHeader("Grid")
+            GalleryView.entries.filter { !it.isList }.forEach { option ->
+                ViewOption(option, current = view, icon = Icons.Default.GridView) {
+                    open = false
+                    onSelect(option)
+                }
+            }
+            HorizontalDivider()
+            MenuHeader("List")
+            GalleryView.entries.filter { it.isList }.forEach { option ->
+                ViewOption(option, current = view, icon = Icons.AutoMirrored.Filled.ViewList) {
+                    open = false
+                    onSelect(option)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun ViewOption(
+    option: GalleryView,
+    current: GalleryView,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(option.label, fontWeight = if (option == current) FontWeight.Bold else FontWeight.Normal) },
+        leadingIcon = { Icon(icon, contentDescription = null) },
+        trailingIcon = { if (option == current) Icon(Icons.Default.Check, "Selected", tint = MaterialTheme.colorScheme.primary) },
+        onClick = onClick,
+    )
+}
+
+/** Why there is nothing to browse: no connection, no gallery extension on the server, or an error from it. */
+@Composable
+private fun ExtensionStatusPanel(
+    status: ForgeGalleryManager.ExtensionStatus,
+    isConnected: Boolean,
+    onCheckAgain: () -> Unit,
+    onOpenPage: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        when (status.state) {
+            ForgeGalleryManager.Extension.CHECKING, ForgeGalleryManager.Extension.READY -> {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(16.dp))
+                Text("Looking for the gallery extension on the server...", textAlign = TextAlign.Center)
+            }
+            ForgeGalleryManager.Extension.MISSING -> {
+                Icon(Icons.Default.Extension, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(12.dp))
+                Text("Infinite Image Browsing Required", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "The gallery shows the images saved on your Forge server through the Infinite Image Browsing " +
+                        "extension, and this server does not have it. Install it in Forge (Extensions > Available, " +
+                        "or Install from URL), restart Forge, then check again.",
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onCheckAgain) { Text("Check Again") }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onOpenPage) { Text("Open Extension Page") }
+            }
+            ForgeGalleryManager.Extension.FAILED -> {
+                Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.height(12.dp))
+                Text("Gallery Extension Error", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Text(status.message.orEmpty(), textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onCheckAgain) { Text("Check Again") }
+            }
+            ForgeGalleryManager.Extension.UNKNOWN -> {
+                Icon(Icons.Default.CloudOff, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (isConnected) "The Server Did Not Answer" else "Not Connected",
+                    style = MaterialTheme.typography.titleLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (isConnected) status.message ?: "The gallery extension could not be checked." else "The gallery opens once the app reaches the server.",
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onCheckAgain) { Text(if (isConnected) "Check Again" else "Retry") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingPlaceholders(view: GalleryView) {
+    if (view.isList) {
+        val size = listThumbnailSize(view)
+        Column(modifier = Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(8) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(size).clip(MaterialTheme.shapes.small).shimmer())
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Box(modifier = Modifier.fillMaxWidth(0.6f).height(14.dp).clip(MaterialTheme.shapes.extraSmall).shimmer())
+                        Box(modifier = Modifier.fillMaxWidth().height(12.dp).clip(MaterialTheme.shapes.extraSmall).shimmer())
+                    }
+                }
+            }
+        }
+    } else {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(view.columns),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(4.dp),
+            userScrollEnabled = false,
+        ) {
+            items(view.columns * 8) {
+                Box(
+                    modifier =
+                        Modifier
+                            .padding(cellPadding(view.columns))
+                            .aspectRatio(1f)
+                            .clip(MaterialTheme.shapes.small)
+                            .shimmer(),
+                )
+            }
+        }
+    }
+}
+
+private fun cellPadding(columns: Int): Dp = if (columns >= 4) 2.dp else 4.dp
+
+private fun listThumbnailSize(view: GalleryView): Dp =
+    when (view) {
+        GalleryView.LIST_SMALL -> 64.dp
+        GalleryView.LIST_LARGE -> 152.dp
+        else -> 104.dp
+    }
+
+private fun folderIcon(item: GalleryItem): ImageVector =
+    when (item.fullpath) {
+        ForgeGalleryManager.FAVORITES -> Icons.Default.Star
+        ForgeGalleryManager.ALL_IMAGES -> Icons.Default.Schedule
+        else -> Icons.Default.Folder
+    }
+
+@Composable
+private fun folderColor(item: GalleryItem): Color =
+    if (item.fullpath == ForgeGalleryManager.FAVORITES) FavoriteGold else MaterialTheme.colorScheme.primary
+
+/** The server's "yyyy-MM-dd HH:mm:ss" (the time the image was saved) in the phone's own date format. */
+private val SERVER_DATE: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+private val SHOWN_DATE: DateTimeFormatter = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+
+private fun displayDate(date: String?): String {
+    if (date.isNullOrBlank()) return ""
+    return try {
+        LocalDateTime.parse(date, SERVER_DATE).format(SHOWN_DATE)
+    } catch (e: Exception) {
+        date
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryGrid(
+    viewModel: ForgeViewModel,
+    columns: Int,
+    files: List<GalleryItem>,
+    favoritePaths: Set<String>,
+    inFavorites: Boolean,
+    selected: Set<String>,
+    onClick: (Int, GalleryItem) -> Unit,
+    onLongClick: (GalleryItem) -> Unit,
+) {
+    // Small cells: smaller folder icons, and no names over the images (unreadable at that size).
+    val iconSize = when (columns) {
+        2 -> 56.dp
+        3 -> 48.dp
+        4 -> 36.dp
+        else -> 28.dp
+    }
+    val showNames = columns <= 3
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(4.dp),
+    ) {
+        itemsIndexed(
+            files,
+            key = { _, item -> item.fullpath },
+            contentType = { _, item -> if (item.isDir) "dir" else "image" },
+        ) { index, item ->
+            if (item.isDir) {
+                Card(
+                    modifier = Modifier.padding(cellPadding(columns)).aspectRatio(1f).clickable { onClick(index, item) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Column(
-                        modifier = Modifier.padding(24.dp),
+                        modifier = Modifier.fillMaxSize().padding(if (columns >= 4) 4.dp else 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
                     ) {
-                        AnimatedStatusIndicator(state = shownSyncState)
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Gallery Sync", fontWeight = FontWeight.Bold, fontSize = 18.sp, textAlign = TextAlign.Center)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text("Reading generation data:", fontSize = 12.sp, color = Color.Gray)
+                        Icon(folderIcon(item), contentDescription = null, modifier = Modifier.size(iconSize), tint = folderColor(item))
+                        Spacer(Modifier.height(if (columns >= 4) 4.dp else 8.dp))
                         Text(
-                            text = gallerySyncCurrentFile.ifEmpty { "..." },
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
+                            item.name,
+                            fontSize = if (columns >= 4) 10.sp else 12.sp,
+                            lineHeight = if (columns >= 4) 12.sp else 14.sp,
                             textAlign = TextAlign.Center,
                             maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
+            } else {
+                val isFavorite = inFavorites || item.fullpath in favoritePaths
+                val isSelected = item.fullpath in selected
+                val frameWidth = if (columns >= 4) 2.dp else 4.dp
 
-                        val (current, total) = gallerySyncProgress
-                        LinearProgressIndicator(
-                            progress = { if (total > 0) current.toFloat() / total.toFloat() else 0f },
-                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                // A still gold frame: the animated one kept redrawing every favorite as long as the gallery was open.
+                val frameModifier =
+                    when {
+                        isSelected -> Modifier.border(frameWidth, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.small)
+                        isFavorite -> Modifier.border(frameWidth, FavoriteGold, MaterialTheme.shapes.small)
+                        else -> Modifier
+                    }
+
+                Box(
+                    modifier =
+                        Modifier
+                            .padding(cellPadding(columns))
+                            .aspectRatio(1f)
+                            .then(frameModifier)
+                            .clip(MaterialTheme.shapes.small)
+                            .combinedClickable(onLongClick = { onLongClick(item) }, onClick = { onClick(index, item) }),
+                ) {
+                    GalleryThumbnail(viewModel, item)
+                    if (isSelected) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = "Selected",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).background(Color.White, CircleShape),
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = if (total > 0) "$current / $total new images" else "Looking for new images...",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                        )
-
-                        var showButtons by remember { mutableStateOf(false) }
-                        LaunchedEffect(Unit) {
-                            kotlinx.coroutines.delay(1000)
-                            showButtons = true
-                        }
-
-                        if (showButtons && shownSyncState == IndicatorState.LOADING) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Row(
+                    }
+                    if (showNames) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .fillMaxWidth()
+                                    .background(Color.Black.copy(alpha = 0.6f))
+                                    .padding(vertical = 4.dp, horizontal = 2.dp),
+                        ) {
+                            Text(
+                                text = item.name,
+                                color = Color.White,
+                                fontSize = if (columns == 2) 11.sp else 9.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceEvenly
-                            ) {
-                                OutlinedButton(onClick = { viewModel.putSyncToBackground() }) {
-                                    Text("Background")
-                                }
-                                Button(
-                                    onClick = { viewModel.cancelManualGallerySync() },
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                                ) {
-                                    Text("Cancel")
-                                }
-                            }
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/** The list layout: a thumbnail with the image's name, prompt and date, and buttons to star and share it. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GalleryList(
+    viewModel: ForgeViewModel,
+    view: GalleryView,
+    files: List<GalleryItem>,
+    favoritePaths: Set<String>,
+    inFavorites: Boolean,
+    selected: Set<String>,
+    onClick: (Int, GalleryItem) -> Unit,
+    onLongClick: (GalleryItem) -> Unit,
+) {
+    val context = LocalContext.current
+    val thumbnailSize = listThumbnailSize(view)
+    val promptLines =
+        when (view) {
+            GalleryView.LIST_SMALL -> 1
+            GalleryView.LIST_LARGE -> 5
+            else -> 3
+        }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(8.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        itemsIndexed(
+            files,
+            key = { _, item -> item.fullpath },
+            contentType = { _, item -> if (item.isDir) "dir" else "image" },
+        ) { index, item ->
+            val isSelected = item.fullpath in selected
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.medium)
+                        .combinedClickable(onLongClick = { onLongClick(item) }, onClick = { onClick(index, item) }),
+            ) {
+                Row(modifier = Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(thumbnailSize).clip(MaterialTheme.shapes.small)) {
+                        if (item.isDir) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(folderIcon(item), contentDescription = null, modifier = Modifier.fillMaxSize(0.5f), tint = folderColor(item))
+                            }
+                        } else {
+                            GalleryThumbnail(viewModel, item)
+                            if (isSelected) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = "Selected",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).background(Color.White, CircleShape),
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            item.name,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            maxLines = if (view == GalleryView.LIST_LARGE) 2 else 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (!item.isDir) {
+                            // The prompt comes from the index, row by row (the gallery keeps no prompts in memory).
+                            val prompt by produceState<String?>(initialValue = null, item.fullpath) {
+                                value = viewModel.galleryPositivePrompt(item.fullpath)
+                            }
+                            Text(
+                                text = prompt?.ifBlank { "No generation data" } ?: "",
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                                fontStyle = if (prompt.isNullOrBlank()) FontStyle.Italic else FontStyle.Normal,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = promptLines,
+                                minLines = if (view == GalleryView.LIST_SMALL) 1 else 2.coerceAtMost(promptLines),
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                        val date = displayDate(item.date)
+                        if (date.isNotEmpty() && !item.fullpath.startsWith("virtual://")) {
+                            Text(
+                                date,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                    }
+                    if (!item.isDir) {
+                        val isFavorite = inFavorites || item.fullpath in favoritePaths
+                        IconButton(onClick = { viewModel.toggleFavorite(item) }) {
+                            Icon(
+                                if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = if (isFavorite) "Remove from Favorites" else "Add to Favorites",
+                                tint = if (isFavorite) FavoriteGold else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(onClick = { viewModel.shareImage(item) { intent -> context.startActivity(intent) } }) {
+                            Icon(Icons.Default.Share, "Share", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SortPanel(
+    filters: ForgeGalleryManager.GalleryFilters,
+    onChange: (ForgeGalleryManager.GalleryFilters) -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Sort By", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Button(onClick = onConfirm) { Text("Confirm") }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        val sortOptions =
+            listOf(
+                ForgeGalleryManager.SortOrder.NEWEST to "Newest First",
+                ForgeGalleryManager.SortOrder.OLDEST to "Oldest First",
+                ForgeGalleryManager.SortOrder.NAME_ASC to "A-Z (Alphabetical)",
+                ForgeGalleryManager.SortOrder.NAME_DESC to "Z-A (Reverse Alphabetical)",
+            )
+
+        sortOptions.forEach { (order, label) ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().clickable { onChange(filters.copy(sortOrder = order)) }.padding(vertical = 4.dp),
+            ) {
+                RadioButton(selected = filters.sortOrder == order, onClick = { onChange(filters.copy(sortOrder = order)) })
+                Spacer(Modifier.width(8.dp))
+                Text(label)
+            }
+        }
+        Text(
+            "\"All Images\" is always shown newest first.",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun FilterPanel(
+    viewModel: ForgeViewModel,
+    filters: ForgeGalleryManager.GalleryFilters,
+    onChange: (ForgeGalleryManager.GalleryFilters) -> Unit,
+    indexedImageCount: Int,
+    isIndexing: Boolean,
+    indexError: String?,
+    onClear: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val availableModels by viewModel.availableModels.collectAsStateWithLifecycle()
+    val availableLoras by viewModel.galleryAvailableLoras.collectAsStateWithLifecycle()
+
+    Column(modifier = Modifier.padding(16.dp).heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Search Gallery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Row {
+                TextButton(onClick = onClear) { Text("Clear All") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onConfirm) { Text("Confirm") }
+            }
+        }
+        val indexState =
+            when {
+                isIndexing -> " Indexing new images..."
+                indexError != null -> " The last update of the index failed: $indexError"
+                else -> ""
+            }
+        Text(
+            "Searches all indexed images of the gallery, not only this folder ($indexedImageCount indexed).$indexState",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = filters.name,
+            onValueChange = { onChange(filters.copy(name = it)) },
+            label = { Text("File Name") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = filters.prompt,
+            onValueChange = { onChange(filters.copy(prompt = it)) },
+            label = { Text("Prompt Tag (Pos/Neg)") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Models section: an image has one model, so any of the selected ones matches.
+        var modelsExpanded by remember { mutableStateOf(false) }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { modelsExpanded = !modelsExpanded }.padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Models (${filters.models.size} selected)", fontWeight = FontWeight.Bold)
+            Text(if (modelsExpanded) "▲" else "▼")
+        }
+        if (modelsExpanded) {
+            if (availableModels.isEmpty()) {
+                Text("No models indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+            } else {
+                availableModels.forEach { model ->
+                    val isChecked = filters.models.contains(model)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onChange(filters.copy(models = if (isChecked) filters.models - model else filters.models + model)) }
+                                .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+                    ) {
+                        Checkbox(checked = isChecked, onCheckedChange = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // Loras section
+        var lorasExpanded by remember { mutableStateOf(false) }
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { lorasExpanded = !lorasExpanded }.padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("LoRAs (${filters.loras.size} selected)", fontWeight = FontWeight.Bold)
+            Text(if (lorasExpanded) "▲" else "▼")
+        }
+        if (lorasExpanded) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                Text("Match:", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.width(8.dp))
+                FilterChip(selected = !filters.lorasIsAnd, onClick = { onChange(filters.copy(lorasIsAnd = false)) }, label = { Text("Any") })
+                Spacer(Modifier.width(8.dp))
+                FilterChip(selected = filters.lorasIsAnd, onClick = { onChange(filters.copy(lorasIsAnd = true)) }, label = { Text("All") })
+            }
+            if (availableLoras.isEmpty()) {
+                Text("No LoRAs indexed.", color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+            } else {
+                availableLoras.forEach { lora ->
+                    val isChecked = filters.loras.contains(lora)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { onChange(filters.copy(loras = if (isChecked) filters.loras - lora else filters.loras + lora)) }
+                                .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+                    ) {
+                        Checkbox(checked = isChecked, onCheckedChange = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(lora, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GallerySettingsPanel(
+    viewModel: ForgeViewModel,
+    config: AppConfig,
+    extensionReady: Boolean,
+    onClose: () -> Unit,
+) {
+    Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("Gallery Settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, "Close")
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // The folders are read from the server's gallery extension; nothing to set by hand (2.1.0).
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Text(text = "Gallery Folder", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(
+                text = if (extensionReady && config.galleryPath.isNotEmpty()) config.galleryPath else "Found on its own when the app connects",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "Read from the server's Infinite Image Browsing extension",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            )
+        }
+
+        SettingSwitchRow(
+            title = "Swipe to Browse Images",
+            subtitle = "Use horizontal swiping in fullscreen preview",
+            checked = config.swipeToBrowseGallery,
+            onToggle = { viewModel.saveConfig(config.copy(swipeToBrowseGallery = !config.swipeToBrowseGallery)) },
+        )
+
+        SettingSwitchRow(
+            title = "Pinch to Zoom",
+            subtitle = "Pinch or double tap to zoom full-screen images (also on the main screen)",
+            checked = config.pinchToZoom,
+            onToggle = { viewModel.saveConfig(config.copy(pinchToZoom = !config.pinchToZoom)) },
+        )
+
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
+            Text(text = "Save to Phone Automatically", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            val saveLocation = DeviceImages.locationName(config.savePrivately)
+            val autoSaveDescription =
+                when (config.autoSaveMode) {
+                    AUTO_SAVE_FAVORITES -> "Images you star are saved to $saveLocation"
+                    AUTO_SAVE_ALL ->
+                        "New images from the server are saved to $saveLocation on Wi-Fi, " +
+                            "while the app runs (also those made on the PC)"
+                    else -> "Images are only saved when you tap Save"
+                }
+            Text(
+                text = autoSaveDescription,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(AUTO_SAVE_OFF, AUTO_SAVE_FAVORITES, AUTO_SAVE_ALL).forEach { mode ->
+                    FilterChip(
+                        selected = config.autoSaveMode == mode,
+                        onClick = { viewModel.setAutoSaveMode(mode) },
+                        label = { Text(mode) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+            Text(
+                text = subtitle,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                lineHeight = 18.sp,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
@@ -960,11 +1321,11 @@ fun FullscreenGalleryViewer(
                 if (config.swipeToBrowseGallery) {
                     // The neighbouring images load in advance, so swiping does not wait for the network.
                     HorizontalPager(state = pagerState, beyondViewportPageCount = 1, modifier = Modifier.fillMaxSize()) { page ->
-                        FullImage(viewModel, images[page], Modifier.fillMaxSize())
+                        FullImage(viewModel, images[page], Modifier.fillMaxSize(), zoom = config.pinchToZoom)
                     }
                 } else {
                     Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        if (currentItem != null) FullImage(viewModel, currentItem, Modifier.fillMaxWidth())
+                        if (currentItem != null) FullImage(viewModel, currentItem, Modifier.fillMaxWidth(), zoom = config.pinchToZoom)
                     }
                 }
 
@@ -1055,12 +1416,13 @@ private fun GalleryThumbnail(
     )
 }
 
-/** The full image; its thumbnail (already cached by the grid) is shown at once while the full one loads. */
+/** The full image; its thumbnail (already cached by the gallery) is shown at once while the full one loads. */
 @Composable
 private fun FullImage(
     viewModel: ForgeViewModel,
     item: GalleryItem,
     modifier: Modifier,
+    zoom: Boolean,
 ) {
     val context = LocalContext.current
     val size = zoomableImageSizePx()
@@ -1080,8 +1442,8 @@ private fun FullImage(
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         },
-        // Pinch or double tap to zoom.
-        modifier = modifier.zoomable(item.fullpath),
+        // Pinch or double tap to zoom (unless "Pinch to Zoom" is off).
+        modifier = modifier.zoomable(item.fullpath, enabled = zoom),
         contentScale = ContentScale.Fit,
     )
 }

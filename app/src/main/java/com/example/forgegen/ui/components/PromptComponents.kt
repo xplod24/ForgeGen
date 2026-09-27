@@ -1799,7 +1799,7 @@ fun FullscreenImageViewer(
                                     .size(zoomSize)
                                     .build(),
                             contentDescription = null,
-                            modifier = Modifier.fillMaxSize().zoomable(sessionImages[page]),
+                            modifier = Modifier.fillMaxSize().zoomable(sessionImages[page], enabled = config.pinchToZoom),
                             contentScale = ContentScale.Fit,
                         )
                     }
@@ -1810,7 +1810,7 @@ fun FullscreenImageViewer(
                             AsyncImage(
                                 model = ImageRequest.Builder(LocalContext.current).data(item).size(zoomableImageSizePx()).build(),
                                 contentDescription = null,
-                                modifier = Modifier.fillMaxWidth().zoomable(item),
+                                modifier = Modifier.fillMaxWidth().zoomable(item, enabled = config.pinchToZoom),
                                 contentScale = ContentScale.Fit,
                                 alignment = Alignment.TopCenter,
                             )

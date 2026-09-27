@@ -41,6 +41,10 @@ class ForgeSettingsManagerConfigTest {
                 blockScreenshots = true,
                 savePrivately = true,
                 shareWithoutMetadata = true,
+                vibrateOnFinish = false,
+                autoInstallUpdates = false,
+                pinchToZoom = false,
+                galleryView = GalleryView.LIST_LARGE.name,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))
@@ -62,6 +66,12 @@ class ForgeSettingsManagerConfigTest {
     fun `a content mode stored by 1_3 to 1_5 is ignored`() {
         val old = ForgeSettingsManager.loadConfig("""{"timeout":10,"contentMode":"Unrestricted","blockScreenshots":true}""")
         assertEquals(AppConfig(timeout = 10, blockScreenshots = true), old)
+    }
+
+    @Test
+    fun `an unknown gallery layout becomes the default grid`() {
+        assertEquals(GalleryView.GRID_3.name, ForgeSettingsManager.loadConfig("""{"galleryView":"HEXAGONS"}""").galleryView)
+        assertEquals(GalleryView.GRID_5, GalleryView.of(ForgeSettingsManager.loadConfig("""{"galleryView":"GRID_5"}""").galleryView))
     }
 
     @Test

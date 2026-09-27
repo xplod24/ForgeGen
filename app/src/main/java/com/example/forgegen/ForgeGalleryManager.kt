@@ -31,6 +31,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
@@ -47,9 +49,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * generation data (for searching the whole gallery and the "All Images" view), favorites, saving to the phone,
  * sharing, and restoring prompts from images.
  *
+ * The gallery needs IIB on the server: when the app connects, detectExtension() looks for it and reads the folders
+ * from it (Forge's working folder and its image folder, the gallery's top folder); nobody types them any more.
+ *
  * The index is filled without downloading images: IIB reads the generation data on the PC and sends only the
- * text, 100 images per request. A quiet sync only lists folders that changed (or are recent); the Sync button
- * lists everything and also removes deleted images from the index.
+ * text, 100 images per request. It is kept up to date on its own (2.1.0): after the extension is found, when the
+ * gallery opens or is refreshed and after the app generated images. Such a sync only lists folders that changed
+ * (or are recent); once a day it lists every folder, which also forgets images deleted anywhere.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeGalleryManager {
@@ -60,13 +66,25 @@ object ForgeGalleryManager {
 
     private const val SHOW_META_KEY = "show_gallery_meta"
     private const val FOLDER_DATES_KEY = "gallery_folder_dates"
+    private const val FULL_SYNC_AT_KEY = "gallery_full_sync_at"
     private const val THUMBNAIL_SIZE = "512x512" // three columns on a 1440 px wide screen
     private const val INFO_BATCH_SIZE = 100
     private const val MAX_FOLDER_DEPTH = 3
     private const val RECENT_FOLDER_MS = 48 * 60 * 60 * 1000L // re-listed on every sync, as new images land there
+    private const val FULL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000L
     private const val AUTO_SYNC_INTERVAL_MS = 30_000L
     private const val NEW_IMAGE_SYNC_DELAY_MS = 2_000L
+    private const val PROMPT_CACHE_SIZE = 300
     private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "avif", "gif")
+
+    /** [GalleryImageEntity.savedAt] of an image whose generation data could not be read yet. */
+    private const val INFO_NOT_READ = 0L
+
+    /** Where Forge saves txt2img images unless its settings say otherwise (relative to its working folder). */
+    private const val DEFAULT_OUTPUT_FOLDER = "outputs/txt2img-images"
+
+    /** The extension's page, for the message shown when a server does not have it. */
+    const val EXTENSION_URL = "https://github.com/zanllp/sd-webui-infinite-image-browsing"
 
     private lateinit var application: Application
     private lateinit var getDb: () -> ForgeDatabase
@@ -97,21 +115,52 @@ object ForgeGalleryManager {
     private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
 
+    // --- The server's gallery extension ---
+
+    /** Whether the server has the Infinite Image Browsing extension the gallery needs. */
+    enum class Extension {
+        /** Not asked yet (not connected), or the question got no answer. */
+        UNKNOWN,
+        CHECKING,
+
+        /** Found, and the gallery's folder was read from it. */
+        READY,
+
+        /** The server answered, but has no gallery extension. */
+        MISSING,
+
+        /** The extension answered with an error, or without its folders. */
+        FAILED,
+    }
+
+    data class ExtensionStatus(
+        val state: Extension,
+        val message: String? = null,
+    )
+
+    private val _extension = MutableStateFlow(ExtensionStatus(Extension.UNKNOWN))
+    val extension: StateFlow<ExtensionStatus> = _extension.asStateFlow()
+
+    // The extension's URL prefix on the server (older builds of it used other names).
+    @Volatile private var apiPrefix = ForgeSettingsManager.GALLERY_PREFIXES.first()
+
+    private val detection = Mutex()
+
     // --- Index sync state ---
 
-    /** The sync dialog: LOADING while shown, SUCCESS/ERROR briefly at the end, IDLE when hidden. */
-    private val _isGallerySyncing = MutableStateFlow(IndicatorState.IDLE)
-    val isGallerySyncing: StateFlow<IndicatorState> = _isGallerySyncing.asStateFlow()
-
-    /** True while any sync runs, also a quiet one or one sent to the background (thin progress bar). */
+    /** True while the index is being updated (a thin progress bar in the gallery). */
     private val _isIndexing = MutableStateFlow(false)
     val isIndexing: StateFlow<Boolean> = _isIndexing.asStateFlow()
 
     private val _gallerySyncProgress = MutableStateFlow(0 to 0)
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = _gallerySyncProgress.asStateFlow()
 
-    private val _gallerySyncCurrentFile = MutableStateFlow("")
-    val gallerySyncCurrentFile: StateFlow<String> = _gallerySyncCurrentFile.asStateFlow()
+    /** Why the last update of the index failed; null when it worked. Shown quietly in the search panel. */
+    private val _indexError = MutableStateFlow<String?>(null)
+    val indexError: StateFlow<String?> = _indexError.asStateFlow()
+
+    /** Updates of the index that finished (tests wait for them). */
+    internal val syncsDone = AtomicInteger(0)
 
     // The index in memory without the prompts (most of its size); a prompt search asks the database.
     private val indexedImages = MutableStateFlow<List<IndexedImage>>(emptyList())
@@ -124,16 +173,15 @@ object ForgeGalleryManager {
 
     private var restoreJob: Job? = null
     private var folderJob: Job? = null
+
+    // The folder asked for last (shown once it loads): Refresh and Retry ask for it again.
+    @Volatile private var requestedPath = ""
     private val folderRequest = AtomicInteger(0)
     private var metadataJob: Job? = null
 
     private var syncJob: Job? = null
 
-    // Set from the UI and read by the sync coroutine; nothing observes them, so volatile flags are enough.
-    @Volatile private var syncDialogShown = false
-
-    @Volatile private var notifySyncInBackground = false
-
+    // Set by a sync asked for while another one runs, read when that one ends.
     @Volatile private var resyncRequested = false
 
     @Volatile private var lastAutoSyncAt = 0L
@@ -191,7 +239,8 @@ object ForgeGalleryManager {
                             .filter { !filters.isSearch || matches(it, filters, promptHits) }
                             .map { it.toGalleryItem() }
                             .toList()
-                    sortItems(found, filters.sortOrder)
+                    // "All Images" is always the newest first, whatever the sort panel says (the owner's rule, 2.1.0).
+                    sortItems(found, if (shown.path == ALL_IMAGES) SortOrder.NEWEST else filters.sortOrder)
                 } else {
                     sortItems(shown.files, filters.sortOrder)
                 }
@@ -271,29 +320,23 @@ object ForgeGalleryManager {
             loadFavoritePaths()
             reloadIndex()
         }
-        // "All new images" saving: look for them after connecting and whenever the app generated images.
+        // The index follows new images: the server saved them a moment ago (the extension is found on connecting,
+        // and that starts a sync too).
         managerScope.launch {
-            ForgeRepository.isConnected.collect { connected ->
-                if (connected && isAutoSavingAll()) requestSync()
-            }
-        }
-        managerScope.launch {
-            var count = ForgeQueueManager.sessionImages.value.size
+            // The newest image, not the count: the session keeps at most 100 images, so its size stops growing.
+            var newest = ForgeQueueManager.sessionImages.value.lastOrNull()
             ForgeQueueManager.sessionImages.collect { images ->
-                if (images.size > count && isAutoSavingAll()) {
+                val last = images.lastOrNull()
+                if (last != null && last != newest) {
                     delay(NEW_IMAGE_SYNC_DELAY_MS)
                     requestSync()
                 }
-                count = images.size
+                newest = last
             }
         }
     }
 
     private fun isAutoSavingAll() = ForgeRepository.config.value.autoSaveMode == AUTO_SAVE_ALL
-
-    fun setGalleryMode(mode: GalleryMode) {
-        _galleryMode.value = mode
-    }
 
     fun applyFilters(filters: GalleryFilters) {
         _galleryFilters.value = filters
@@ -305,6 +348,7 @@ object ForgeGalleryManager {
 
     /** Reloads the index into memory; the filter lists only offer models and LoRAs of the current gallery. */
     private suspend fun reloadIndex() {
+        synchronized(promptCache) { promptCache.clear() } // an image read again may have its prompt now
         try {
             val all = getDb().galleryImageDao().getIndexedImages()
             val root = galleryRoot()?.let { norm(it) }
@@ -378,14 +422,151 @@ object ForgeGalleryManager {
             getDb().galleryImageDao().clearAll()
             getDb().appSettingDao().removeSetting(FOLDER_DATES_KEY) // the next sync lists every folder again
             reloadIndex() // empties the model/LoRA filter lists built from the index
+            lastAutoSyncAt = 0L // opening the gallery builds it again at once
             ForgeRepository.showToast("Gallery Index Wiped")
         }
     }
 
+    // --- PROMPTS FOR THE LIST VIEW ---
+
+    // The positive prompts of the rows seen last (the index in memory has none), newest use last.
+    private val promptCache =
+        object : LinkedHashMap<String, String>(PROMPT_CACHE_SIZE, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) = size > PROMPT_CACHE_SIZE
+        }
+
+    /** The prompt an image was made with, from the index; "" when it is not indexed or has none. */
+    suspend fun positivePrompt(path: String): String {
+        synchronized(promptCache) { promptCache[path] }?.let { return it }
+        val prompt =
+            withContext(Dispatchers.IO) {
+                try {
+                    getDb().galleryImageDao().getPositivePrompt(path).orEmpty()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    ""
+                }
+            }
+        synchronized(promptCache) { promptCache[path] = prompt }
+        return prompt
+    }
+
+    // --- THE SERVER'S GALLERY EXTENSION ---
+
+    /** Looks for the extension again ("Check Again" in the gallery). */
+    fun checkExtension() {
+        managerScope.launch { detectExtension() }
+    }
+
+    /** Another server: what was found on the previous one no longer holds. */
+    fun onServerChanged() {
+        _extension.value = ExtensionStatus(Extension.UNKNOWN)
+    }
+
+    /**
+     * Asks the server for the Infinite Image Browsing extension (run with the server's lists when the app connects)
+     * and takes the gallery's folders from its settings: Forge's working folder and the folder its images are saved
+     * to. Once it is found the index is brought up to date.
+     */
+    suspend fun detectExtension() {
+        val api = networkManager.forgeApi ?: return
+        val status =
+            detection.withLock {
+                val before = _extension.value
+                _extension.value = ExtensionStatus(Extension.CHECKING)
+                val found =
+                    try {
+                        askForExtension(api)
+                    } catch (e: CancellationException) {
+                        _extension.value = before // replaced by a newer question, or the app closed
+                        throw e
+                    }
+                _extension.value = found
+                found
+            }
+        if (status.state == Extension.READY) requestSync()
+    }
+
+    private suspend fun askForExtension(api: ForgeApi): ExtensionStatus {
+        for (prefix in ForgeSettingsManager.GALLERY_PREFIXES) {
+            val response =
+                try {
+                    api.getGlobalSettingsDynamic("$prefix/global_setting")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "No answer from the server about the gallery extension: ${e.message}")
+                    return ExtensionStatus(Extension.UNKNOWN, "The server did not answer: ${e.message ?: e.javaClass.simpleName}")
+                }
+            when {
+                response.code() == 404 || response.code() == 405 -> continue // not under this name
+                response.code() == 401 || response.code() == 403 -> {
+                    apiPrefix = prefix
+                    return ExtensionStatus(Extension.FAILED, "The gallery extension refused the app (HTTP ${response.code()}).")
+                }
+                !response.isSuccessful -> {
+                    apiPrefix = prefix
+                    return ExtensionStatus(Extension.FAILED, "The gallery extension answered with error ${response.code()}.")
+                }
+            }
+            apiPrefix = prefix
+            val settings =
+                try {
+                    response.body()
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    null
+                }
+            val sdCwd = settings?.sdCwd.orEmpty()
+            val folder =
+                outputFolder(sdCwd, settings?.globalSetting)
+                    ?: return ExtensionStatus(Extension.FAILED, "The gallery extension did not tell where Forge saves images.")
+            val config = ForgeRepository.config.value
+            if (config.galleryPath != folder || (sdCwd.isNotEmpty() && config.serverBasePath != sdCwd)) {
+                ForgeSettingsManager.saveConfig(config.copy(galleryPath = folder, serverBasePath = sdCwd.ifEmpty { config.serverBasePath }))
+            }
+            Log.d(TAG, "Gallery extension found at $prefix, images in $folder")
+            return ExtensionStatus(Extension.READY)
+        }
+        return ExtensionStatus(Extension.MISSING)
+    }
+
+    /**
+     * The folder Forge saves txt2img images to, from its settings as the extension reports them: "outdir_samples"
+     * when set (every image goes there), else "outdir_txt2img_samples", else Forge's default. A relative folder is
+     * under Forge's working folder [sdCwd] (and uses its separator); null when that is needed but unknown.
+     */
+    internal fun outputFolder(
+        sdCwd: String,
+        settings: GlobalSettingInnerDto?,
+    ): String? {
+        val configured =
+            (settings?.outdirSamples?.takeIf { it.isNotBlank() } ?: settings?.outdirTxt2ImgSamples?.takeIf { it.isNotBlank() })
+                ?.trim() ?: DEFAULT_OUTPUT_FOLDER
+        val isAbsolute = configured.startsWith("/") || configured.startsWith("\\\\") || WINDOWS_DRIVE.containsMatchIn(configured)
+        if (isAbsolute) return configured.trimEnd('/', '\\').ifEmpty { configured }
+        if (sdCwd.isBlank()) return null
+        val separator = if (sdCwd.contains('\\')) '\\' else '/'
+        val relative =
+            configured
+                .removePrefix("./")
+                .removePrefix(".\\")
+                .replace('/', separator)
+                .replace('\\', separator)
+                .trim(separator)
+        val base = sdCwd.trimEnd('/', '\\')
+        return if (relative.isEmpty()) base else "$base$separator$relative"
+    }
+
+    private val WINDOWS_DRIVE = Regex("^[A-Za-z]:[\\\\/]")
+
     // --- PATHS & URLS ---
 
-    /** The gallery's top folder (from the gallery settings), or null while it is not set. */
+    /** The gallery's top folder (read from the server's extension), or null while it is not known. */
     private fun galleryRoot(): String? = ForgeRepository.config.value.galleryPath.takeIf { it.isNotBlank() && it != "Root" }
+
+    /** The gallery's top folder when the extension is there, null otherwise (the gallery shows why). */
+    fun readyRoot(): String? = if (_extension.value.state == Extension.READY) galleryRoot() else null
 
     // Server paths may use "\" (Windows) or "/"; compared case-insensitively.
     private fun norm(path: String) = path.replace('\\', '/').trimEnd('/').lowercase()
@@ -422,7 +603,7 @@ object ForgeGalleryManager {
 
     private fun isImage(name: String) = name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
 
-    private fun prefix() = networkManager.galleryApiPrefix.value
+    private fun prefix() = apiPrefix
 
     private fun galleryUrl(
         endpoint: String,
@@ -499,11 +680,45 @@ object ForgeGalleryManager {
 
     // --- BROWSING ---
 
+    /**
+     * Opens the gallery at its top folder. While the server's extension is not found (yet) nothing is listed: the
+     * screen shows why, and opens the top folder once the extension is there.
+     */
+    fun openGallery(mode: GalleryMode) {
+        _galleryMode.value = mode
+        val root = readyRoot()
+        if (root != null) {
+            fetchGalleryFolder(root)
+            return
+        }
+        folderRequest.incrementAndGet()
+        folderJob?.cancel()
+        requestedPath = ""
+        folderItems.value = emptyList()
+        _currentGalleryPath.value = ""
+        _galleryError.value = null
+        _isGalleryLoading.value = false
+        // Asked when the app connected; an unanswered question is asked again.
+        if (_extension.value.state == Extension.UNKNOWN && ForgeRepository.isConnected.value) checkExtension()
+    }
+
+    /** Refresh (and Retry after an error): the folder asked for last again, and the index brought up to date at once. */
+    fun refreshGallery() {
+        val path = requestedPath
+        if (path.isEmpty()) {
+            checkExtension()
+            return
+        }
+        fetchGalleryFolder(path)
+        requestSync()
+    }
+
     fun fetchGalleryFolder(path: String) {
         // Only the latest request may show its folder: a slow answer for a folder the user already left used to
         // replace the folder opened after it.
         val request = folderRequest.incrementAndGet()
         folderJob?.cancel()
+        requestedPath = path
         _isGalleryLoading.value = true
         _galleryError.value = null
 
@@ -539,20 +754,21 @@ object ForgeGalleryManager {
     private suspend fun listServerFolder(path: String): List<GalleryItem>? {
         val target = if (path.isNotEmpty() && path != "Root") encodeFolderPath(path) else ""
         val response = api().getGalleryFilesDynamic(url = "${prefix()}/files", folderPath = target)
+        val root = galleryRoot()
         return when {
             response.isSuccessful -> {
                 val items =
                     parseGalleryItems(response.body()?.string().orEmpty())
                         .filter { it.isDir || isImage(it.name) }
                         .toMutableList()
-                if (path == "Root" || path == ForgeRepository.config.value.galleryPath) {
+                if (path == "Root" || path == root) {
                     items.add(0, GalleryItem(name = "⭐ Favorites", fullpath = FAVORITES, type = "dir"))
                     items.add(1, GalleryItem(name = "🕒 All Images", fullpath = ALL_IMAGES, type = "dir"))
                 }
                 items
             }
-            response.code() == 400 && path.isNotEmpty() && path != "Root" -> {
-                fetchGalleryFolder("Root")
+            response.code() == 400 && path.isNotEmpty() && path != "Root" && path != root -> {
+                fetchGalleryFolder(root ?: "Root")
                 null
             }
             response.code() == 401 || response.code() == 403 -> throw GalleryException("Authentication Required.")
@@ -560,31 +776,16 @@ object ForgeGalleryManager {
         }
     }
 
-    // --- INDEX SYNC ---
+    // --- INDEX SYNC (automatic) ---
 
-    /** The Sync button: lists every folder, shows the progress dialog and removes deleted images from the index. */
-    fun triggerManualGallerySync() {
-        val root =
-            galleryRoot() ?: run {
-                ForgeRepository.showToast("Set the Gallery Server Path first (gallery settings)")
-                return
-            }
-        syncDialogShown = true
-        notifySyncInBackground = false
-        _isGallerySyncing.value = IndicatorState.LOADING
-        val previous = syncJob
-        syncJob =
-            managerScope.launch {
-                previous?.cancelAndJoin() // a quiet sync may be running; this one covers everything it would
-                runSync(root, full = true)
-            }
-    }
-
-    /** A quiet sync when the gallery opens; skipped if one ran moments ago. */
+    /** When the gallery opens: an update of the index, skipped if one ran moments ago. */
     fun autoSyncGallery() = requestSync(throttle = true)
 
+    // Synchronized: asked for from the screen, the server check and the new-image watcher at once, it must still
+    // start only one sync.
+    @Synchronized
     private fun requestSync(throttle: Boolean = false) {
-        val root = galleryRoot() ?: return
+        val root = readyRoot() ?: return
         if (syncJob?.isActive == true) {
             resyncRequested = true
             return
@@ -592,24 +793,7 @@ object ForgeGalleryManager {
         val now = System.currentTimeMillis()
         if (throttle && now - lastAutoSyncAt < AUTO_SYNC_INTERVAL_MS) return
         lastAutoSyncAt = now
-        syncDialogShown = false
-        notifySyncInBackground = false
-        syncJob = managerScope.launch { runSync(root, full = false) }
-    }
-
-    fun cancelManualGallerySync() {
-        syncJob?.cancel()
-        syncDialogShown = false
-        notifySyncInBackground = false
-        _isGallerySyncing.value = IndicatorState.IDLE
-        ForgeNotifications.cancel(ForgeNotifications.ID_GALLERY_SYNC)
-        ForgeRepository.showToast("Indexing cancelled")
-    }
-
-    fun putSyncToBackground() {
-        syncDialogShown = false
-        notifySyncInBackground = true
-        _isGallerySyncing.value = IndicatorState.IDLE
+        syncJob = managerScope.launch { runSync(root) }
     }
 
     private data class SyncResult(
@@ -626,23 +810,27 @@ object ForgeGalleryManager {
                     listOfNotNull(
                         "$added new".takeIf { added > 0 },
                         "$removed removed".takeIf { removed > 0 },
-                        "$failed could not be read".takeIf { failed > 0 },
+                        "$failed without readable generation data".takeIf { failed > 0 },
                         "$savedToPhone saved to the phone".takeIf { savedToPhone > 0 },
                     )
                 return if (parts.isEmpty()) "Gallery index is up to date" else "Gallery indexed: " + parts.joinToString(", ")
             }
     }
 
-    private suspend fun runSync(
-        root: String,
-        full: Boolean,
-    ) {
+    /** Only in the log: the index updates itself and never interrupts the user. */
+    internal val lastSyncMessage = MutableStateFlow("")
+
+    private suspend fun runSync(root: String) {
         _isIndexing.value = true
         _gallerySyncProgress.value = 0 to 0
-        _gallerySyncCurrentFile.value = ""
         val result =
             try {
-                doSync(root, full)
+                // Once a day every folder is listed, which also forgets images deleted in folders that look unchanged.
+                val lastFull = getDb().appSettingDao().getSetting(FULL_SYNC_AT_KEY)?.value?.toLongOrNull() ?: 0L
+                val full = System.currentTimeMillis() - lastFull >= FULL_SYNC_INTERVAL_MS
+                doSync(root, full).also {
+                    if (full) getDb().appSettingDao().putSetting(AppSettingEntity(FULL_SYNC_AT_KEY, System.currentTimeMillis().toString()))
+                }
             } catch (e: CancellationException) {
                 _isIndexing.value = false
                 throw e
@@ -651,34 +839,14 @@ object ForgeGalleryManager {
                 Log.e(TAG, "Gallery sync failed", e)
                 SyncResult(error = e.message ?: e.javaClass.simpleName)
             }
+        _indexError.value = result.error
+        lastSyncMessage.value = result.message
+        Log.d(TAG, result.message)
         _isIndexing.value = false
+        syncsDone.incrementAndGet()
         if (resyncRequested) {
             resyncRequested = false
             currentCoroutineContext().job.invokeOnCompletion { requestSync() }
-        }
-        report(result)
-    }
-
-    private suspend fun report(result: SyncResult) {
-        if (notifySyncInBackground) {
-            notifySyncInBackground = false
-            ForgeNotifications.builder(ForgeNotifications.CHANNEL_PROGRESS)?.let { builder ->
-                val notification =
-                    builder
-                        .setContentTitle(if (result.error == null) "Gallery indexed" else "Gallery indexing failed")
-                        .setContentText(result.message)
-                        .setAutoCancel(true)
-                        .setSilent(true)
-                        .build()
-                ForgeNotifications.post(ForgeNotifications.ID_GALLERY_SYNC, notification)
-            }
-        }
-        if (syncDialogShown) {
-            _isGallerySyncing.value = if (result.error == null) IndicatorState.SUCCESS else IndicatorState.ERROR
-            ForgeRepository.showToast(result.message)
-            delay(1500)
-            if (syncDialogShown) _isGallerySyncing.value = IndicatorState.IDLE
-            syncDialogShown = false
         }
     }
 
@@ -696,6 +864,7 @@ object ForgeGalleryManager {
         val dao = getDb().galleryImageDao()
         val indexed = dao.getAllPaths() // only the paths: the whole index used to be read here, prompts included
         val indexedPaths = indexed.toHashSet()
+        val unread = dao.getUnreadPaths().toHashSet()
 
         // 1. Find the images.
         val listing = listTree(root, if (full) emptyMap() else loadFolderDates())
@@ -714,31 +883,28 @@ object ForgeGalleryManager {
             }
         stale.chunked(500).forEach { dao.deleteImages(it) } // SQLite limits the number of parameters
 
-        // 3. Read the generation data of the new images, 100 per request.
-        val newFiles = listing.files.filter { it.fullpath !in indexedPaths }
+        // 3. Read the generation data of the new images (and of those it could not be read for before), 100 per
+        // request. An image whose data cannot be read is indexed anyway, so "All Images" shows every image.
+        val newFiles = listing.files.filter { it.fullpath !in indexedPaths || it.fullpath in unread }
         val reader = InfoReader()
         val failedFolders = HashSet<String>()
         var failed = 0
         var done = 0
-        var lastPercent = -1
         _gallerySyncProgress.value = 0 to newFiles.size
         for (chunk in newFiles.chunked(INFO_BATCH_SIZE)) {
             currentCoroutineContext().ensureActive()
-            _gallerySyncCurrentFile.value = chunk.first().name
             val infos = reader.read(chunk)
-            val entities = chunk.mapNotNull { file -> infos[file.fullpath]?.let { toEntity(file, it) } }
-            if (entities.isNotEmpty()) dao.insertImages(entities)
-            chunk.filter { it.fullpath !in infos }.forEach {
-                failed++
-                failedFolders += parentOf(it.fullpath)
-            }
+            val entities =
+                chunk.map { file ->
+                    infos[file.fullpath]?.let { toEntity(file, it) } ?: run {
+                        failed++
+                        failedFolders += parentOf(file.fullpath)
+                        unreadEntity(file)
+                    }
+                }
+            dao.insertImages(entities)
             done += chunk.size
             _gallerySyncProgress.value = done to newFiles.size
-            val percent = done * 100 / newFiles.size
-            if (notifySyncInBackground && percent != lastPercent) {
-                lastPercent = percent
-                postProgressNotification(done, newFiles.size)
-            }
         }
 
         // Folders with unreadable images are listed again next time, so those images get another try.
@@ -746,24 +912,8 @@ object ForgeGalleryManager {
         reloadIndex()
 
         val saved = if (isAutoSavingAll()) autoSaveNewImages(root) else 0
-        return SyncResult(added = newFiles.size - failed, removed = stale.size, failed = failed, savedToPhone = saved)
-    }
-
-    private fun postProgressNotification(
-        done: Int,
-        total: Int,
-    ) {
-        ForgeNotifications.builder(ForgeNotifications.CHANNEL_PROGRESS)?.let { builder ->
-            val notification =
-                builder
-                    .setContentTitle("Indexing Gallery...")
-                    .setContentText("$done / $total images")
-                    .setProgress(total, done, false)
-                    .setOngoing(true)
-                    .setSilent(true)
-                    .build()
-            ForgeNotifications.post(ForgeNotifications.ID_GALLERY_SYNC, notification)
-        }
+        val added = newFiles.count { it.fullpath !in indexedPaths }
+        return SyncResult(added = added, removed = stale.size, failed = failed, savedToPhone = saved)
     }
 
     /**
@@ -785,7 +935,6 @@ object ForgeGalleryManager {
         while (queue.isNotEmpty()) {
             val (folder, depth) = queue.removeFirst()
             currentCoroutineContext().ensureActive()
-            _gallerySyncCurrentFile.value = fileName(folder)
             val items = listFolder(folder)
             val folderKey = norm(folder)
             listed += folderKey
@@ -846,6 +995,21 @@ object ForgeGalleryManager {
             savedAt = System.currentTimeMillis(),
         )
     }
+
+    /** An image whose generation data could not be read: shown with its name and date, read again by later syncs. */
+    private fun unreadEntity(file: GalleryItem) =
+        GalleryImageEntity(
+            fullpath = file.fullpath,
+            name = file.name,
+            date = file.date.orEmpty(),
+            positivePrompt = "",
+            negativePrompt = "",
+            model = "",
+            sampler = "",
+            seed = "",
+            loras = "",
+            savedAt = INFO_NOT_READ,
+        )
 
     /**
      * Reads generation data the cheapest way the server's IIB version allows: 100 images per request, else one

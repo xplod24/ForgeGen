@@ -25,7 +25,8 @@ import androidx.compose.ui.unit.IntSize
 /* ============================================================================
  * ZOOM
  * Pinch to zoom an image (up to 5x) and double tap to zoom in at the tapped point (2.5x) or back out. A zoomed image
- * moves with one finger; at 1x one-finger swipes are left alone, so the pager still turns to the next image.
+ * moves with one finger; at 1x one-finger swipes are left alone, so the pager still turns to the next image. The
+ * "Pinch to Zoom" setting (2.1.0) switches it off.
  * ============================================================================ */
 
 private const val MAX_ZOOM = 5f
@@ -38,8 +39,13 @@ fun zoomableImageSizePx(): Int {
     return (widthPx * 2).toInt().coerceIn(512, 2048)
 }
 
+/** Zoom for a full-screen image; [enabled] false (the "Pinch to Zoom" setting off) leaves the image as it is. */
 @Composable
-fun Modifier.zoomable(key: Any?): Modifier {
+fun Modifier.zoomable(
+    key: Any?,
+    enabled: Boolean = true,
+): Modifier {
+    if (!enabled) return this
     var scale by remember(key) { mutableFloatStateOf(1f) }
     var offset by remember(key) { mutableStateOf(Offset.Zero) }
 

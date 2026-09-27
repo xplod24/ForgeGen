@@ -1,3 +1,13 @@
+## 2.1.0
+### Gallery
+- **Infinite Image Browsing is required:** the gallery shows your Forge server's images through this extension. The app now looks for it when it connects. On a server without it, the gallery says what is missing, with a link to the extension and "Check Again", instead of an empty or broken screen.
+- **No more folder settings:** the gallery finds its folder on its own (from Forge's settings, read through the extension). "Server Base Path", "Gallery Server Path" and "Auto-Config Gallery Path" are gone.
+- **The index updates itself:** after connecting, when the gallery opens or is refreshed, and a moment after the app made new images. The Sync button, its window and its notification are gone; a thin bar under the path shows when the index is being updated.
+- **All Images** always shows every image of the gallery, newest first, whatever the sort order. Images whose generation data could not be read are shown too, and their data is read again later.
+- **Layouts:** a new button (where Sync was) switches between a grid of 2, 3, 4 or 5 columns and a small, medium or large list. The list shows each image's name, prompt and date, with buttons to star and share it.
+- **Pinch to Zoom** can be switched off in the gallery settings (it also applies to the main screen's image viewer).
+- The sort, search and settings panels now slide away when closed (they used to vanish at once), switch smoothly from one to another, and close with a tap outside them or with Back.
+
 ## 2.0.3
 - A test release for the automatic updates of 2.0.2: nothing else changed.
 

@@ -56,6 +56,7 @@ class ForgeNetworkManager(
                 if (currentUrl != config.apiUrl) {
                     currentUrl = config.apiUrl
                     rebuildForgeApi(currentUrl)
+                    ForgeGalleryManager.onServerChanged()
                     ForgeRepository.resetPingJob()
                     hasFetchedInitialData = false
                     // isConnected only emits on a change, so when it is already true (app reopened while the process
@@ -102,9 +103,6 @@ class ForgeNetworkManager(
 
     private val _availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
     val availableLoras: StateFlow<List<ApiResource>> = _availableLoras.asStateFlow()
-
-    private val _galleryApiPrefix = MutableStateFlow("infinite_image_browsing")
-    val galleryApiPrefix: StateFlow<String> = _galleryApiPrefix.asStateFlow()
 
     fun rebuildForgeApi(url: String) {
         var cleanUrl = url.trimEnd('/')
@@ -167,41 +165,11 @@ class ForgeNetworkManager(
         fetchJob =
             managerScope.launch(Dispatchers.IO) {
                 if (forgeApi == null) return@launch
-                // Counted when it completes, its children included, so the gallery prefix is also known by then.
+                // Counted when it completes, its children included, so the gallery extension is also known by then.
                 coroutineContext.job.invokeOnCompletion { cause -> if (cause == null) fetchesDone.update { it + 1 } }
 
-                // Auto-detect the working directory and base prefix used by the gallery extension.
-                launch {
-                    val prefixes = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
-                    for (prefix in prefixes) {
-                        try {
-                            val response = forgeApi?.getGalleryFilesDynamic("$prefix/files")
-                            if (response?.isSuccessful == true) {
-                                _galleryApiPrefix.value = prefix
-                                Log.d(TAG, "Detected gallery API prefix: $prefix")
-
-                                // Extract the server's working directory (sdCwd) if the global settings endpoint is available under this prefix.
-                                try {
-                                    val settingsRes = forgeApi?.getGlobalSettingsDynamic("$prefix/global_setting")
-                                    if (settingsRes?.isSuccessful == true) {
-                                        val sdCwd = settingsRes.body()?.sdCwd ?: ""
-                                        val config = getConfig()
-                                        if (sdCwd.isNotEmpty() && config.serverBasePath != sdCwd) {
-                                            updateConfig(config.copy(serverBasePath = sdCwd))
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Log.w(TAG, "Failed to fetch global settings for prefix $prefix. Exception: $e")
-                                }
-                                break
-                            }
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            Log.w(TAG, "Probe failed for gallery prefix: $prefix. Exception: $e")
-                        }
-                    }
-                }
+                // The gallery extension, its folders, and then the gallery index.
+                launch { ForgeGalleryManager.detectExtension() }
 
                 try {
                     coroutineScope {

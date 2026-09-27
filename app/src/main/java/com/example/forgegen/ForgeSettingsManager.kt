@@ -178,7 +178,8 @@ object ForgeSettingsManager {
     private const val MAX_LOGGED_ERROR_BYTES = 64L * 1024
 
     // Calls to the gallery extension (Infinite Image Browsing) under each name it was published with.
-    private val GALLERY_PREFIXES = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
+    // The gallery extension's URL prefix, and names older builds of it used (ForgeGalleryManager tries them in order).
+    internal val GALLERY_PREFIXES = listOf("infinite_image_browsing", "inifinite-image-gallery", "infinite-image-gallery")
 
     fun isPingPath(path: String) = path.endsWith("sdapi/v1/progress") || path.endsWith("sdapi/v1/memory")
 
@@ -338,6 +339,8 @@ object ForgeSettingsManager {
             shareWithoutMetadata = parsed?.shareWithoutMetadata ?: false,
             vibrateOnFinish = parsed?.vibrateOnFinish ?: true,
             autoInstallUpdates = parsed?.autoInstallUpdates ?: true,
+            pinchToZoom = parsed?.pinchToZoom ?: true,
+            galleryView = GalleryView.of(parsed?.galleryView).name,
         )
     }
 
