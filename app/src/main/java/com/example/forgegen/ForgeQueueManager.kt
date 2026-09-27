@@ -208,6 +208,7 @@ object ForgeQueueManager {
         loadScheduleAndSpeed()
         startQueueWriter()
         startQueueWorker()
+        startServiceWatcher()
         startReconnectWatcher()
         startScheduleWatcher()
         cleanupSessionCache()
@@ -388,6 +389,28 @@ object ForgeQueueManager {
         ) { queue, paused, busy, connected, scheduled ->
             queue.firstOrNull { it.isRunnable() }?.takeIf { !paused && !busy && connected && scheduled == null }
         }.filterNotNull().first()
+
+    /**
+     * GenerationService runs whenever the queue is active, not only once a job starts: a queue waiting for the server
+     * (unreachable since the app started) or for its "Start at" had no service before its first job, so in the
+     * background the phone could freeze or end the app and the queue did not start (2.3.0-2). Each job still starts
+     * the service too (executeGeneration), in case it was not allowed to start here.
+     */
+    private fun startServiceWatcher() {
+        ForgeRepository.repositoryScope.launch {
+            isQueueActive.collect { active -> if (active) startGenerationService() }
+        }
+    }
+
+    private fun startGenerationService() {
+        val intent = Intent(application, GenerationService::class.java).setAction(GenerationService.ACTION_START_GENERATION)
+        try {
+            application.startForegroundService(intent)
+        } catch (e: Exception) {
+            // E.g. not allowed from the background (Android 12+); the next job tries again.
+            Log.e(TAG, "Failed to start foreground service", e)
+        }
+    }
 
     /** Continues a queue paused by a lost connection once the server is back and idle (with a short delay). */
     private fun startReconnectWatcher() {
@@ -571,15 +594,7 @@ object ForgeQueueManager {
         val initialBatchInfo = if (job.payload.n_iter > 1) "(Batch 1 of ${job.payload.n_iter}) " else ""
         _statusText.value = "Preparing $initialBatchInfo\"$previewText...\""
 
-        val serviceIntent =
-            Intent(application, GenerationService::class.java).apply {
-                action = GenerationService.ACTION_START_GENERATION
-            }
-        try {
-            application.startForegroundService(serviceIntent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to start foreground service", e)
-        }
+        startGenerationService()
 
         var connectionLost = false
         val startedAt = System.currentTimeMillis()
@@ -1037,10 +1052,28 @@ object ForgeQueueManager {
         saveQueueState()
     }
 
-    /** Jobs taken out of the queue with their places, so "Undo" can put them back. */
+    /**
+     * Jobs taken out of the queue with their places, so "Undo" can put them back; [liftedPause] is the reason of the
+     * pause that ended because nothing was left to run, which "Undo" brings back with the jobs.
+     */
     class RemovedJobs(
         val jobs: List<IndexedValue<QueuedGeneration>>,
+        val liftedPause: String? = null,
     )
+
+    /**
+     * The user took out the last jobs that were to run: nothing is left to hold back, so the pause ends, as when the
+     * queue runs empty (finishJob). It used to stay, and the next new job waited for "Resume" under the old reason
+     * (2.3.0-2). Returns the reason of the pause that ended, or null.
+     */
+    private fun liftPauseIfNothingToRun(): String? {
+        if (!_isQueuePaused.value || _generationQueue.value.any { it.isRunnable() }) return null
+        val reason = _queuePauseReason.value
+        ForgeNotifications.cancel(ForgeNotifications.ID_QUEUE_PAUSED)
+        _isQueuePaused.value = false
+        _queuePauseReason.value = null
+        return reason
+    }
 
     /** Removes every job but the running one; returns what was removed (for "Undo"), null when nothing was. */
     fun clearQueue(): RemovedJobs? {
@@ -1055,12 +1088,20 @@ object ForgeQueueManager {
         _completedQueueItems.value = 0
         runSucceeded.set(0)
         runFailed.set(0)
+        val liftedPause = liftPauseIfNothingToRun()
         saveQueueState()
-        return RemovedJobs(removed).takeIf { removed.isNotEmpty() }
+        return RemovedJobs(removed, liftedPause).takeIf { removed.isNotEmpty() }
     }
 
-    /** Puts removed jobs back at their places (never before the running job); jobs already back are skipped. */
+    /**
+     * Puts removed jobs back at their places (never before the running job); jobs already back are skipped. A pause
+     * their removal ended comes back with them.
+     */
     fun restoreJobs(removed: RemovedJobs) {
+        // The pause first: the worker would send a restored job the moment it is back in a queue that is not paused.
+        val current = _generationQueue.value.map { it.id }.toSet()
+        val bringsJobsBack = removed.jobs.any { it.value.isRunnable() && it.value.id !in current }
+        if (bringsJobsBack && !_isQueuePaused.value) removed.liftedPause?.let { pauseQueue(it) }
         var restored = 0
         _generationQueue.update { q ->
             val list = q.toMutableList()
@@ -1130,8 +1171,9 @@ object ForgeQueueManager {
         }
         val job = removed
         if (job != null && job.value.isRunnable()) _totalQueueSize.update { maxOf(_completedQueueItems.value, it - 1) }
+        val liftedPause = if (job != null) liftPauseIfNothingToRun() else null
         saveQueueState()
-        return job?.let { RemovedJobs(listOf(it)) }
+        return job?.let { RemovedJobs(listOf(it), liftedPause) }
     }
 
     /** Moves the job [id] to [toIndex] (dragged in the queue); the running job stays first and cannot be moved. */

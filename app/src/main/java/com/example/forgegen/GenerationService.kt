@@ -24,9 +24,10 @@ import kotlin.math.roundToInt
 /* ============================================================================
  * FOREGROUND GENERATION SERVICE
  * Keeps the app alive while the queue works (ForgeQueueManager.isQueueActive): a job runs, or jobs wait to be sent,
- * also while the queue waits for a lost connection. It holds a wake lock for that time and stops by itself when the
- * queue stops. Its type is specialUse, which has no daily time limit (dataSync stops after 6 hours a day on
- * Android 15+).
+ * also while the queue waits for the server or its "Start at" (the queue starts the service as soon as it is active,
+ * since 2.3.0-2 also before its first job). It holds a wake lock for that time (not while waiting for "Start at") and
+ * stops by itself when the queue stops. Its type is specialUse, which has no daily time limit (dataSync stops after
+ * 6 hours a day on Android 15+).
  * ============================================================================ */
 
 class GenerationService : Service() {

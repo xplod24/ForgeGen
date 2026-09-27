@@ -1,3 +1,7 @@
+## 2.3.0-2
+- **Queue:** a queue that is waiting keeps ForgeGen running in the background with its notification, like a queue at work. Before its first job, a queue waiting for the server (unreachable when the app started) or for its "Start at" time had no such protection, so the phone could freeze or close the app and the queue did not start until you opened it again.
+- **Queue:** "Clear" (or removing the last waiting job) on a paused queue now ends the pause, so the next new job runs without "Resume" instead of waiting under the old reason. "Undo" brings the jobs back paused, as they were.
+
 ## 2.3.0-1
 - Settings: the empty band between the top bar and "Settings" is gone.
 - **Updates download in the background:** after "Install Update" the app steps aside and the download goes on with the app closed or the screen locked (it used to stop). The progress is in the notifications, in the Now Bar on Samsung phones with "Show Progress in Now Bar" on, and in Settings > Updates. The full-screen download window is gone.
