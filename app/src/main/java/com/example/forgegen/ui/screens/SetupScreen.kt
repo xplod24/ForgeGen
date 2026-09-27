@@ -729,12 +729,10 @@ fun SetupScreen(
                                 Text("Dismiss")
                             }
                             Spacer(Modifier.width(8.dp))
-                            Button(onClick = {
-                                // The download runs in the background with its progress in the notifications (and the
-                                // Now Bar); the app steps aside meanwhile, as the owner asked (2.3.0-1).
-                                viewModel.downloadUpdate()
-                                context.findActivity()?.moveTaskToBack(true)
-                            }) {
+                            // The download runs in UpdateDownloadService with its progress here, in the notifications
+                            // and the Now Bar; the app stays open (2.3.0-3: 2.3.0-1 sent it to the background, which the
+                            // owner did not like).
+                            Button(onClick = { viewModel.downloadUpdate() }) {
                                 Text("Install Update")
                             }
                         }
