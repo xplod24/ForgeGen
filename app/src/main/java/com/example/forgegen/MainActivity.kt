@@ -93,7 +93,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
 
 // --- GLOBAL UTILITIES & SHARED COMPONENTS ---
 
@@ -642,11 +641,6 @@ class MainActivity : ComponentActivity() {
             // The phone's network came back: the server may be reachable again (a new minute of tries).
             LaunchedEffect(isOnline) { if (isOnline) viewModel.reconnect() }
 
-            // GLOBAL UPDATER STATES
-            val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
-            val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
-            val updateDownloadProgress by viewModel.updateDownloadProgress.collectAsStateWithLifecycle()
-            val updateDownloadStats by viewModel.updateDownloadStats.collectAsStateWithLifecycle()
 
             // "Vibrate on Batch Finish": a short vibration when a batch is done while the app is on screen.
             val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -761,30 +755,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // GLOBAL DOWNLOAD PROGRESS DIALOG
-                    if (isUpdateDownloading && !isLocked) {
-                        AlertDialog(
-                            onDismissRequest = { },
-                            properties =
-                                androidx.compose.ui.window.DialogProperties(
-                                    dismissOnBackPress = false,
-                                    dismissOnClickOutside = false,
-                                ),
-                            title = { Text("Downloading Update") },
-                            text = {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                                    LinearProgressIndicator(
-                                        progress = { updateDownloadProgress },
-                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    )
-                                    val mbDownloaded = String.format(Locale.US, "%.2f", updateDownloadStats.first / (1024f * 1024f))
-                                    val mbTotal = String.format(Locale.US, "%.2f", updateDownloadStats.second / (1024f * 1024f))
-                                    Text("${(updateDownloadProgress * 100).toInt()}% ($mbDownloaded MB / $mbTotal MB)")
-                                }
-                            },
-                            confirmButton = { },
-                        )
-                    }
+                    // An update downloads in the background (UpdateDownloadService): its progress is a notification and
+                    // a card in Settings > Updates, not a dialog blocking the app (2.3.0-1).
 
                     // GLOBAL ALERTIMPORT DIALOG FOR INCOMING SHARED IMAGES
                     val importedImageMetadata by viewModel.importedImageMetadata.collectAsStateWithLifecycle()

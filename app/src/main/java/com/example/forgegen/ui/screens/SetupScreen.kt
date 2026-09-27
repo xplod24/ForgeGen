@@ -200,11 +200,14 @@ private val SEARCHING_AMBER = Color(0xFFFFB300)
 fun SetupScreen(
     viewModel: ForgeViewModel,
     onDismiss: () -> Unit,
+    // Shown over the main screen, under its top bar: the status bar is already covered there. Counting it again
+    // left a wide empty band above "Settings" (2.3.0).
+    belowTopBar: Boolean = false,
 ) {
     // --- STATE OBSERVATION ---
     val config by viewModel.config.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
-    val isUpdateDownloading by viewModel.isUpdateDownloading.collectAsStateWithLifecycle()
+    val updateDownload by viewModel.updateDownload.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
 
@@ -657,8 +660,52 @@ fun SetupScreen(
             }
 
             // --- UPDATES ---
+            val download = updateDownload
+            if (download != null) {
+                // "Install Update" was tapped: it downloads in the background (UpdateDownloadService), also with the
+                // app closed or the screen locked; the notification (and the Now Bar) shows the same.
+                add(SettingsPage.UPDATES, null, "update downloading installing progress ${download.versionName}") {
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                                .padding(16.dp),
+                    ) {
+                        Text(
+                            if (download.installing) "Installing ${download.versionName}" else "Downloading ${download.versionName}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        if (download.installing || download.total <= 0) {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        val detail =
+                            when {
+                                download.installing -> "ForgeGen closes to update; a notification says when it is done."
+                                download.total > 0 ->
+                                    "${(download.fraction * 100).toInt()}% · " +
+                                        "${"%.1f".format(java.util.Locale.US, download.done / 1048576.0)} / " +
+                                        "${"%.1f".format(java.util.Locale.US, download.total / 1048576.0)} MB"
+                                else -> "Starting the download..."
+                            }
+                        Text(detail, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+                        Text(
+                            "It goes on in the background: you can leave the app or lock the screen.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        )
+                    }
+                }
+            }
             val manifest = updateManifest
-            if (manifest != null && manifest.versionCode != dismissedUpdateVersion && !isUpdateDownloading) {
+            if (download == null && manifest != null && manifest.versionCode != dismissedUpdateVersion) {
                 add(SettingsPage.UPDATES, null, "update available install new version ${manifest.versionName}") {
                     Column(
                         modifier =
@@ -682,7 +729,12 @@ fun SetupScreen(
                                 Text("Dismiss")
                             }
                             Spacer(Modifier.width(8.dp))
-                            Button(onClick = { viewModel.downloadUpdate() }) {
+                            Button(onClick = {
+                                // The download runs in the background with its progress in the notifications (and the
+                                // Now Bar); the app steps aside meanwhile, as the owner asked (2.3.0-1).
+                                viewModel.downloadUpdate()
+                                context.findActivity()?.moveTaskToBack(true)
+                            }) {
                                 Text("Install Update")
                             }
                         }
@@ -803,14 +855,18 @@ fun SetupScreen(
                     "private saving".takeIf { config.savePrivately },
                 ).joinToString(" · "),
             SettingsPage.UPDATES to
-                "${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only",
+                (
+                    updateDownload?.let { d ->
+                        if (d.installing) "Installing ${d.versionName}" else "Downloading ${d.versionName} · ${(d.fraction * 100).toInt()}%"
+                    } ?: ("${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only")
+                ),
             SettingsPage.DATA to "Export, import, logs, wipe",
             SettingsPage.DEBUG to "Tools for testing the app",
         )
     val hasUpdate = updateManifest != null && updateManifest?.versionCode != dismissedUpdateVersion
 
     // --- UI STRUCTURE ---
-    Scaffold { padding ->
+    Scaffold(contentWindowInsets = if (belowTopBar) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets) { padding ->
         AnimatedContent(
             targetState = page,
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -1249,7 +1305,7 @@ private fun SettingsHome(
             Text(
                 "Settings",
                 style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 12.dp),
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
             )
         }
         item {

@@ -1,3 +1,7 @@
+## 2.3.0-1
+- Settings: the empty band between the top bar and "Settings" is gone.
+- **Updates download in the background:** after "Install Update" the app steps aside and the download goes on with the app closed or the screen locked (it used to stop). The progress is in the notifications, in the Now Bar on Samsung phones with "Show Progress in Now Bar" on, and in Settings > Updates. The full-screen download window is gone.
+
 ## 2.3.0
 ### New settings screen
 - **Categories:** the settings open on your server (address, connection, profiles) and seven categories, each with a line on how it is set: Appearance, Notifications, Queue & Background, Privacy & Security, Updates and Backup & Data. Tap one to open its page; Back returns.

@@ -2,23 +2,20 @@ package com.example.forgegen
 
 import android.app.Application
 import android.content.Context
-import android.content.Intent
 import android.util.Log
-import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
 /* ============================================================================
  * UPDATE MANAGER (OTA)
- * Checks the latest GitHub release of the app when it starts (at most every 15 minutes, or on "Check for Updates"),
- * downloads its APK with live progress and installs it through SelfUpdate (PackageInstaller: on Android 12+ without
- * the system's confirmation where it allows that). The background check without the app open is SelfUpdate's.
+ * Checks the latest GitHub release of the app when it starts (at most every 15 minutes, or on "Check for Updates").
+ * "Install Update" hands the release to UpdateDownloadService, which downloads it in the background and installs it
+ * through SelfUpdate (PackageInstaller: on Android 12+ without the system's confirmation where it allows that).
+ * The background check without the app open is SelfUpdate's.
  * A release is an update when its tag "v<major>.<minor>.<patch>[-<micro>]" maps to a higher versionCode than the
  * installed build.
  * ============================================================================ */
@@ -42,17 +39,8 @@ class ForgeUpdateManager(
     private val _updateManifest = MutableStateFlow<UpdateManifest?>(null)
     val updateManifest: StateFlow<UpdateManifest?> = _updateManifest.asStateFlow()
 
-    private val _isUpdateDownloading = MutableStateFlow(false)
-    val isUpdateDownloading: StateFlow<Boolean> = _isUpdateDownloading.asStateFlow()
-
-    private val _updateDownloadProgress = MutableStateFlow(0f)
-    val updateDownloadProgress: StateFlow<Float> = _updateDownloadProgress.asStateFlow()
-
-    private val _updateDownloadStats = MutableStateFlow(0L to 0L)
-    val updateDownloadStats: StateFlow<Pair<Long, Long>> = _updateDownloadStats.asStateFlow()
-
-    private val updateFile: File
-        get() = SelfUpdate.apkFile(application)
+    /** An update being downloaded from the app (UpdateDownloadService); null when none is. */
+    val updateDownload: StateFlow<SelfUpdate.DownloadProgress?> = SelfUpdate.downloadProgress
 
     /**
      * Checks for a newer release. An automatic check (not [manual]) is skipped when one ran in the last 15 minutes
@@ -108,70 +96,18 @@ class ForgeUpdateManager(
         }
     }
 
+    /**
+     * "Install Update": the download and the install run in UpdateDownloadService, a foreground service, so the
+     * app can go to the background and a locked screen does not stop it (2.3.0-1).
+     */
     fun downloadUpdate() {
         val manifest = _updateManifest.value ?: return
-        if (_isUpdateDownloading.value) return
-
-        scope.launch(Dispatchers.IO) {
-            _isUpdateDownloading.value = true
-            _updateDownloadProgress.value = 0f
-            _updateDownloadStats.value = 0L to 0L
-            try {
-                val downloaded =
-                    SelfUpdate.download(gitHubApi, manifest, updateFile) { done, total ->
-                        if (total > 0) {
-                            _updateDownloadProgress.value = done.toFloat() / total.toFloat()
-                            _updateDownloadStats.value = done to total
-                        }
-                    }
-                _isUpdateDownloading.value = false
-                if (downloaded) {
-                    _updateDownloadProgress.value = 1f
-                    installUpdate(manifest)
-                } else {
-                    showToast("Download failed or the file did not match the release. Try again.")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Download failed", e)
-                _isUpdateDownloading.value = false
-                showToast("Download error: ${e.message}")
-            }
-        }
-    }
-
-    /**
-     * Installs the downloaded update through SelfUpdate (the app closes when it is replaced, and a notification
-     * says so); if a session cannot be opened, the system's installer screen as before.
-     */
-    private suspend fun installUpdate(manifest: UpdateManifest) {
-        val file = updateFile
-        if (!file.exists()) {
-            showToast("Installation file missing!")
-            return
-        }
+        if (SelfUpdate.downloadProgress.value != null) return
         try {
-            showToast("Installing ${manifest.versionName}... The app closes when it is done.")
-            SelfUpdate.install(application, file, manifest.versionName)
-            _updateManifest.value = null
+            UpdateDownloadService.start(application, manifest)
         } catch (e: Exception) {
-            Log.e(TAG, "PackageInstaller session failed, opening the installer screen", e)
-            withContext(Dispatchers.Main) { openInstallerScreen(file) }
-        }
-    }
-
-    private fun openInstallerScreen(file: File) {
-        try {
-            val installUri = FileProvider.getUriForFile(application, "${application.packageName}.fileprovider", file)
-            val installIntent =
-                Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(installUri, "application/vnd.android.package-archive")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                }
-            application.startActivity(installIntent)
-            _updateManifest.value = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch installer", e)
-            showToast("Launch failed: ${e.message}")
+            Log.e(TAG, "Could not start the update download", e)
+            showToast("Download error: ${e.message}")
         }
     }
 }

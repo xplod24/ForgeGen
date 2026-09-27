@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"
         tools:ignore="ForegroundServicesPolicy" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- UpdateDownloadService: "Install Update" downloads the release in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Live Updates (Android 16): the progress in Samsung's Now Bar, only with "Show Progress in Now Bar" on. -->
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <!-- "Start at" of the queue: an exact alarm where Android grants it (by default up to Android 13). -->
@@ -81,6 +83,12 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!-- "Install Update": the download goes on with the app in the background or the screen locked. -->
+        <service
+            android:name=".UpdateDownloadService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
 
         <!-- SelfUpdate: the periodic update check, the result of an install, and the notice after an update. -->
         <service

@@ -280,7 +280,8 @@ fun MainScreen(
                     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                         SetupScreen(
                             viewModel = viewModel,
-                            onDismiss = { showSettingsOverlay = false }
+                            onDismiss = { showSettingsOverlay = false },
+                            belowTopBar = true,
                         )
                     }
                 }

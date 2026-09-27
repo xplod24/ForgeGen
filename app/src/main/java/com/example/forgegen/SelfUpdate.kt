@@ -18,6 +18,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 import java.security.MessageDigest
@@ -29,8 +32,9 @@ import java.security.MessageDigest
  * - A newer release is downloaded (SHA-256 checked) and installed with PackageInstaller. On Android 12+ an app may
  *   update itself without asking (USER_ACTION_NOT_REQUIRED + UPDATE_PACKAGES_WITHOUT_USER_ACTION); where the system
  *   still wants a confirmation (the first time, some phones), a notification or the open app asks for it.
- * - Never while the queue works (installing ends the app's process) or while the app is on screen (its own dialog
- *   offers the update there). "Install Updates Automatically" off: only a notification.
+ * - Never while the queue works (installing ends the app's process) or while the app is on screen (Settings > Updates
+ *   offers the update there; "Install Update" downloads it in UpdateDownloadService). "Install Updates
+ *   Automatically" off: only a notification.
  * - After a silent update UpdatedReceiver says so in a notification (the app itself is not restarted).
  * ============================================================================ */
 object SelfUpdate {
@@ -49,6 +53,26 @@ object SelfUpdate {
 
     /** What the background check does with the latest release. */
     enum class Action { NONE, NOTIFY, WAIT, INSTALL }
+
+    /**
+     * An update downloaded from the app ("Install Update", UpdateDownloadService): its version, the bytes so far and
+     * in all (0: not known yet), and whether it is being installed. Settings > Updates shows it.
+     */
+    data class DownloadProgress(
+        val versionName: String,
+        val done: Long,
+        val total: Long,
+        val installing: Boolean = false,
+    ) {
+        val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+    }
+
+    private val _downloadProgress = MutableStateFlow<DownloadProgress?>(null)
+    val downloadProgress: StateFlow<DownloadProgress?> = _downloadProgress.asStateFlow()
+
+    fun setDownloadProgress(progress: DownloadProgress?) {
+        _downloadProgress.value = progress
+    }
 
     fun decide(
         installedCode: Int,

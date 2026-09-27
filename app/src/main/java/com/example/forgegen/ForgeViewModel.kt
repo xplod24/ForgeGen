@@ -422,9 +422,7 @@ class ForgeViewModel(
 
     // --- DELEGATION OF STATE FROM FORGE UPDATE MANAGER ---
     val updateManifest: StateFlow<UpdateManifest?> = updateManager.updateManifest
-    val isUpdateDownloading: StateFlow<Boolean> = updateManager.isUpdateDownloading
-    val updateDownloadProgress: StateFlow<Float> = updateManager.updateDownloadProgress
-    val updateDownloadStats: StateFlow<Pair<Long, Long>> = updateManager.updateDownloadStats
+    val updateDownload: StateFlow<SelfUpdate.DownloadProgress?> = updateManager.updateDownload
 
     // --- STATE FOR IMPORTED IMAGE (Share Intent) ---
     private val _importedImageMetadata = MutableStateFlow<String?>(null)
