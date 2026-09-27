@@ -136,7 +136,6 @@ const val AUTO_SAVE_FAVORITES = "Favorites"
 const val AUTO_SAVE_ALL = "All new images"
 
 data class AppState(
-    var setupExpandedSections: Set<String> = emptySet(),
     var positivePrompt: String = "",
     var negativePrompt: String = "",
     var cfgScale: Float = 7.0f,

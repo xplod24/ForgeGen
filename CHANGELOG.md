@@ -1,3 +1,12 @@
+## 2.3.0
+### New settings screen
+- **Categories:** the settings open on your server (address, connection, profiles) and seven categories, each with a line on how it is set: Appearance, Notifications, Queue & Background, Privacy & Security, Updates and Backup & Data. Tap one to open its page; Back returns.
+- **Search:** type in "Search settings" to find any setting and change it right there in the results.
+- **Cleaner look:** settings sit in rounded cards with coloured category icons, in the style of the rest of the app.
+- **Server page:** the connection status with Retry, the address, profiles, timeout and diagnostics in one place (they were small chips before).
+- Settings moved to where you would look for them: "Keep Screen On" is in Queue & Background; the out-of-memory logs and "Wipe Application Data" are in Backup & Data.
+- "Show Progress in Now Bar" is no longer marked "Work in Progress".
+
 ## 2.2.0
 ### Gallery
 - **Tabs:** Gallery | Favorites | All Images (newest first). Your favorites and all your images are one tap (or a swipe) away from any folder; the Favorites and All Images folders inside the gallery are gone.

@@ -11,7 +11,7 @@ import javax.crypto.spec.PBEKeySpec
 
 /* ============================================================================
  * DEBUG MODE
- * A hidden panel for the owner (the "Debug" section of the settings): tap "App Version" in App Updates 8 times, then
+ * A hidden panel for the owner (Settings > Debug): tap "App Version" in Settings > Updates 8 times, then
  * enter the password. The app holds only a salted PBKDF2 hash of the password. This hides the panel from ordinary
  * users; it is no protection against someone who rebuilds the app from its source.
  * To change the password: put a new random SALT and DebugMode.toHex(DebugMode.hash("new password",
