@@ -114,6 +114,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 
 ## 2. User Preferences & UI Principles
 - **What users generate is up to their server (owner's final decision, 1.6.0):** the app does not judge prompts or hide content; the server enforces its rules (HTTP 403, 1.6.2 removed the app's last own check). Don't add prompt checks back to the app; a refusal is the server's answer.
+- **txt2img only (owner, after 2.3.0-3):** the app is dedicated to txt2img. No img2img, inpainting, ControlNet, the
+  extras/upscale endpoints or interrogate (prompt from an image); new ideas must work through txt2img parameters.
 - **Language (owner's explicit request):** always talk to the owner in Polish, with no English sentences or headings and Polish words instead of English jargon where a natural one exists; code, UI texts and release notes stay in English.
 - **Releases (owner's standing request):** after finishing a change, Claude publishes the release itself: bump `gradle.properties` (patch for fixes and small changes, minor for new features, major only for a clear change across the whole repository OR on the owner's explicit command), add the `## <version>` section to `CHANGELOG.md` and push to master. Release notes are written for the user of the app, in English like the rest of the UI.
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
@@ -155,3 +157,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
    chip among the first 3): 69% fewer key presses. Data: the tagcomplete extension's danbooru.csv (MIT, ~140k tags)
    from the owner's server if installed, else a bundled top list (~1 MB); open question for the owner. Minor
    version (2.4.0). Preview: artifact "ForgeGen Tag Suggestions" (https://claude.ai/artifact/C4LixCf4mJPLAH3ejPVnDN).
+2. **"More Like This" in the gallery** (the owner's spec): a button on a gallery image takes its generation data
+   (prompt, negative, sampler, steps, CFG, size, model, hires fix, from the infotext) and its seed, and queues jobs
+   with seeds within at most +/-10 of it. Open question for the owner: neighbouring seeds (seed+1, seed-1, ...) give
+   unrelated images (Stable Diffusion's noise has no locality), so the proposal is to keep the image's seed and use
+   the neighbours as variation seeds (`subseed` = seed+/-k, `subseed_strength` about 0.1-0.25), which keeps the
+   composition and is still plain txt2img; plain neighbouring seeds as an option. Needs `subseed`/`subseed_strength`
+   in `Txt2ImgPayloadDto`.
