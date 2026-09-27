@@ -185,8 +185,6 @@ class ForgeViewModel(
             ForgeUpdateManager(
                 application = getApplication(),
                 gitHubApi = GitHubApi.create(),
-                getConfig = { ForgeRepository.config.value },
-                saveConfig = { ForgeSettingsManager.saveConfig(it) },
                 showToast = { showToast(it) },
                 scope = viewModelScope,
             )

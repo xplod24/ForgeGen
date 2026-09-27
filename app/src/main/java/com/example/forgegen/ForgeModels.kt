@@ -74,6 +74,8 @@ data class AppConfig(
     var shareWithoutMetadata: Boolean = false,
     // A short vibration when a batch finishes while the app is on screen (2.0.0).
     var vibrateOnFinish: Boolean = true,
+    // New releases are downloaded and installed in the background (SelfUpdate, 2.0.2); off: only a notification.
+    var autoInstallUpdates: Boolean = true,
 )
 
 const val THEME_SYSTEM = "System"

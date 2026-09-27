@@ -1,3 +1,8 @@
+## 2.0.2
+- **Updates install themselves:** every 6 hours, on Wi-Fi, the app looks for a new release on GitHub, also while it is closed, and installs it in the background (on Android 12 and newer without asking, where the phone allows it). Never while the queue works or while you are using the app; a notification says when an update was installed. The first time, or on some phones, Android still asks for a confirmation: a notification leads to it.
+- "Install Updates Automatically" in App Updates turns this off; you then only get a notification about a new version.
+- The app also looks for updates at every start (at most every 15 minutes) instead of once a day, and "Install Update" in the app installs without the extra installer screen where the phone allows it.
+
 ## 2.0.1
 - Fixed: the app closed right after the start animation (when the main screen was about to open).
 

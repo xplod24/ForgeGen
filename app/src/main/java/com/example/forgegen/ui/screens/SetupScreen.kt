@@ -637,6 +637,16 @@ fun SetupScreen(
                 }
             }
             item {
+                SwitchPreference(
+                    title = "Install Updates Automatically",
+                    subtitle =
+                        "Looks for new releases every 6 hours on Wi-Fi and installs them in the background " +
+                            "(never while the queue works); off: only a notification",
+                    checked = config.autoInstallUpdates,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(autoInstallUpdates = it)) },
+                )
+            }
+            item {
                 TextPreference(
                     title = "Check for Updates",
                     subtitle = "Look for a newer release on GitHub",

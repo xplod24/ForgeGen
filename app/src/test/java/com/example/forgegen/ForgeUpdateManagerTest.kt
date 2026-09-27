@@ -21,8 +21,6 @@ class ForgeUpdateManagerTest {
     private lateinit var updateManager: ForgeUpdateManager
     private lateinit var mockApi: GitHubApi
 
-    private var testConfig = AppConfig()
-
     private fun apk(digest: String? = "sha256:abc123") =
         GitHubAssetDto(
             name = "app-debug.apk",
@@ -54,8 +52,6 @@ class ForgeUpdateManagerTest {
             ForgeUpdateManager(
                 application = mockApplication,
                 gitHubApi = mockApi,
-                getConfig = { testConfig },
-                saveConfig = { testConfig = it },
                 showToast = {},
                 scope = TestScope(StandardTestDispatcher()),
             )

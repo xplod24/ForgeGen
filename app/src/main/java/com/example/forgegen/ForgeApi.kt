@@ -134,6 +134,9 @@ interface GitHubApi {
     ): Response<ResponseBody>
 
     companion object {
+        // GitHub's API; tests point it at a local server.
+        @Volatile internal var baseUrl = "https://api.github.com/"
+
         fun create(): GitHubApi {
             val client =
                 OkHttpClient
@@ -143,7 +146,7 @@ interface GitHubApi {
                     .build()
             return Retrofit
                 .Builder()
-                .baseUrl("https://api.github.com/")
+                .baseUrl(baseUrl)
                 .client(client)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()

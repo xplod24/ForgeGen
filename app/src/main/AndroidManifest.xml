@@ -18,6 +18,10 @@
     <!-- "Vibrate on Batch Finish" -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- SelfUpdate: the app updates itself without the system's confirmation (Android 12+), and its periodic update
+         check survives a restart of the phone. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
 
 
@@ -77,6 +81,22 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <!-- SelfUpdate: the periodic update check, the result of an install, and the notice after an update. -->
+        <service
+            android:name=".UpdateCheckJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <receiver
+            android:name=".UpdateStatusReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".UpdatedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- The alarm of the queue's "Start at". -->
         <receiver

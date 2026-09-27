@@ -155,6 +155,7 @@ object ForgeSettingsManager {
 
         _config.value = loadedConfig
         cacheThemeMode(loadedConfig.themeMode)
+        SelfUpdate.setAutoInstall(app, loadedConfig.autoInstallUpdates)
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
         _pinnedImages.value = loadedPinnedImages
@@ -336,6 +337,7 @@ object ForgeSettingsManager {
             savePrivately = parsed?.savePrivately ?: false,
             shareWithoutMetadata = parsed?.shareWithoutMetadata ?: false,
             vibrateOnFinish = parsed?.vibrateOnFinish ?: true,
+            autoInstallUpdates = parsed?.autoInstallUpdates ?: true,
         )
     }
 
@@ -365,6 +367,8 @@ object ForgeSettingsManager {
 
         _config.value = updatedConfig
         cacheThemeMode(updatedConfig.themeMode)
+        // The background update check reads it without the database.
+        if (::application.isInitialized) SelfUpdate.setAutoInstall(application, updatedConfig.autoInstallUpdates)
 
         settingsScope.launch(dbWriteDispatcher) {
             db.appSettingDao().putSetting(AppSettingEntity(CONFIG_KEY, gson.toJson(updatedConfig)))

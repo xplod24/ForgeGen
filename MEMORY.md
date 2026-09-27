@@ -53,6 +53,19 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   timeout (`isPingPath`). UI: `ConnectionStatus` in the top bar (tap = `openServerDialog`), `ServerConnectionDialog`
   (address, profiles, Test = `testServer`, Connect/Retry = `connectTo`, Settings, Close) shown by MainActivity when
   OFFLINE (closable, `offlineDialogClosed`) or asked for. Tests: G31 (window shortened), G21/G22 (start).
+- **Self update (2.0.2, owner's request):** `SelfUpdate`: `UpdateCheckJob` (JobScheduler, every 6 h, unmetered, persisted:
+  RECEIVE_BOOT_COMPLETED; scheduled by `ForgeApp.onCreate`) runs `checkInBackground`: `decide(installed, latest,
+  autoInstall, appOnScreen, queueWorking)` -> NONE (nothing newer, or the app is on screen: its own dialog offers it) /
+  NOTIFY ("Install Updates Automatically" off) / WAIT (queue active or generating: installing kills the process) /
+  INSTALL (`download`: reuses a verified file, SHA-256 against GitHub's digest; then `install`). `install` = a
+  PackageInstaller session with `USER_ACTION_NOT_REQUIRED` (Android 12+, UPDATE_PACKAGES_WITHOUT_USER_ACTION; allowed
+  for an app updating itself) and `setRequestUpdateOwnership` (14+); `UpdateStatusReceiver` shows the system's
+  confirmation when it still wants one (at once if the app is on screen, else a notification) or a failure;
+  `UpdatedReceiver` (MY_PACKAGE_REPLACED) posts "ForgeGen updated to X" when `installing_version` was set by us.
+  The setting is mirrored to SharedPreferences `updates`/`auto_install` (the job has no database). The in-app check
+  runs at every start, throttled to 15 min (`updates`/`last_check_ms`; `lastUpdateCheckDate` is no longer used), and
+  "Install Update" goes through `SelfUpdate.install` (the old ACTION_VIEW screen only if a session cannot be opened).
+  Unverified on a phone: whether Samsung installs silently. `GitHubApi.baseUrl` is overridable for tests (G34).
 - **Compose animations outside composition (2.0.1):** `Animatable.animateTo` (and anything using `withFrameNanos`) needs
   Compose's frame clock: run it in a `LaunchedEffect` or with `AndroidUiDispatcher.Main`, never in a plain
   `lifecycleScope`/`Dispatchers.Main` coroutine. 2.0.0 did that for the splash's reveal and crashed at every start

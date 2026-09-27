@@ -8,11 +8,17 @@ import coil.disk.DiskCache
 /* ============================================================================
  * APPLICATION
  * Holds the one image loader of the app (Coil). It used to be built by the activity, so every rotation or theme
- * change made a new one and lost the images already in memory.
+ * change made a new one and lost the images already in memory. Also plans the background update check (SelfUpdate).
  * ============================================================================ */
 class ForgeApp :
     Application(),
     ImageLoaderFactory {
+    override fun onCreate() {
+        super.onCreate()
+        // New releases are looked for every 6 hours, also while the app is closed.
+        SelfUpdate.scheduleChecks(this)
+    }
+
     override fun newImageLoader(): ImageLoader =
         ImageLoader
             .Builder(this)
