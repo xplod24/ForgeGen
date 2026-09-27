@@ -1,3 +1,6 @@
+## 2.0.3
+- A test release for the automatic updates of 2.0.2: nothing else changed.
+
 ## 2.0.2
 - **Updates install themselves:** every 6 hours, on Wi-Fi, the app looks for a new release on GitHub, also while it is closed, and installs it in the background (on Android 12 and newer without asking, where the phone allows it). Never while the queue works or while you are using the app; a notification says when an update was installed. The first time, or on some phones, Android still asks for a confirmation: a notification leads to it.
 - "Install Updates Automatically" in App Updates turns this off; you then only get a notification about a new version.
