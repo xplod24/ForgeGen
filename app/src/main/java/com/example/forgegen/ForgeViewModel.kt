@@ -255,6 +255,7 @@ class ForgeViewModel(
         ForgeQueueManager.start()
         ForgeSettingsManager.updateInitStatus("Loading Gallery...")
         ForgeGalleryManager.start()
+        ForgeTagManager.start(app) // the saved tag list is read in the background
     }
 
     /** The last step of the start: the server's first answer and its lists. Sets the final status. */
@@ -292,6 +293,13 @@ class ForgeViewModel(
     val appState: StateFlow<AppState> = ForgeRepository.appState
     val promptHistory: StateFlow<List<PromptHistoryItem>> = ForgeRepository.promptHistory
     val wildcards: StateFlow<List<WildcardEntity>> = ForgePromptManager.wildcards
+
+    // Tag suggestions (2.4.2): the server's tag list, its state and how the server writes tags.
+    val tagList: StateFlow<TagList?> = ForgeTagManager.tags
+    val tagListStatus: StateFlow<ForgeTagManager.Status> = ForgeTagManager.status
+    val tagInsertRules: StateFlow<TagInsertRules> = ForgeTagManager.rules
+
+    fun reloadTagList() = ForgeTagManager.reload()
 
     val activeLoras: StateFlow<List<ActiveLora>> = ForgeRepository.activeLoras
 

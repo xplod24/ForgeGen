@@ -1,3 +1,13 @@
+## 2.4.2
+### Tag suggestions
+- **Tags above the keyboard:** while you type a tag in a prompt, a strip right above the keyboard suggests Danbooru tags: first those starting with what you typed, then those with a later word starting with it (`hair` gives `long hair`), then aliases (`blond` finds `blonde hair`), each most used first. A chip shows the tag's category as a coloured dot, its name and how many Danbooru posts use it. Tap it to put the tag in place of what you typed, followed by ", ".
+- Tags are written the way Forge reads them, following your server's tagcomplete settings: spaces instead of underscores (emoticons like `^_^` stay) and escaped brackets (`chen \(touhou\)`).
+- **Wildcards and LoRAs** are suggested the same way after `__` and `<lora:`.
+- The tag list is the one the tagcomplete extension on your server uses, downloaded once and kept on the phone, so it also works offline. It is downloaded again after a week, when the server switches to another tag file, or when you tap Settings > Appearance > Tag List.
+- With little room above the keyboard, the image preview and then the top bar step aside while you type. With the least room only the strip stays, showing the end of your text, and the status bar hides until you are done.
+- Autocorrect is off in the prompt fields, so the keyboard no longer changes tags like `1girl`.
+- Switch it off in Settings > Appearance > Tag Suggestions.
+
 ## 2.4.1
 - **Fixed "The server returned HTTP 500" with hires fix:** Forge's API fails the hires pass unless the request names its text encoder/VAE choice, so "Upscale" from the gallery and hires fix on the main screen stopped with this error. The app now sends Forge's "Use same choices", also for jobs already waiting in the queue.
 - Server errors now say what went wrong: the pause card and the notification show the server's own message after "The server returned HTTP 500." (for example "RuntimeError: ..."). Expand the notification to read all of it.

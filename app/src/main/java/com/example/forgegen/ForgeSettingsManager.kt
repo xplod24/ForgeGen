@@ -211,7 +211,12 @@ object ForgeSettingsManager {
             }.addInterceptor { chain ->
                 val request = chain.request()
                 val path = request.url.encodedPath
-                val isImage = path.endsWith("/file") || path.endsWith("/image-thumbnail") || path.endsWith("sdapi/v1/txt2img")
+                // Also the web UI's files ("file=...", e.g. the tag list of tag suggestions: megabytes of text).
+                val isImage =
+                    path.endsWith("/file") ||
+                        path.endsWith("/image-thumbnail") ||
+                        path.endsWith("sdapi/v1/txt2img") ||
+                        path.contains("/file=")
                 when {
                     !_config.value.enableLogging || isPingPath(path) -> chain.proceed(request)
                     isImage -> headerLogging.intercept(chain)
@@ -342,6 +347,7 @@ object ForgeSettingsManager {
             pinchToZoom = parsed?.pinchToZoom ?: true,
             galleryView = GalleryView.of(parsed?.galleryView).name,
             galleryTab = GalleryTab.of(parsed?.galleryTab).name,
+            tagSuggestions = parsed?.tagSuggestions ?: true,
         )
     }
 

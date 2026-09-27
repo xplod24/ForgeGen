@@ -52,9 +52,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +96,8 @@ fun UndoRedoTextField(
     minLines: Int = 1,
     maxLines: Int = Int.MAX_VALUE,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    // A prompt field: no autocorrect (Gboard split "1girl"), and it tells the tag suggestions what is typed (2.4.2).
+    typing: PromptTyping? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     var history by remember { mutableStateOf(listOf(value)) }
@@ -114,6 +120,30 @@ fun UndoRedoTextField(
 
     LaunchedEffect(value) {
         if (history.isEmpty() || history[historyIndex] != value) record(value, typed = false)
+    }
+
+    // The field keeps its caret (the tag suggestions need it); the text is always [value], so a change from elsewhere
+    // (Undo, Clear, the tags row) shows at once and the caret stays where it can, as in the plain text field before.
+    var fieldState by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    val fieldValue = if (fieldState.text == value) fieldState else fieldState.copy(text = value)
+    val currentValue by rememberUpdatedState(value)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val typingKey = remember { Any() }
+    var isFocused by remember { mutableStateOf(false) }
+    // A suggestion tapped in the strip: its own Undo step.
+    val applyEdit: (TextFieldValue) -> Unit =
+        remember {
+            { edited ->
+                fieldState = edited
+                if (edited.text != currentValue) {
+                    record(edited.text, typed = false)
+                    currentOnValueChange(edited.text)
+                }
+            }
+        }
+    if (typing != null) {
+        SideEffect { if (isFocused) typing.changed(typingKey, fieldValue) }
+        DisposableEffect(typing) { onDispose { typing.left(typingKey) } }
     }
 
     Column(modifier = modifier) {
@@ -144,18 +174,31 @@ fun UndoRedoTextField(
         }
 
         OutlinedTextField(
-            value = value,
+            value = fieldValue,
             onValueChange = {
-                if (it != value) {
-                    record(it, typed = true)
-                    onValueChange(it)
+                fieldState = it
+                if (it.text != value) {
+                    record(it.text, typed = true)
+                    onValueChange(it.text)
                 }
             },
             label = label,
             minLines = minLines,
             maxLines = maxLines,
             visualTransformation = visualTransformation,
-            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions =
+                if (typing != null) {
+                    KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false)
+                } else {
+                    KeyboardOptions.Default
+                },
+            modifier =
+                Modifier.fillMaxWidth().onFocusChanged { focus ->
+                    isFocused = focus.isFocused
+                    if (typing != null) {
+                        if (focus.isFocused) typing.focused(typingKey, fieldValue, applyEdit) else typing.left(typingKey)
+                    }
+                },
             trailingIcon = {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
                     if (value.isNotEmpty()) {
@@ -194,6 +237,7 @@ fun HybridPromptEditor(
             maxLines = 8,
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PromptHighlighting,
+            typing = LocalPromptTyping.current,
         )
 
         // Split tags respecting nesting using a custom Tokenizer

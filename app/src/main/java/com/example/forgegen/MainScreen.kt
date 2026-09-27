@@ -3,7 +3,10 @@ package com.example.forgegen
 import com.example.forgegen.ui.screens.*
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -12,17 +15,23 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.navigation.NavHostController
 import coil.imageLoader
 import coil.request.CachePolicy
@@ -74,6 +83,15 @@ fun MainScreen(
 
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
+
+    // Tag suggestions (2.4.2): the prompt field being typed in, and what the strip above the keyboard offers.
+    val promptTyping = remember { PromptTyping() }
+    val tagList by viewModel.tagList.collectAsStateWithLifecycle()
+    val tagListStatus by viewModel.tagListStatus.collectAsStateWithLifecycle()
+    val tagInsertRules by viewModel.tagInsertRules.collectAsStateWithLifecycle()
+    val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
+    val wildcardNames = remember(wildcards) { wildcards.map { it.name } }
+    val loraNames = remember(availableLoras) { availableLoras.map { it.name } }
 
     var fullscreenImageIndex by remember { mutableIntStateOf(-1) }
 
@@ -169,7 +187,7 @@ fun MainScreen(
     }
 
     // Root screen layout container configured with tap gestures to dismiss the virtual keyboard
-    Box(
+    BoxWithConstraints(
         modifier =
             Modifier
                 .fillMaxSize()
@@ -180,112 +198,159 @@ fun MainScreen(
                     })
                 },
     ) {
-        BottomSheetScaffold(
-            modifier = blurModifier,
-            scaffoldState = scaffoldState,
-            sheetPeekHeight = peekHeight,
-            sheetContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            topBar = {
-                val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
-                ForgeTopAppBar(
-                    connection = connection,
-                    pingMs = pingMs,
-                    searchEndsAt = searchEndsAt,
-                    onConnectionClick = { viewModel.openServerDialog() },
-                    vram = vram,
-                    isActivelyGenerating = isActivelyGenerating,
-                    onUnloadClick = { showUnloadDialog = true },
-                    onGalleryClick = onGalleryClick,
-                    onSettingsClick = onSettingsClick,
-                )
-            },
-            sheetContent = {
-                BottomControlsSection(
-                    viewModel = viewModel,
-                    state = state,
-                    generationQueueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
-                    isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
-                    progress = progress,
-                    currentEta = currentEta,
-                    onQueueClick = onQueueClick,
-                    onNavigateToPresets = { navController.navigate("presets") },
-                )
-            },
-        ) { padding ->
-            Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-                val scrollState = rememberScrollState()
+        // While a prompt is typed with the keyboard up, the screen ends on the keyboard (and the suggestion strip), so
+        // the field stays in view above them; with little room the preview, then the top bar give way (TypingLayout).
+        val typingPrompt = promptTyping.value != null && WindowInsets.isImeVisible
+        val suggesting = typingPrompt && config.tagSuggestions
+        val statusBarDp = with(density) { WindowInsets.statusBarsIgnoringVisibility.getTop(this).toDp() }
+        val keyboardDp = with(density) { WindowInsets.imeAnimationTarget.getBottom(this).toDp() }
+        val typingLayout =
+            if (suggesting) TypingLayout.of((maxHeight - statusBarDp - keyboardDp).value, statusBarDp.value) else TypingLayout()
+        val keyboardNowDp = with(density) { WindowInsets.ime.getBottom(this).toDp() }
+        val typingBottom =
+            when {
+                !typingPrompt -> 0.dp
+                suggesting && !typingLayout.oneBar -> keyboardNowDp + typingLayout.stripDp.dp
+                else -> keyboardNowDp
+            }
+        val statusBarNowDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
+        HideStatusBarWhile(typingLayout.hideStatusBar)
 
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
-                    OomAlertSection(viewModel)
-
-                    PreviewSection(
-                        isGenerating = isGenerating,
-
-                        livePreview = livePreview,
-                        isShowingGridPreview = isShowingGridPreview,
-                        sessionImages = sessionImages,
-                        batchStart = batchStart,
-                        batchEnd = batchEnd,
-                        currentSessionIndex = currentSessionIndex,
-                        onDismissGrid = { viewModel.dismissGridPreview(it) },
-                        onFullscreen = { fullscreenImageIndex = it },
-                        onPrev = { viewModel.sessionPrev() },
-                        onNext = { viewModel.sessionNext() },
-                        onRecoverLast = { viewModel.recoverLastPrompt() },
-                        onRecoverFromGallery = {
-                            viewModel.openGallery(GalleryMode.PROMPT_PICKER)
-                            navController.navigate("gallery")
-                        },
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    PromptsSection(
-                        viewModel = viewModel,
-                        state = state,
-                        config = config,
-                        promptHistory = promptHistory,
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    GenerationSettingsSection(
-                        viewModel = viewModel,
-                        state = state,
-                        models = models,
-                        selectedModel = selectedModel,
-                        samplers = samplers,
-                        schedulers = schedulers,
-                        upscalers = upscalers,
-                        config = config,
-                    )
-
-                    LorasSection(
-                        viewModel = viewModel,
-                        availableLoras = availableLoras,
-                        activeLoras = activeLoras,
-                        config = config,
-                    )
-
-                    // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
-                    Spacer(modifier = Modifier.height(24.dp))
-                }
-                
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = showSettingsOverlay,
-                    enter = androidx.compose.animation.expandVertically(expandFrom = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.LinearOutSlowInEasing)),
-                    exit = androidx.compose.animation.shrinkVertically(shrinkTowards = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)),
-                    modifier = Modifier.zIndex(100f)
-                ) {
-                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                        SetupScreen(
-                            viewModel = viewModel,
-                            onDismiss = { showSettingsOverlay = false },
-                            belowTopBar = true,
+        CompositionLocalProvider(LocalPromptTyping provides promptTyping) {
+            BottomSheetScaffold(
+                modifier = blurModifier,
+                scaffoldState = scaffoldState,
+                sheetPeekHeight = peekHeight,
+                sheetContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                topBar = {
+                    val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
+                    AnimatedVisibility(visible = !typingLayout.hideTopBar, enter = expandVertically(), exit = shrinkVertically()) {
+                        ForgeTopAppBar(
+                            connection = connection,
+                            pingMs = pingMs,
+                            searchEndsAt = searchEndsAt,
+                            onConnectionClick = { viewModel.openServerDialog() },
+                            vram = vram,
+                            isActivelyGenerating = isActivelyGenerating,
+                            onUnloadClick = { showUnloadDialog = true },
+                            onGalleryClick = onGalleryClick,
+                            onSettingsClick = onSettingsClick,
                         )
+                    }
+                },
+                sheetContent = {
+                    BottomControlsSection(
+                        viewModel = viewModel,
+                        state = state,
+                        generationQueueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
+                        isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
+                        progress = progress,
+                        currentEta = currentEta,
+                        onQueueClick = onQueueClick,
+                        onNavigateToPresets = { navController.navigate("presets") },
+                    )
+                },
+            ) { padding ->
+                // The scaffold places the content under the top bar; without it (typing with little room) the content
+                // starts under the status bar.
+                val topPadding = if (typingLayout.hideTopBar) statusBarNowDp else padding.calculateTopPadding()
+                val bottomPadding = maxOf(padding.calculateBottomPadding(), typingBottom)
+                Box(modifier = Modifier.padding(top = topPadding, bottom = bottomPadding).fillMaxSize()) {
+                    val scrollState = rememberScrollState()
+
+                    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
+                        OomAlertSection(viewModel)
+
+                        // Folded away (not removed, so it keeps its blur) while typing leaves it no room.
+                        val previewHeight by animateDpAsState(if (typingLayout.hidePreview) 0.dp else 240.dp, label = "preview")
+                        Box(Modifier.fillMaxWidth().height(previewHeight).clipToBounds()) {
+                            Box(Modifier.wrapContentHeight(Alignment.Top, unbounded = true)) {
+                                PreviewSection(
+                                    isGenerating = isGenerating,
+
+                                    livePreview = livePreview,
+                                    isShowingGridPreview = isShowingGridPreview,
+                                    sessionImages = sessionImages,
+                                    batchStart = batchStart,
+                                    batchEnd = batchEnd,
+                                    currentSessionIndex = currentSessionIndex,
+                                    onDismissGrid = { viewModel.dismissGridPreview(it) },
+                                    onFullscreen = { fullscreenImageIndex = it },
+                                    onPrev = { viewModel.sessionPrev() },
+                                    onNext = { viewModel.sessionNext() },
+                                    onRecoverLast = { viewModel.recoverLastPrompt() },
+                                    onRecoverFromGallery = {
+                                        viewModel.openGallery(GalleryMode.PROMPT_PICKER)
+                                        navController.navigate("gallery")
+                                    },
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        PromptsSection(
+                            viewModel = viewModel,
+                            state = state,
+                            config = config,
+                            promptHistory = promptHistory,
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        GenerationSettingsSection(
+                            viewModel = viewModel,
+                            state = state,
+                            models = models,
+                            selectedModel = selectedModel,
+                            samplers = samplers,
+                            schedulers = schedulers,
+                            upscalers = upscalers,
+                            config = config,
+                        )
+
+                        LorasSection(
+                            viewModel = viewModel,
+                            availableLoras = availableLoras,
+                            activeLoras = activeLoras,
+                            config = config,
+                        )
+
+                        // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
+                        Spacer(modifier = Modifier.height(24.dp))
+                    }
+                
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showSettingsOverlay,
+                        enter = androidx.compose.animation.expandVertically(expandFrom = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.LinearOutSlowInEasing)),
+                        exit = androidx.compose.animation.shrinkVertically(shrinkTowards = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)),
+                        modifier = Modifier.zIndex(100f)
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                            SetupScreen(
+                                viewModel = viewModel,
+                                onDismiss = { showSettingsOverlay = false },
+                                belowTopBar = true,
+                            )
+                        }
                     }
                 }
             }
+        }
+
+        // Tag suggestions, docked on the keyboard.
+        if (suggesting) {
+            TagSuggestionStrip(
+                typing = promptTyping,
+                tags = tagList,
+                rules = tagInsertRules,
+                status = tagListStatus,
+                wildcards = wildcardNames,
+                loras = loraNames,
+                oneBar = typingLayout.oneBar,
+                height = typingLayout.stripDp.dp,
+                modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.ime),
+            )
         }
 
         // --- ROOT DIALOGS ---
@@ -326,6 +391,30 @@ fun MainScreen(
                     }
                 },
             )
+        }
+    }
+}
+
+/**
+ * Hides the status bar while [hidden] (typing a prompt with the keyboard leaving no room for the suggestion strip,
+ * TypingLayout); a swipe from the top shows it for a moment.
+ */
+@Composable
+private fun HideStatusBarWhile(hidden: Boolean) {
+    val view = LocalView.current
+    DisposableEffect(hidden) {
+        val window = view.context.findActivity()?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        val behavior = controller?.systemBarsBehavior
+        if (hidden && controller != null) {
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.statusBars())
+        }
+        onDispose {
+            if (hidden && controller != null) {
+                controller.show(WindowInsetsCompat.Type.statusBars())
+                if (behavior != null) controller.systemBarsBehavior = behavior
+            }
         }
     }
 }

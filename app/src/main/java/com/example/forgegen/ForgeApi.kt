@@ -113,6 +113,13 @@ interface ForgeApi {
         @Url url: String,
         @Body body: GalleryPathsRequestDto,
     ): Response<Map<String, String?>>
+
+    /** A file the web UI serves (`file=<path>`, e.g. the tagcomplete extension's tag list), streamed. */
+    @Streaming
+    @GET
+    suspend fun getServerFile(
+        @Url url: String,
+    ): Response<ResponseBody>
 }
 
 /* ============================================================================

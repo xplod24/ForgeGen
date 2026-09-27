@@ -210,6 +210,7 @@ fun SetupScreen(
     val updateDownload by viewModel.updateDownload.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
+    val tagListStatus by viewModel.tagListStatus.collectAsStateWithLifecycle()
 
     // --- DIALOG VISIBILITY STATES ---
     var showUrlDialog by remember { mutableStateOf(false) }
@@ -466,6 +467,19 @@ fun SetupScreen(
                     checked = config.showGridAfterGeneration,
                     onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) },
                 )
+            }
+            add(SettingsPage.APPEARANCE, "Tag Suggestions", "tag suggestions autocomplete danbooru keyboard wildcards lora tagcomplete") {
+                SwitchPreference(
+                    title = "Tag Suggestions",
+                    subtitle = "While you type a prompt, tags, __wildcards and <lora: names above the keyboard",
+                    checked = config.tagSuggestions,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(tagSuggestions = it)) },
+                )
+            }
+            if (config.tagSuggestions) {
+                add(SettingsPage.APPEARANCE, "Tag Suggestions", "tag list danbooru csv tagcomplete download reload") {
+                    TextPreference(title = "Tag List", subtitle = tagListText(tagListStatus)) { viewModel.reloadTagList() }
+                }
             }
 
             // --- NOTIFICATIONS ---
@@ -830,6 +844,7 @@ fun SetupScreen(
                     },
                     "grid after batch".takeIf { config.showGridAfterGeneration },
                     "tags row".takeIf { config.showActiveTagsUI },
+                    "tag suggestions".takeIf { config.tagSuggestions },
                 ).joinToString(" · "),
             SettingsPage.NOTIFICATIONS to
                 listOfNotNull(
@@ -1611,5 +1626,24 @@ private fun NowBarCheck(
         )
         Spacer(Modifier.width(8.dp))
         Text(text, fontSize = 13.sp)
+    }
+}
+
+/** The "Tag List" line of the settings: how many tags, from which file and when, or why there are none. */
+private fun tagListText(status: ForgeTagManager.Status): String {
+    val date =
+        status.savedAt.takeIf { it > 0 }?.let {
+            java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(it))
+        }
+    val saved = String.format(java.util.Locale.US, "%,d tags from %s", status.count, status.file) + (date?.let { ", saved $it" } ?: "")
+    return when (status.source) {
+        ForgeTagManager.Source.OFF -> "Off"
+        ForgeTagManager.Source.NONE -> "Downloaded from the server's tagcomplete extension once connected"
+        ForgeTagManager.Source.LOADING -> "Loading…"
+        ForgeTagManager.Source.READY -> saved + (status.message?.let { ". $it" } ?: "") + ". Tap to download it again"
+        ForgeTagManager.Source.MISSING ->
+            (status.message ?: "The server has no tagcomplete extension") +
+                if (status.count > 0) ". Using the saved $saved" else ". Wildcards and LoRAs are still suggested"
+        ForgeTagManager.Source.FAILED -> (status.message ?: "The tag list could not be loaded") + ". Tap to try again"
     }
 }

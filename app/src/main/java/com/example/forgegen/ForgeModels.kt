@@ -84,6 +84,8 @@ data class AppConfig(
     var galleryView: String = GalleryView.GRID_3.name,
     // The gallery tab used last, a GalleryTab name; the gallery opens on it (2.2.0).
     var galleryTab: String = GalleryTab.GALLERY.name,
+    // Tags, wildcards and LoRAs suggested above the keyboard while a prompt is typed (2.4.2).
+    var tagSuggestions: Boolean = true,
 )
 
 /** The gallery's tabs: the folders of the server's gallery, the favorites, and every image newest first. */
@@ -430,6 +432,15 @@ data class OptionsPayloadDto(
 
 data class OptionsResponseDto(
     @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
+    // The settings of the server's tagcomplete extension (tag suggestions, 2.4.2): its tag files and how it writes
+    // tags. Read as text, so an odd value cannot break the reading of the options.
+    @SerializedName("tac_tagFile") val tacTagFile: String? = null,
+    @SerializedName("tac_extra.extraFile") val tacExtraFile: String? = null,
+    @SerializedName("tac_extra.addMode") val tacExtraAddMode: String? = null,
+    @SerializedName("tac_replaceUnderscores") val tacReplaceUnderscores: String? = null,
+    // (sic) tagcomplete's own spelling.
+    @SerializedName("tac_undersocreReplacementExclusionList") val tacKeepUnderscores: String? = null,
+    @SerializedName("tac_escapeParentheses") val tacEscapeParentheses: String? = null,
 )
 
 data class NameResponseDto(

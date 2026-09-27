@@ -288,9 +288,12 @@ class ForgeNetworkManager(
                         val defOpts =
                             async {
                                 try {
-                                    val res = forgeApi?.getOptions()
+                                    val api = forgeApi
+                                    val res = api?.getOptions()
                                     if (res?.isSuccessful == true) {
                                         ForgeModelManager.updateState(selectedModel = res.body()?.sdModelCheckpoint ?: "")
+                                        // Tag suggestions: the tagcomplete extension's list, when it is not saved yet.
+                                        ForgeTagManager.onServerOptions(api, res.body(), getConfig().apiUrl)
                                     }
                                 } catch (
                                     e: Exception,

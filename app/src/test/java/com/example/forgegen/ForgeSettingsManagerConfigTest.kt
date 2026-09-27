@@ -46,6 +46,7 @@ class ForgeSettingsManagerConfigTest {
                 pinchToZoom = false,
                 galleryView = GalleryView.LIST_LARGE.name,
                 galleryTab = GalleryTab.FAVORITES.name,
+                tagSuggestions = false,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))

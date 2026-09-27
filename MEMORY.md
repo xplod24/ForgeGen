@@ -38,6 +38,29 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   by the server, so they reach the gallery). New payload fields: `subseed`, `subseed_strength`, `hr_second_pass_steps`
   (old saved queues read 0, which changes nothing), and `hr_additional_modules` (2.4.1, set only by `forServer()`,
   see "Queue"). Tests: `ImageJobsTest`, harness G37 (its mock fails a hires fix without that field, as Forge does).
+- **Tag suggestions (2.4.2, the owner's idea 1; a patch at the owner's command):** the owner's Forge Neo (Gradio
+  4.40) runs DominikDoom's a1111-sd-webui-tagcomplete. `ForgeTagManager` reads it as the extension's own script does:
+  `file=tmp/tagAutocompletePath.txt` (its tags folder, as_posix, may hold spaces; 404 = no extension), then
+  `file=<folder>/<tac_tagFile>` and the `tac_extra.extraFile` (via `ForgeApi.getServerFile`, `fileUrl` encodes the
+  path; the log interceptor logs `/file=` without body). The tac options come with `getOptions` (`OptionsResponseDto`,
+  read as text; note tagcomplete's own spelling `tac_undersocreReplacementExclusionList`); `ForgeNetworkManager`
+  calls `onServerOptions` on every connect. The list is kept in `filesDir/tags` (`tags.csv`, `extra.csv`,
+  `tags.json` with server, file, date and the insert rules) and downloaded again only for another server or file,
+  after 7 days, or on Settings > Appearance > "Tag List" (`reload`); a server without the extension keeps the saved
+  list (MISSING). `AppConfig.tagSuggestions` (default on) frees/loads it. Pure logic in `TagSuggestions.kt`:
+  `TagList` (CSV parse, sorted by count, search = prefix, then a later word after a non-letter, then alias; ~2 ms on
+  140k tags on the JVM), `TagInsertRules` (underscores to spaces except emoticons/tagcomplete's exclusion list,
+  brackets escaped), `PromptTypingRules` (`fragmentAt`: text from the last comma/newline to the caret, 2+ chars,
+  `(` of a weight skipped, `__` = wildcard (odd count), `<lora:` = LoRA; `insert` adds ", " or reuses the comma, adds
+  nothing before `:)]}>`, keeps a LoRA's strength), `Suggestions`, `TypingLayout`. UI: `UndoRedoTextField` keeps a
+  `TextFieldValue` (caret) and, for the main screen's prompts (`LocalPromptTyping`), reports focus/value to
+  `PromptTyping` and has autocorrect off. `MainScreen` (a `BoxWithConstraints`) while a prompt is typed with the
+  keyboard up: content bottom padding = keyboard + 44 dp strip (always reserved then, so nothing jumps; the strip
+  shows a hint when there are no chips), `TagSuggestionStrip` docked with `windowInsetsPadding(ime)`. `TypingLayout`
+  from the space above the keyboard (window - status bar ignoring visibility - `imeAnimationTarget`): preview folded
+  (height 0, keeps its blur) below 340 dp, top bar hidden below 180 dp (the real top bar is 64 dp; the preview used
+  56 dp, hence 332/172 there), one bar (text end + chips, 36-44 dp) below 116 dp, status bar hidden below 44 dp
+  (`HideStatusBarWhile`). Tests: `TagSuggestionsTest`, harness G38 (the real danbooru.csv from a folder with a space).
 - **Settings screen (2.3.0, the owner chose design "B" of three mockups):** `SetupScreen` has a main page (`SettingsHome`: "Settings", a search field, `ServerCard`, one card of `CategoryRow`s with a summary line each, the version) and one page per `SettingsPage` (`SettingsPageContent`: back arrow + title, then the page's groups, each a `SettingsCard` with `SectionLabel`), switched by `AnimatedContent` (slide + fade, `SETTINGS_PAGE_MS`); Back: page -> main, then clears the search, then closes. Every setting is a `SettingItem(page, group, words, content)` in one list built in `SetupScreen`; pages show their items, the search shows the matching items themselves (real switches) grouped by page. Pages: Server (status + Retry, address, profiles, timeout, diagnostics), Appearance, Notifications (Alerts, Progress with the Now Bar checklist), Queue & Background (overnight, Keep Screen On, battery), Privacy & Security (Privacy, App Lock), Updates (update card, App Version = debug taps, auto install, check), Backup & Data (Backup, Logs, Danger Zone), Debug (only when unlocked; leaving debug mode returns to the main page). `SwitchPreference`/`TextPreference` are the rows (DebugPanel uses them too). Shown over MainScreen it gets `belowTopBar = true` (its Scaffold adds no status-bar inset; 2.3.0 left a wide band above "Settings"); the "setup" nav route keeps the insets. `AppState.setupExpandedSections` (the old collapsible sections) is gone. Dialogs are unchanged. The mockups: artifact "ForgeGen Settings Proposals".
 - **Selected checkpoint:** single source of truth is `ForgeModelManager.selectedModel`. `ForgeNetworkManager` (UI lists, `changeCheckpoint`) writes to it and `ForgeQueueManager` reads it for `override_settings`. Never keep a second copy.
 - **Model/sampler/LoRA lists:** fetched only by `ForgeNetworkManager` (on connect and on URL change). `ForgeRepository` just rebuilds its Retrofit instance when the URL or timeout changes.
@@ -158,20 +181,9 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.
 
 ## 5. Ideas Backlog (numbered by the owner; not started until the owner says so)
-1. **Danbooru tag suggestions above the keyboard** (proposed after 2.3.0-3; the owner was sceptical about the space and
-   agreed after the numbers). A 44 dp strip of tag chips docked to the top of the keyboard (`WindowInsets.ime`), shown
-   only while a tag is being typed (2+ characters after the last comma). The query is the text from the last comma to
-   the caret. Order: prefix matches, then matches at a word start (`hair` gives `long_hair`), then aliases, each by
-   Danbooru post count. A chip shows a category dot, the name and the count. A tap replaces the fragment with the tag
-   plus ", ", with underscores turned into spaces, `(`/`)` escaped (`chen \(touhou\)`) and emoticons like `^_^` kept.
-   The same strip suggests wildcards after `__` and LoRAs after `<lora:`. Autocorrect is off in the prompt fields
-   (Gboard split `1girl`). What gives way as the keyboard grows (space above it): the image preview below 332 dp (the
-   field grows to 6 lines), the top bar below 172 dp, the field below 116 dp (then one bar: the end of the text with the
-   caret, then the chips), the status bar below 44 dp while typing (the strip shrinks to 36 dp at least). These are
-   decided with the strip counted, so nothing jumps when a tag starts. A Settings switch turns it off (zero space);
-   a full-screen tag search is the fallback if it is not liked. Measured on the top 1000 tags (weighted by use, a
-   chip among the first 3): 69% fewer key presses. Data: the tagcomplete extension's danbooru.csv (MIT, ~140k tags)
-   from the owner's server if installed, else a bundled top list (~1 MB); open question for the owner. Minor
-   version 2.5.0 (the owner agreed to keep it apart from 2.4.0). Preview: artifact "ForgeGen Tag Suggestions" (https://claude.ai/artifact/C4LixCf4mJPLAH3ejPVnDN).
+1. **Danbooru tag suggestions above the keyboard**: done in 2.4.2 (the owner asked for a patch, not a minor; the data is
+   the tagcomplete extension of the owner's server, no bundled list; see "Tag suggestions" in section 1). The agreed
+   design (44 dp strip, what gives way as the keyboard grows, 69% fewer key presses on the top 1000 tags) is in the
+   preview artifact "ForgeGen Tag Suggestions" (https://claude.ai/artifact/C4LixCf4mJPLAH3ejPVnDN).
 2. **"More Like This" in the gallery**: done in 2.4.0 (the owner chose "Similar", variation seeds, as the default).
 3. **"Upscale Selected" in the gallery**: done in 2.4.0 (defaults ×2, denoising 0.35, the hires fix upscaler).
