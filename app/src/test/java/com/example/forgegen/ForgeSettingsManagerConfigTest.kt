@@ -45,6 +45,7 @@ class ForgeSettingsManagerConfigTest {
                 autoInstallUpdates = false,
                 pinchToZoom = false,
                 galleryView = GalleryView.LIST_LARGE.name,
+                galleryTab = GalleryTab.FAVORITES.name,
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))
@@ -69,9 +70,10 @@ class ForgeSettingsManagerConfigTest {
     }
 
     @Test
-    fun `an unknown gallery layout becomes the default grid`() {
+    fun `an unknown gallery layout or tab becomes the default`() {
         assertEquals(GalleryView.GRID_3.name, ForgeSettingsManager.loadConfig("""{"galleryView":"HEXAGONS"}""").galleryView)
         assertEquals(GalleryView.GRID_5, GalleryView.of(ForgeSettingsManager.loadConfig("""{"galleryView":"GRID_5"}""").galleryView))
+        assertEquals(GalleryTab.GALLERY.name, ForgeSettingsManager.loadConfig("""{"galleryTab":"TRASH"}""").galleryTab)
     }
 
     @Test

@@ -1,3 +1,11 @@
+## 2.2.0
+### Gallery
+- **Tabs:** Gallery | Favorites | All Images (newest first). Your favorites and all your images are one tap (or a swipe) away from any folder; the Favorites and All Images folders inside the gallery are gone.
+- **Each tab remembers where you were:** how far it was scrolled, and in the Gallery tab, each folder's place. The gallery opens on the tab you used last, in the folder you had open. "Select Image" (picking an image's prompt) opens on All Images.
+- **The gallery stays in its folder:** the path bar starts at "Gallery", and the server's folders above it (like "outputs") can no longer be opened.
+- The search works in every tab: in Gallery and All Images it looks through the whole gallery, in Favorites through your favorites.
+- Back first clears an active search, then goes up one folder in the Gallery tab.
+
 ## 2.1.0
 ### Gallery
 - **Infinite Image Browsing is required:** the gallery shows your Forge server's images through this extension. The app now looks for it when it connects. On a server without it, the gallery says what is missing, with a link to the extension and "Check Again", instead of an empty or broken screen.

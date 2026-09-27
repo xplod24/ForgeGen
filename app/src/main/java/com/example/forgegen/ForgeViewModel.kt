@@ -361,7 +361,20 @@ class ForgeViewModel(
 
 
     // --- DELEGATION OF STATE FROM FORGE GALLERY MANAGER ---
-    val displayedFiles: StateFlow<List<GalleryItem>> = ForgeGalleryManager.displayedFiles // NEW (optimized filtering)
+    // The three gallery tabs (2.2.0): the open folder (or the search's results), the favorites, every image.
+    val galleryFolder: StateFlow<ForgeGalleryManager.FolderView> = ForgeGalleryManager.folderView
+    val favoriteImages: StateFlow<ForgeGalleryManager.ImagesView> = ForgeGalleryManager.favoriteImages
+    val allImages: StateFlow<ForgeGalleryManager.ImagesView> = ForgeGalleryManager.allImages
+    val galleryTab: StateFlow<GalleryTab> = ForgeGalleryManager.tab
+
+    fun selectGalleryTab(tab: GalleryTab) = ForgeGalleryManager.selectTab(tab)
+
+    fun galleryBreadcrumb(path: String): List<Pair<String, String>> = ForgeGalleryManager.breadcrumb(path)
+
+    fun galleryParentFolder(path: String): String? = ForgeGalleryManager.parentFolder(path)
+
+    /** Where each gallery tab, and each folder of the Gallery tab, was scrolled to; kept while the app runs. */
+    val galleryScroll = HashMap<String, GalleryScrollPosition>()
     val currentGalleryPath: StateFlow<String> = ForgeGalleryManager.currentGalleryPath
     val isGalleryLoading: StateFlow<Boolean> = ForgeGalleryManager.isGalleryLoading
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = ForgeGalleryManager.gallerySyncProgress

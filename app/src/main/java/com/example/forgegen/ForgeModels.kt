@@ -82,6 +82,27 @@ data class AppConfig(
     var pinchToZoom: Boolean = true,
     // The gallery's layout, a GalleryView name (2.1.0).
     var galleryView: String = GalleryView.GRID_3.name,
+    // The gallery tab used last, a GalleryTab name; the gallery opens on it (2.2.0).
+    var galleryTab: String = GalleryTab.GALLERY.name,
+)
+
+/** The gallery's tabs: the folders of the server's gallery, the favorites, and every image newest first. */
+enum class GalleryTab {
+    GALLERY,
+    FAVORITES,
+    ALL_IMAGES,
+    ;
+
+    companion object {
+        /** The saved tab; an unknown name is the folders. */
+        fun of(name: String?): GalleryTab = entries.firstOrNull { it.name == name } ?: GALLERY
+    }
+}
+
+/** Where a gallery tab (or a folder of the Gallery tab) was scrolled to: its first visible item and the offset. */
+data class GalleryScrollPosition(
+    val index: Int,
+    val offset: Int,
 )
 
 /** The gallery's layouts: a grid of 2 to 5 columns, or a list with small, medium or large thumbnails. */

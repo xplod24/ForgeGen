@@ -341,6 +341,7 @@ object ForgeSettingsManager {
             autoInstallUpdates = parsed?.autoInstallUpdates ?: true,
             pinchToZoom = parsed?.pinchToZoom ?: true,
             galleryView = GalleryView.of(parsed?.galleryView).name,
+            galleryTab = GalleryTab.of(parsed?.galleryTab).name,
         )
     }
 

@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -61,9 +62,6 @@ import java.util.concurrent.atomic.AtomicInteger
 object ForgeGalleryManager {
     private const val TAG = "ForgeGalleryManager"
 
-    const val FAVORITES = "virtual://favorites"
-    const val ALL_IMAGES = "virtual://all"
-
     private const val SHOW_META_KEY = "show_gallery_meta"
     private const val FOLDER_DATES_KEY = "gallery_folder_dates"
     private const val FULL_SYNC_AT_KEY = "gallery_full_sync_at"
@@ -92,10 +90,20 @@ object ForgeGalleryManager {
     private val gson = Gson()
     private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val folderItems = MutableStateFlow<List<GalleryItem>>(emptyList())
+    /** A folder of the gallery as the server listed it: set at once, so the list never shows under another path. */
+    private data class FolderListing(
+        val path: String,
+        val items: List<GalleryItem>,
+    )
+
+    private val listing = MutableStateFlow(FolderListing("", emptyList()))
 
     private val _currentGalleryPath = MutableStateFlow("")
     val currentGalleryPath: StateFlow<String> = _currentGalleryPath.asStateFlow()
+
+    /** The open tab; the gallery opens on the one used last (the prompt picker on All Images). */
+    private val _tab = MutableStateFlow(GalleryTab.GALLERY)
+    val tab: StateFlow<GalleryTab> = _tab.asStateFlow()
 
     private val _isGalleryLoading = MutableStateFlow(false)
     val isGalleryLoading: StateFlow<Boolean> = _isGalleryLoading.asStateFlow()
@@ -114,6 +122,9 @@ object ForgeGalleryManager {
 
     private val _favoritePaths = MutableStateFlow<Set<String>>(emptySet())
     val favoritePaths: StateFlow<Set<String>> = _favoritePaths.asStateFlow()
+
+    // The favorites as images (the Favorites tab), newest starred first like the database keeps them.
+    private val favoriteItems = MutableStateFlow<List<GalleryItem>>(emptyList())
 
     // --- The server's gallery extension ---
 
@@ -217,38 +228,69 @@ object ForgeGalleryManager {
     private val _availableLoras = MutableStateFlow<List<String>>(emptyList())
     val availableLoras: StateFlow<List<String>> = _availableLoras.asStateFlow()
 
-    private class Shown(
-        val files: List<GalleryItem>,
-        val path: String,
+    /** The search as it was computed: its results (null without a search) and the index under the top folder. */
+    private class Search(
         val filters: GalleryFilters,
-        val index: List<IndexedImage>,
+        val hits: List<IndexedImage>?,
+        val inGallery: List<IndexedImage>,
     )
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val displayedFiles: StateFlow<List<GalleryItem>> =
-        combine(folderItems, _currentGalleryPath, _galleryFilters, indexedImages, ::Shown)
-            .mapLatest { shown ->
-                val filters = shown.filters
-                if (filters.isSearch || shown.path == ALL_IMAGES) {
-                    val root = galleryRoot()?.let { norm(it) }
-                    val promptHits = filters.prompt.trim().takeIf { it.isNotEmpty() }?.let { promptMatches(it) }
-                    val found =
-                        shown.index
-                            .asSequence()
-                            .filter { root == null || isUnderNormalized(it.fullpath, root) }
-                            .filter { !filters.isSearch || matches(it, filters, promptHits) }
-                            .map { it.toGalleryItem() }
-                            .toList()
-                    // "All Images" is always the newest first, whatever the sort panel says (the owner's rule, 2.1.0).
-                    sortItems(found, if (shown.path == ALL_IMAGES) SortOrder.NEWEST else filters.sortOrder)
-                } else {
-                    sortItems(shown.files, filters.sortOrder)
-                }
-            }.stateIn(
-                scope = managerScope,
-                started = SharingStarted.WhileSubscribed(5000),
-                initialValue = emptyList(),
-            )
+    private val search: StateFlow<Search> =
+        combine(_galleryFilters, indexedImages) { filters, index -> filters to index }
+            .mapLatest { (filters, index) ->
+                val root = galleryRoot()?.let { norm(it) }
+                val inGallery = if (root == null) index else index.filter { isUnderNormalized(it.fullpath, root) }
+                val hits =
+                    if (filters.isSearch) {
+                        val promptHits = filters.prompt.trim().takeIf { it.isNotEmpty() }?.let { promptMatches(it) }
+                        inGallery.filter { matches(it, filters, promptHits) }
+                    } else {
+                        null
+                    }
+                Search(filters, hits, inGallery)
+            }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), Search(GalleryFilters(), null, emptyList()))
+
+    /**
+     * What the Gallery tab shows: the open folder, or the search's results in the whole gallery. [filters] are the
+     * ones it was made with (the screen scrolls a tab back to the top when a list made with other filters arrives).
+     */
+    data class FolderView(
+        val path: String,
+        val items: List<GalleryItem>,
+        val filters: GalleryFilters,
+    ) {
+        val isSearch: Boolean get() = filters.isSearch
+    }
+
+    /** What the Favorites and All Images tabs show, with the filters it was made with. */
+    data class ImagesView(
+        val items: List<GalleryItem>,
+        val filters: GalleryFilters,
+    )
+
+    // A stopped flow keeps its last value (WhileSubscribed keeps the replay), so a reopened gallery shows its lists at
+    // once and its tabs return to where they were scrolled.
+    val folderView: StateFlow<FolderView> =
+        combine(listing, search) { folder, found ->
+            val hits = found.hits
+            val items = if (hits != null) hits.map { it.toGalleryItem() } else folder.items
+            FolderView(folder.path, sortItems(items, found.filters.sortOrder), found.filters)
+        }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), FolderView("", emptyList(), GalleryFilters()))
+
+    /** The Favorites tab: every favorite (the search narrows them), in the sort panel's order. */
+    val favoriteImages: StateFlow<ImagesView> =
+        combine(favoriteItems, search) { favorites, found ->
+            val hits = found.hits?.mapTo(HashSet()) { it.fullpath }
+            val shown = if (hits == null) favorites else favorites.filter { it.fullpath in hits }
+            ImagesView(sortItems(shown, found.filters.sortOrder), found.filters)
+        }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
+
+    /** The All Images tab: every image of the gallery (or the search's results), always the newest first. */
+    val allImages: StateFlow<ImagesView> =
+        search
+            .map { found -> ImagesView(sortItems((found.hits ?: found.inGallery).map { it.toGalleryItem() }, SortOrder.NEWEST), found.filters) }
+            .stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
 
     /** Paths of the images whose prompts contain [text] (ignoring case), found by the database. */
     private suspend fun promptMatches(text: String): Set<String> {
@@ -278,7 +320,7 @@ object ForgeGalleryManager {
         return true
     }
 
-    /** Folders first (the virtual ones on top, in their order), then images. Dates are "yyyy-MM-dd HH:mm:ss". */
+    /** Folders first, then images. Dates are "yyyy-MM-dd HH:mm:ss". */
     private fun sortItems(
         items: List<GalleryItem>,
         order: SortOrder,
@@ -292,9 +334,8 @@ object ForgeGalleryManager {
                 SortOrder.NAME_ASC -> byName
                 SortOrder.NAME_DESC -> byName.reversed()
             }
-        val (virtualDirs, rest) = items.partition { it.fullpath.startsWith("virtual://") }
-        val (dirs, images) = rest.partition { it.isDir }
-        return virtualDirs + dirs.sortedWith(comparator) + images.sortedWith(comparator)
+        val (dirs, images) = items.partition { it.isDir }
+        return dirs.sortedWith(comparator) + images.sortedWith(comparator)
     }
 
     fun init(
@@ -380,7 +421,12 @@ object ForgeGalleryManager {
     // --- FAVORITES ---
 
     private suspend fun loadFavoritePaths() {
-        _favoritePaths.value = getDb().favoriteImageDao().getAllFavorites().map { it.fullpath }.toSet()
+        val favorites =
+            getDb().favoriteImageDao().getAllFavorites().map {
+                GalleryItem(name = it.name, fullpath = it.fullpath, type = "file", date = it.date)
+            }
+        favoriteItems.value = favorites
+        _favoritePaths.value = favorites.mapTo(HashSet()) { it.fullpath }
     }
 
     /** Up to 1.0.2 images could also be "pinned", a second list of bookmarks; they become favorites. */
@@ -405,12 +451,11 @@ object ForgeGalleryManager {
             if (dao.isFavorite(item.fullpath)) {
                 dao.deleteFavorite(item.fullpath)
                 _favoritePaths.update { it - item.fullpath }
-                if (_currentGalleryPath.value == FAVORITES) {
-                    folderItems.update { files -> files.filterNot { it.fullpath == item.fullpath } }
-                }
+                favoriteItems.update { files -> files.filterNot { it.fullpath == item.fullpath } }
             } else {
                 dao.insertFavorite(FavoriteImageEntity(fullpath = item.fullpath, name = item.name, date = item.date ?: ""))
                 _favoritePaths.update { it + item.fullpath }
+                favoriteItems.update { files -> listOf(item.asFavorite()) + files.filterNot { it.fullpath == item.fullpath } }
                 if (ForgeRepository.config.value.autoSaveMode == AUTO_SAVE_FAVORITES) saveToPhone(item, quietIfSaved = true)
             }
         }
@@ -458,9 +503,10 @@ object ForgeGalleryManager {
         managerScope.launch { detectExtension() }
     }
 
-    /** Another server: what was found on the previous one no longer holds. */
+    /** Another server: what was found on the previous one no longer holds, the open folder included. */
     fun onServerChanged() {
         _extension.value = ExtensionStatus(Extension.UNKNOWN)
+        clearFolder()
     }
 
     /**
@@ -661,6 +707,8 @@ object ForgeGalleryManager {
 
     private fun IndexedImage.toGalleryItem() = GalleryItem(name = name, fullpath = fullpath, type = "file", date = date)
 
+    private fun GalleryItem.asFavorite() = GalleryItem(name = name, fullpath = fullpath, type = "file", date = date.orEmpty())
+
     /** An error the server reported, shown to the user as it is. */
     private class GalleryException(
         message: String,
@@ -681,25 +729,41 @@ object ForgeGalleryManager {
     // --- BROWSING ---
 
     /**
-     * Opens the gallery at its top folder. While the server's extension is not found (yet) nothing is listed: the
-     * screen shows why, and opens the top folder once the extension is there.
+     * Opens the gallery on the tab used last (the prompt picker on All Images), in the folder that was open last if
+     * it is still in the gallery, else its top folder. While the server's extension is not found (yet) nothing is
+     * listed: the screen shows why, and opens the top folder once the extension is there.
      */
     fun openGallery(mode: GalleryMode) {
         _galleryMode.value = mode
+        _tab.value = if (mode == GalleryMode.PROMPT_PICKER) GalleryTab.ALL_IMAGES else GalleryTab.of(ForgeRepository.config.value.galleryTab)
         val root = readyRoot()
         if (root != null) {
-            fetchGalleryFolder(root)
+            val last = _currentGalleryPath.value
+            fetchGalleryFolder(if (last.isNotEmpty() && isInGallery(last, root)) last else root)
             return
         }
+        clearFolder()
+        // Asked when the app connected; an unanswered question is asked again.
+        if (_extension.value.state == Extension.UNKNOWN && ForgeRepository.isConnected.value) checkExtension()
+    }
+
+    /** Another tab chosen; the gallery opens on it next time (not when it was chosen while picking a prompt). */
+    fun selectTab(tab: GalleryTab) {
+        _tab.value = tab
+        val config = ForgeRepository.config.value
+        if (_galleryMode.value == GalleryMode.NORMAL && config.galleryTab != tab.name) {
+            ForgeSettingsManager.saveConfig(config.copy(galleryTab = tab.name))
+        }
+    }
+
+    private fun clearFolder() {
         folderRequest.incrementAndGet()
         folderJob?.cancel()
         requestedPath = ""
-        folderItems.value = emptyList()
+        listing.value = FolderListing("", emptyList())
         _currentGalleryPath.value = ""
         _galleryError.value = null
         _isGalleryLoading.value = false
-        // Asked when the app connected; an unanswered question is asked again.
-        if (_extension.value.state == Extension.UNKNOWN && ForgeRepository.isConnected.value) checkExtension()
     }
 
     /** Refresh (and Retry after an error): the folder asked for last again, and the index brought up to date at once. */
@@ -713,31 +777,29 @@ object ForgeGalleryManager {
         requestSync()
     }
 
+    /**
+     * Opens [path] in the Gallery tab. Only the gallery's own folders can be opened (2.2.0): anything outside its top
+     * folder (e.g. the parent "outputs" folder, reached through the path bar before) opens the top folder instead.
+     */
     fun fetchGalleryFolder(path: String) {
+        val root = galleryRoot() ?: return
+        val target = if (isInGallery(path, root)) path else root
         // Only the latest request may show its folder: a slow answer for a folder the user already left used to
         // replace the folder opened after it.
         val request = folderRequest.incrementAndGet()
         folderJob?.cancel()
-        requestedPath = path
+        requestedPath = target
         _isGalleryLoading.value = true
         _galleryError.value = null
 
         folderJob =
             managerScope.launch {
                 try {
-                    val items =
-                        when (path) {
-                            FAVORITES ->
-                                getDb().favoriteImageDao().getAllFavorites().map {
-                                    GalleryItem(name = it.name, fullpath = it.fullpath, type = "file", date = it.date)
-                                }
-                            ALL_IMAGES -> emptyList() // shown straight from the index
-                            else -> listServerFolder(path)
-                        }
+                    val items = listServerFolder(target, root)
                     if (request != folderRequest.get()) return@launch
                     if (items != null) {
-                        folderItems.value = items
-                        _currentGalleryPath.value = path
+                        listing.value = FolderListing(target, items)
+                        _currentGalleryPath.value = target
                     }
                     _isGalleryLoading.value = false
                 } catch (e: CancellationException) {
@@ -750,31 +812,68 @@ object ForgeGalleryManager {
             }
     }
 
-    /** The folder's images and subfolders; null when the server rejected it and the gallery root is shown instead. */
-    private suspend fun listServerFolder(path: String): List<GalleryItem>? {
-        val target = if (path.isNotEmpty() && path != "Root") encodeFolderPath(path) else ""
-        val response = api().getGalleryFilesDynamic(url = "${prefix()}/files", folderPath = target)
-        val root = galleryRoot()
+    /** The folder's images and subfolders; null when the server rejected it and the top folder is shown instead. */
+    private suspend fun listServerFolder(
+        path: String,
+        root: String,
+    ): List<GalleryItem>? {
+        val response = api().getGalleryFilesDynamic(url = "${prefix()}/files", folderPath = encodeFolderPath(path))
         return when {
-            response.isSuccessful -> {
-                val items =
-                    parseGalleryItems(response.body()?.string().orEmpty())
-                        .filter { it.isDir || isImage(it.name) }
-                        .toMutableList()
-                if (path == "Root" || path == root) {
-                    items.add(0, GalleryItem(name = "⭐ Favorites", fullpath = FAVORITES, type = "dir"))
-                    items.add(1, GalleryItem(name = "🕒 All Images", fullpath = ALL_IMAGES, type = "dir"))
-                }
-                items
-            }
-            response.code() == 400 && path.isNotEmpty() && path != "Root" && path != root -> {
-                fetchGalleryFolder(root ?: "Root")
+            response.isSuccessful -> parseGalleryItems(response.body()?.string().orEmpty()).filter { it.isDir || isImage(it.name) }
+            response.code() == 400 && !samePath(path, root) -> {
+                fetchGalleryFolder(root)
                 null
             }
             response.code() == 401 || response.code() == 403 -> throw GalleryException("Authentication Required.")
             else -> throw GalleryException("Server returned Error ${response.code()}")
         }
     }
+
+    // --- THE GALLERY'S FOLDERS (the Gallery tab never leaves its top folder) ---
+
+    private fun samePath(
+        a: String,
+        b: String,
+    ) = norm(a) == norm(b)
+
+    private fun isInGallery(
+        path: String,
+        root: String,
+    ) = samePath(path, root) || isUnder(path, root)
+
+    /** The path bar of the Gallery tab: from the top folder ("Gallery") down to [path]. */
+    fun breadcrumb(path: String): List<Pair<String, String>> = galleryRoot()?.let { breadcrumb(path, it) }.orEmpty()
+
+    /** The folder above [path] inside the gallery; null in the top folder (Back then closes the gallery). */
+    fun parentFolder(path: String): String? = galleryRoot()?.let { parentFolder(path, it) }
+
+    /**
+     * (name, path) of each folder from [root] (named "Gallery") to [path]. The paths are cut from [path] itself, so
+     * they are written as the server writes them (its separator and letter case).
+     */
+    internal fun breadcrumb(
+        path: String,
+        root: String,
+    ): List<Pair<String, String>> {
+        val top = listOf(GALLERY_NAME to root)
+        if (!isUnder(path, root)) return top
+        val base = path.substring(0, root.trimEnd('/', '\\').length)
+        val separator = path[base.length]
+        val names = path.substring(base.length).split('/', '\\').filter { it.isNotEmpty() }
+        return top + names.indices.map { i -> names[i] to base + separator + names.take(i + 1).joinToString(separator.toString()) }
+    }
+
+    internal fun parentFolder(
+        path: String,
+        root: String,
+    ): String? {
+        if (!isUnder(path, root)) return null
+        val cut = maxOf(path.trimEnd('/', '\\').lastIndexOf('/'), path.trimEnd('/', '\\').lastIndexOf('\\'))
+        val parent = if (cut > 0) path.substring(0, cut) else root
+        return if (isUnder(parent, root)) parent else root
+    }
+
+    private const val GALLERY_NAME = "Gallery"
 
     // --- INDEX SYNC (automatic) ---
 
@@ -1218,6 +1317,7 @@ object ForgeGalleryManager {
                 dao.insertFavorite(FavoriteImageEntity(fullpath = item.fullpath, name = item.name, date = item.date ?: ""))
             }
             _favoritePaths.update { it + added.map { item -> item.fullpath } }
+            favoriteItems.update { files -> added.map { it.asFavorite() } + files }
             ForgeRepository.showToast("Added ${added.size} images to the favorites")
             if (ForgeRepository.config.value.autoSaveMode == AUTO_SAVE_FAVORITES) added.forEach { saveToPhone(it, quietIfSaved = true) }
         }
