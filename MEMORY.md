@@ -138,3 +138,20 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Now Bar: the owner confirmed at 2.0.3 that it works on their Samsung and looks great;** the "(Work in Progress)" label was removed in 2.3.0. Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.
+
+## 5. Ideas Backlog (numbered by the owner; not started until the owner says so)
+1. **Danbooru tag suggestions above the keyboard** (proposed after 2.3.0-3; the owner was sceptical about the space and
+   agreed after the numbers). A 44 dp strip of tag chips docked to the top of the keyboard (`WindowInsets.ime`), shown
+   only while a tag is being typed (2+ characters after the last comma). The query is the text from the last comma to
+   the caret. Order: prefix matches, then matches at a word start (`hair` gives `long_hair`), then aliases, each by
+   Danbooru post count. A chip shows a category dot, the name and the count. A tap replaces the fragment with the tag
+   plus ", ", with underscores turned into spaces, `(`/`)` escaped (`chen \(touhou\)`) and emoticons like `^_^` kept.
+   The same strip suggests wildcards after `__` and LoRAs after `<lora:`. Autocorrect is off in the prompt fields
+   (Gboard split `1girl`). What gives way as the keyboard grows (space above it): the image preview below 332 dp (the
+   field grows to 6 lines), the top bar below 172 dp, the field below 116 dp (then one bar: the end of the text with the
+   caret, then the chips), the status bar below 44 dp while typing (the strip shrinks to 36 dp at least). These are
+   decided with the strip counted, so nothing jumps when a tag starts. A Settings switch turns it off (zero space);
+   a full-screen tag search is the fallback if it is not liked. Measured on the top 1000 tags (weighted by use, a
+   chip among the first 3): 69% fewer key presses. Data: the tagcomplete extension's danbooru.csv (MIT, ~140k tags)
+   from the owner's server if installed, else a bundled top list (~1 MB); open question for the owner. Minor
+   version (2.4.0). Preview: artifact "ForgeGen Tag Suggestions" (https://claude.ai/artifact/C4LixCf4mJPLAH3ejPVnDN).
