@@ -1,3 +1,8 @@
+## 2.3.0-3
+- **New start animation:** the sparks of the hammer's strike snake down both sides of the anvil and light up as "ForgeGen" under it, then leave together with the anvil. Their routes are a little different at every start.
+- The start screen now stays at least 1.3 seconds so the word has time to form.
+- **Updates:** "Install Update" keeps ForgeGen open. The download goes on in the background, with its progress in Settings > Updates, the notifications and the Now Bar.
+
 ## 2.3.0-2
 - **Queue:** a queue that is waiting keeps ForgeGen running in the background with its notification, like a queue at work. Before its first job, a queue waiting for the server (unreachable when the app started) or for its "Start at" time had no such protection, so the phone could freeze or close the app and the queue did not start until you opened it again.
 - **Queue:** "Clear" (or removing the last waiting job) on a paused queue now ends the pause, so the next new job runs without "Resume" instead of waiting under the old reason. "Undo" brings the jobs back paused, as they were.

@@ -16,6 +16,8 @@ local.properties
 
 # Agent temporary files
 *.py
+# ...but the repository's own tools are kept (e.g. tools/splash/gen_splash.py, which generates the splash).
+!/tools/**/*.py
 *.txt
 old_*.kt
 init_*.kt

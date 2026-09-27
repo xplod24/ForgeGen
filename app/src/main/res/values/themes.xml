@@ -5,11 +5,32 @@
         <item name="android:windowBackground">@color/splash_background</item>
     </style>
 
-    <!-- The start (Android 12+ splash): the animated anvil, then Theme.ForgeGen. -->
+    <!-- The start (Android 12+ splash): the animated anvil, whose sparks form "ForgeGen", then Theme.ForgeGen.
+         The duration is the animation's length (Android 12 stops it there). -->
     <style name="Theme.ForgeGen.Starting" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/splash_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated</item>
-        <item name="windowSplashScreenAnimationDuration">900</item>
+        <item name="windowSplashScreenAnimationDuration">1340</item>
         <item name="postSplashScreenTheme">@style/Theme.ForgeGen</item>
+    </style>
+
+    <!-- The same splash with other spark routes; MainActivity picks one for the next start (setSplashScreenTheme). -->
+    <style name="Theme.ForgeGen.Starting.Route1">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_1</item>
+    </style>
+    <style name="Theme.ForgeGen.Starting.Route2">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_2</item>
+    </style>
+    <style name="Theme.ForgeGen.Starting.Route3">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_3</item>
+    </style>
+    <style name="Theme.ForgeGen.Starting.Route4">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_4</item>
+    </style>
+    <style name="Theme.ForgeGen.Starting.Route5">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_5</item>
+    </style>
+    <style name="Theme.ForgeGen.Starting.Route6">
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_anvil_animated_6</item>
     </style>
 </resources>

@@ -248,10 +248,21 @@ private fun AppLockScreen(onUnlock: () -> Unit) {
     }
 }
 
-// The splash plays its animation (the hammer's strike) at least this long, and waits for the app's own data at most
-// SPLASH_MAX_MS; after that StartupScreen shows what the start is doing.
-private const val SPLASH_MIN_MS = 850L
+// The splash plays its animation (the hammer's strike, whose sparks form "ForgeGen" by about 0.95 s) at least this
+// long, and waits for the app's own data at most SPLASH_MAX_MS; after that StartupScreen shows what the start is doing.
+private const val SPLASH_MIN_MS = 1_300L
 private const val SPLASH_MAX_MS = 1_500L
+
+// The splash with other spark routes (tools/splash/gen_splash.py); one is picked for each next start.
+private val SPLASH_ROUTE_THEMES =
+    intArrayOf(
+        R.style.Theme_ForgeGen_Starting_Route1,
+        R.style.Theme_ForgeGen_Starting_Route2,
+        R.style.Theme_ForgeGen_Starting_Route3,
+        R.style.Theme_ForgeGen_Starting_Route4,
+        R.style.Theme_ForgeGen_Starting_Route5,
+        R.style.Theme_ForgeGen_Starting_Route6,
+    )
 
 /** Shows the content only inside a circle growing from the middle of the screen ([progress] 0..1). */
 private fun Modifier.circularReveal(progress: () -> Float): Modifier =
@@ -340,6 +351,23 @@ class MainActivity : ComponentActivity() {
             .setDuration(360)
             .withEndAction { provider.remove() }
             .start()
+    }
+
+    /**
+     * The sparks of the splash take another route at the next start (2.3.0-3). The system plays the splash before the
+     * app runs, from the animated drawable its theme names, so it cannot be random itself: the next start's theme is
+     * picked now, never the same route twice in a row.
+     */
+    private fun pickNextSplashRoute() {
+        try {
+            val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+            val last = prefs.getInt("splash_route", -1)
+            val next = SPLASH_ROUTE_THEMES.indices.filter { it != last }.random()
+            splashScreen.setSplashScreenTheme(SPLASH_ROUTE_THEMES[next])
+            prefs.edit().putInt("splash_route", next).apply()
+        } catch (e: Exception) {
+            android.util.Log.w("MainActivity", "Could not pick the next splash route", e)
+        }
     }
 
     /**
@@ -439,6 +467,7 @@ class MainActivity : ComponentActivity() {
         splash.setOnExitAnimationListener { provider -> playSplashExit(provider) }
 
         super.onCreate(savedInstanceState)
+        if (savedInstanceState == null) pickNextSplashRoute()
         ForgeSettingsManager.applyCachedThemeMode(this)
         lifecycleScope.launch { viewModel.initializeApp() }
 
@@ -640,7 +669,6 @@ class MainActivity : ComponentActivity() {
             val currentRoute = navBackStackEntry?.destination?.route
             // The phone's network came back: the server may be reachable again (a new minute of tries).
             LaunchedEffect(isOnline) { if (isOnline) viewModel.reconnect() }
-
 
             // "Vibrate on Batch Finish": a short vibration when a batch is done while the app is on screen.
             val lifecycle = LocalLifecycleOwner.current.lifecycle

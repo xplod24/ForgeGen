@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The splash sparks' flight: a burst out of the strike, then a soft landing on their letters. -->
+<pathInterpolator xmlns:android="http://schemas.android.com/apk/res/android"
+    android:controlX1="0.16"
+    android:controlY1="0.62"
+    android:controlX2="0.32"
+    android:controlY2="1" />
