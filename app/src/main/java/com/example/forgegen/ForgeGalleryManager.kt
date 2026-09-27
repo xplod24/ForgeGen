@@ -1652,4 +1652,105 @@ object ForgeGalleryManager {
             }
         }
     }
+
+    // --- JOBS FROM IMAGES (2.4.0) ---
+
+    /**
+     * The dialog of "Upscale Selected" or "More Like This": its [kind], how many images it is for, and those images
+     * remade as jobs, in the same order (null while their generation data is read).
+     */
+    data class ImageJobsRequest(
+        val kind: ImageJobs.Kind,
+        val count: Int,
+        val sources: List<ImageJobs.Source>? = null,
+    )
+
+    private val _imageJobs = MutableStateFlow<ImageJobsRequest?>(null)
+    val imageJobs: StateFlow<ImageJobsRequest?> = _imageJobs.asStateFlow()
+    private var imageJobsRead: Job? = null
+
+    /** Opens the dialog of [kind] for [items] and reads their generation data (100 images per request where IIB can). */
+    fun requestImageJobs(
+        kind: ImageJobs.Kind,
+        items: List<GalleryItem>,
+    ) {
+        val files = items.filter { !it.isDir }
+        if (files.isEmpty()) return
+        imageJobsRead?.cancel()
+        val request = ImageJobsRequest(kind, files.size)
+        _imageJobs.value = request
+        imageJobsRead =
+            ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+                val sources =
+                    try {
+                        remakeImages(files)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Cannot read the images' generation data", e)
+                        files.map { ImageJobs.Source.Skipped(ImageJobs.UNREADABLE) }
+                    }
+                // Only into the dialog it was read for (it may have been closed or replaced meanwhile).
+                if (_imageJobs.value === request) _imageJobs.value = request.copy(sources = sources)
+            }
+    }
+
+    /** [files] remade as jobs from their generation data, in the same order. */
+    private suspend fun remakeImages(files: List<GalleryItem>): List<ImageJobs.Source> {
+        val reader = InfoReader()
+        val texts = HashMap<String, String>()
+        files.chunked(100).forEach { texts += reader.read(it) }
+        val models = networkManager.models.value
+        val current = ForgeModelManager.selectedModel.value
+        return files.map { file ->
+            val text = texts[file.fullpath]
+            when {
+                text == null -> ImageJobs.Source.Skipped(ImageJobs.UNREADABLE)
+                text.isBlank() -> ImageJobs.Source.Skipped(ImageJobs.NO_DATA)
+                else -> ImageJobs.remake(Infotext.parse(text), models, current)
+            }
+        }
+    }
+
+    fun dismissImageJobs() {
+        imageJobsRead?.cancel()
+        _imageJobs.value = null
+    }
+
+    /** Queues the upscales of the dialog's images, one job per image; images already that large are left out. */
+    fun queueUpscales(
+        scale: Float,
+        upscaler: String,
+        denoising: Float,
+    ) {
+        val sources = _imageJobs.value?.sources ?: return
+        val jobs =
+            sources.filterIsInstance<ImageJobs.Source.Ready>().mapNotNull { source ->
+                ImageJobs.upscale(source, scale, upscaler, denoising)?.let { it to ImageJobs.upscaleLabel(scale) }
+            }
+        ForgeQueueManager.queueJobs(jobs)
+        _imageJobs.value = null
+        ForgeRepository.showToast(queuedMessage(jobs.size, sources.size - jobs.size))
+    }
+
+    /** Queues the images like the dialog's one (see ImageJobs.moreLikeThis). */
+    fun queueMoreLikeThis(
+        similar: Boolean,
+        count: Int,
+        strength: Float,
+    ) {
+        val source = _imageJobs.value?.sources?.firstOrNull() as? ImageJobs.Source.Ready ?: return
+        val jobs = ImageJobs.moreLikeThis(source, similar, count, strength)
+        ForgeQueueManager.queueJobs(jobs)
+        _imageJobs.value = null
+        ForgeRepository.showToast(queuedMessage(jobs.size, 0))
+    }
+
+    private fun queuedMessage(
+        queued: Int,
+        leftOut: Int,
+    ) = buildString {
+        append("Added $queued ${if (queued == 1) "job" else "jobs"} to the queue")
+        if (leftOut > 0) append(" ($leftOut left out)")
+    }
 }

@@ -183,6 +183,8 @@ data class QueuedGeneration(
     val status: GenerationStatus = GenerationStatus.QUEUED,
     // Why the job failed (FAILED only).
     val error: String? = null,
+    // What made the job, when it was not the main screen ("Upscale ×2", "More Like This · 1234 +1"; 2.4.0).
+    val label: String? = null,
 )
 
 enum class GenerationStatus {
@@ -365,6 +367,10 @@ abstract class ForgeDatabase : RoomDatabase() {
 data class OverrideSettingsDto(
     @SerializedName("CLIP_stop_at_last_layers") val clipSkip: Int,
     @SerializedName("sd_model_checkpoint") val sdModelCheckpoint: String? = null,
+    // Only for a job remade from an image (2.4.0), when its data names them: they change the noise, so the same seed
+    // gives the same image only with the same values. Null is not sent.
+    @SerializedName("eta_noise_seed_delta") val etaNoiseSeedDelta: Int? = null,
+    @SerializedName("randn_source") val randnSource: String? = null,
 )
 
 data class Txt2ImgPayloadDto(
@@ -386,6 +392,11 @@ data class Txt2ImgPayloadDto(
     val denoising_strength: Float,
     val save_images: Boolean = true,
     val send_images: Boolean = true,
+    // A variation seed mixed into the seed's noise ("More Like This", 2.4.0); -1 and 0 change nothing.
+    val subseed: Long = -1L,
+    val subseed_strength: Float = 0f,
+    // Steps of the hires pass; 0 = as many as the first pass.
+    val hr_second_pass_steps: Int = 0,
 )
 
 data class ProgressStateDto(

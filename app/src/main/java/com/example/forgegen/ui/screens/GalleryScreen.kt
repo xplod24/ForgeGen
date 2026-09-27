@@ -267,7 +267,8 @@ fun GalleryScreen(
         topBar = {
             if (selectionMode) {
                 TopAppBar(
-                    title = { Text("${selected.size} selected") },
+                    // One line: five actions leave little room on a narrow phone.
+                    title = { Text("${selected.size} selected", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         IconButton(onClick = { selected = emptySet() }) { Icon(Icons.Default.Close, "Clear Selection") }
                     },
@@ -287,6 +288,10 @@ fun GalleryScreen(
                             viewModel.shareImages(selectedItems()) { intent -> context.startActivity(intent) }
                             selected = emptySet()
                         }) { Icon(Icons.Default.Share, "Share") }
+                        // Each image made again with hires fix, one queue job each (2.4.0).
+                        IconButton(onClick = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) }) {
+                            Icon(Icons.Default.OpenInFull, "Upscale Selected")
+                        }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 )
@@ -536,6 +541,11 @@ fun GalleryScreen(
                 )
             }
         }
+
+        // "Upscale Selected" and "More Like This" (2.4.0); after the viewer, so it opens above it. Leaving the
+        // gallery closes it (it would open again with the next gallery).
+        ImageJobsDialog(viewModel, onQueued = { selected = emptySet() })
+        DisposableEffect(Unit) { onDispose { viewModel.dismissImageJobs() } }
     }
 }
 
@@ -1522,6 +1532,26 @@ fun FullscreenGalleryViewer(
                             viewModel.showToast("LoRAs Applied")
                         },
                     )
+                }
+            }
+
+            // The image made again: more like it, or larger (2.4.0).
+            Row(
+                modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(horizontal = 8.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(
+                    Triple(ImageJobs.Kind.MORE_LIKE_THIS, Icons.Default.AutoAwesome, "More Like This"),
+                    Triple(ImageJobs.Kind.UPSCALE, Icons.Default.OpenInFull, "Upscale"),
+                ).forEach { (kind, icon, label) ->
+                    TextButton(
+                        onClick = { currentItem?.let { viewModel.requestImageJobs(kind, listOf(it)) } },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(label, color = Color.White)
+                    }
                 }
             }
         }

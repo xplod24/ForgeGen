@@ -217,6 +217,17 @@ fun QueueScreen(
                                     } else {
                                         Text("Queued", fontSize = 12.sp, color = Color.Gray)
                                     }
+                                    // What made the job, when a gallery image did (2.4.0).
+                                    item.label?.let { label ->
+                                        Text(
+                                            " · $label",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false),
+                                        )
+                                    }
                                     Spacer(Modifier.weight(1f))
                                     Icon(
                                         imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,

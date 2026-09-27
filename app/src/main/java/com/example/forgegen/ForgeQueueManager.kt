@@ -573,6 +573,36 @@ object ForgeQueueManager {
         }
     }
 
+    /**
+     * Adds ready-made jobs (remade from gallery images, 2.4.0) after the ones waiting, in the given order, each with
+     * its label for the queue.
+     */
+    fun queueJobs(jobs: List<Pair<Txt2ImgPayloadDto, String>>) {
+        if (jobs.isEmpty()) return
+        ForgeRepository.repositoryScope.launch(queueingDispatcher) {
+            val items =
+                jobs.map { (payload, label) ->
+                    QueuedGeneration(
+                        id = UUID.randomUUID().toString(),
+                        positivePrompt = payload.prompt,
+                        payload = payload,
+                        status = GenerationStatus.QUEUED,
+                        label = label,
+                    )
+                }
+            _generationQueue.update { it + items }
+            saveQueueState()
+            val qSize = _generationQueue.value.count { it.isRunnable() }
+            if (qSize == items.size) {
+                _totalQueueSize.value = qSize
+                _completedQueueItems.value = 0
+            } else {
+                _totalQueueSize.update { it + items.size }
+            }
+            ForgeRepository.reconnect() // the jobs wait for the server: look for it again if it was given up
+        }
+    }
+
     private suspend fun executeGeneration(job: QueuedGeneration) {
         val config = ForgeRepository.config.value
         var succeeded = false

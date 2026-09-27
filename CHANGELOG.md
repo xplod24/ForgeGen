@@ -1,3 +1,9 @@
+## 2.4.0
+### Gallery
+- **Upscale Selected:** select images in the gallery and tap Upscale (or Upscale in the image viewer). Each image is made again with its own seed and settings plus hires fix, one job after another in the queue, and the results appear in the gallery. Choose ×1.5 to ×3, the upscaler (your hires fix one by default) and the denoising. Images already that large, without generation data, or made with a model the server does not have are left out, and the dialog says why.
+- **More Like This:** in the image viewer. "Similar" keeps the image's seed and mixes in the variation seeds next to it: the same composition with small changes. "Neighbouring Seeds" uses the seeds next to it. 2 to 20 images, seeds within ±10.
+- Jobs made from gallery images say what they are in the queue ("Upscale ×2", "More Like This · 1234567 +1").
+
 ## 2.3.0-3
 - **New start animation:** the sparks of the hammer's strike snake down both sides of the anvil and light up as "ForgeGen" under it, then leave together with the anvil. Their routes are a little different at every start.
 - The start screen now stays at least 1.3 seconds so the word has time to form.

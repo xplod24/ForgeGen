@@ -369,6 +369,28 @@ class ForgeViewModel(
 
     fun selectGalleryTab(tab: GalleryTab) = ForgeGalleryManager.selectTab(tab)
 
+    // "Upscale Selected" and "More Like This": gallery images remade as queue jobs (2.4.0).
+    val imageJobs: StateFlow<ForgeGalleryManager.ImageJobsRequest?> = ForgeGalleryManager.imageJobs
+
+    fun requestImageJobs(
+        kind: ImageJobs.Kind,
+        items: List<GalleryItem>,
+    ) = ForgeGalleryManager.requestImageJobs(kind, items)
+
+    fun dismissImageJobs() = ForgeGalleryManager.dismissImageJobs()
+
+    fun queueUpscales(
+        scale: Float,
+        upscaler: String,
+        denoising: Float,
+    ) = ForgeGalleryManager.queueUpscales(scale, upscaler, denoising)
+
+    fun queueMoreLikeThis(
+        similar: Boolean,
+        count: Int,
+        strength: Float,
+    ) = ForgeGalleryManager.queueMoreLikeThis(similar, count, strength)
+
     fun galleryBreadcrumb(path: String): List<Pair<String, String>> = ForgeGalleryManager.breadcrumb(path)
 
     fun galleryParentFolder(path: String): String? = ForgeGalleryManager.parentFolder(path)
