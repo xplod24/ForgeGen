@@ -116,6 +116,6 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   70 MB, nearly all of it dex, mostly material-icons-extended; Compose runs much slower when debuggable). The proposal
   for later: a non-debuggable, R8-minified build signed with the same debug.keystore, the same `.debug` app id, still
   published as `app-debug.apk` (Gson DTOs need keep rules). Don't change it without the owner.
-- **Now Bar: work in progress (owner, 1.5.0).** The setting is labelled "(Work in Progress)". Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
+- **Now Bar: work in progress (owner, 1.5.0); the owner confirmed at 2.0.3 that it works on their Samsung and looks great.** The setting is labelled "(Work in Progress)". Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.
