@@ -164,3 +164,6 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
    the neighbours as variation seeds (`subseed` = seed+/-k, `subseed_strength` about 0.1-0.25), which keeps the
    composition and is still plain txt2img; plain neighbouring seeds as an option. Needs `subseed`/`subseed_strength`
    in `Txt2ImgPayloadDto`.
+3. **"Upscale Selected" in the gallery** (the owner's idea): select images in the gallery, and each becomes its own
+   queue job that regenerates it with the same seed and parameters plus hires fix (txt2img, no extras endpoint), one
+   after another; the server saves the results, so they appear in the gallery. Shares "a job from an image" with idea 2.
