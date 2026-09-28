@@ -13,4 +13,9 @@ Read `MEMORY.md` before working: it holds the architecture notes and the owner's
   to 0 whenever patch, minor or major is raised), add a `## <version>` section to the top of `CHANGELOG.md`
   and push to master. `.github/workflows/release.yml` then tags `v<version>` and publishes `app-debug.apk`. The
   `## <version>` section is also what the app shows in its "What's New" dialog after the update.
+- Every `## <version>` section (owner's rule since 3.0.0-4) starts with one line naming the release's kind in bold and
+  summing it up (`**Bugfix** · a lighter top bar ...`), kinds: **Bugfix** (mainly fixes), **Polish** (small changes
+  to the look and use), **Feature** (new features), **Overhaul** (a large rework of a part of the app or all of it).
+  Its items then go under `### New`, `### Changed` and `### Fixed`, in that order, leaving out the empty ones.
+  MarkdownTest checks this for every section from 3.0.0-4 on.
 - A session cannot push tags; the workflow creates them.

@@ -98,14 +98,134 @@ class MarkdownTest {
 class ReleaseNotesMarkdownTest {
     @Test
     fun `release notes are a Markdown list whose bold and code are read`() {
-        val items = parseReleaseNotes("## 3.0.0-1\n### Queue\n- **Queue as a timeline:** next to each job\n- the `Start at` chip\n")
-        val blocks = Markdown.parse(releaseNotesMarkdown(items))
-        assertEquals(2, blocks.size)
-        val first = blocks[0] as Block.ListItem
+        val notes = parseReleaseNotes("## 3.0.0-1\n### Queue\n- **Queue as a timeline:** next to each job\n- the `Start at` chip\n")
+        val blocks = Markdown.parse(releaseNotesMarkdown(notes))
+        assertEquals(3, blocks.size)
+        assertEquals(3, (blocks[0] as Block.Heading).level)
+        val first = blocks[1] as Block.ListItem
         assertEquals(listOf(Span("Queue as a timeline:", bold = true), Span(" next to each job")), first.text)
-        val second = blocks[1] as Block.ListItem
+        val second = blocks[2] as Block.ListItem
         assertTrue(second.text.any { it.code && it.text == "Start at" })
-        assertTrue("no ** or ` left in the text", blocks.flatMap { (it as Block.ListItem).text }.none { "**" in it.text || "`" in it.text })
+        val spans = blocks.filterIsInstance<Block.ListItem>().flatMap { it.text }
+        assertTrue("no ** or ` left in the text", spans.none { "**" in it.text || "`" in it.text })
+    }
+
+    // 3.0.0-4: a section starts with the release's kind and groups its items under New, Changed and Fixed.
+    private val body =
+        """
+        **Bugfix** · a lighter top bar
+
+        ### Changed
+        - **Top bar:** one line
+        - Memory meters
+
+        ### Fixed
+        - Unload refreshes the meters
+        - The panel says what unloading frees
+
+        Built by CI
+        """.trimIndent()
+
+    @Test
+    fun `the kind line and the New, Changed and Fixed headings are kept`() {
+        val notes = parseReleaseNotes(body)
+        assertEquals(
+            listOf(
+                "**Bugfix** · a lighter top bar",
+                "### Changed",
+                "- **Top bar:** one line",
+                "- Memory meters",
+                "### Fixed",
+                "- Unload refreshes the meters",
+                "- The panel says what unloading frees",
+            ),
+            notes,
+        )
+        assertEquals(4, releaseNoteCount(notes))
+        val blocks = Markdown.parse(releaseNotesMarkdown(notes))
+        assertEquals(Span("Bugfix", bold = true), (blocks[0] as Block.Paragraph).text.first())
+        assertEquals(listOf("Changed", "Fixed"), blocks.filterIsInstance<Block.Heading>().map { h -> h.text.joinToString("") { it.text } })
+        assertEquals(4, blocks.filterIsInstance<Block.ListItem>().size)
+    }
+
+    @Test
+    fun `the card shows the first items under their headings and no heading without items`() {
+        val notes = parseReleaseNotes(body)
+        assertEquals(
+            "**Bugfix** · a lighter top bar\n### Changed\n- **Top bar:** one line\n- Memory meters",
+            releaseNotesMarkdown(notes, maxItems = 2),
+        )
+        assertEquals(
+            "**Bugfix** · a lighter top bar\n### Changed\n- **Top bar:** one line\n- Memory meters\n### Fixed\n- Unload refreshes the meters",
+            releaseNotesMarkdown(notes, maxItems = 3),
+        )
+    }
+
+    @Test
+    fun `notes of older releases stay a plain list`() {
+        val notes = parseReleaseNotes("What's new:\n- Added cool new feature\n* Naprawiono błąd\n\nBuilt by CI")
+        assertEquals(listOf("- Added cool new feature", "- Naprawiono błąd"), notes)
+        assertEquals("- Added cool new feature", releaseNotesMarkdown(notes, maxItems = 1))
+    }
+
+    @Test
+    fun `every changelog section since 3_0_0-4 names its kind and uses the three headings`() {
+        val changelog = java.io.File("../CHANGELOG.md").takeIf { it.exists() } ?: return
+        val kinds = setOf("Bugfix", "Polish", "Feature", "Overhaul")
+        val headings = setOf("New", "Changed", "Fixed")
+        val sections = changelog.readText().split(Regex("""(?m)^## """)).drop(1)
+        for (section in sections) {
+            val version = section.lineSequence().first().trim()
+            val code = versionCodeFromTag("v$version") ?: continue
+            if (code < versionCodeFromTag("v3.0.0-4")!!) continue
+            val lines =
+                section
+                    .lines()
+                    .drop(1)
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() }
+            val kind = Regex("""^\*\*(\w+)\*\*""").find(lines.first())?.groupValues?.get(1)
+            assertTrue("$version starts with its kind in bold: ${lines.first()}", kind in kinds)
+            val used = lines.filter { it.startsWith("### ") }.map { it.removePrefix("### ").trim() }
+            assertTrue("$version uses only New, Changed and Fixed: $used", used.isNotEmpty() && headings.containsAll(used))
+            assertEquals("$version keeps the order New, Changed, Fixed", headings.filter { it in used }, used)
+        }
+    }
+}
+
+/** 3.0.0-4: the server's memory in the main screen's top bar. */
+class ServerMemoryTest {
+    private val gib = 1024.0 * 1024.0 * 1024.0
+
+    @Test
+    fun `the server's answer becomes GB, and nothing when it reports nothing`() {
+        val memory =
+            ServerMemory.of(
+                MemoryResponseDto(
+                    ram = MemoryStatDto(used = 12.3 * gib, total = 31.9 * gib),
+                    cuda = CudaStatDto(system = MemoryStatDto(used = 5.1 * gib, total = 8.0 * gib)),
+                ),
+            )!!
+        assertEquals("RAM: 12.3/31.9GB | VRAM: 5.1/8.0GB", memory.summary())
+        assertNull(ServerMemory.of(MemoryResponseDto(ram = null, cuda = null)))
+        assertNull(ServerMemory.of(null))
+        val ramOnly = ServerMemory.of(MemoryResponseDto(ram = MemoryStatDto(used = 2 * gib, total = 16 * gib), cuda = null))!!
+        assertTrue(ramOnly.hasRam && !ramOnly.hasVram)
+        assertEquals("RAM: 2.0/16.0GB", ramOnly.summary())
+    }
+
+    @Test
+    fun `the meters stay short and the panel gives the whole numbers`() {
+        assertEquals("5.1/8.0", ServerMemory.compact(5.1, 8.0))
+        assertEquals("12.3/32", ServerMemory.compact(12.3, 31.9))
+        assertEquals("0.4/24", ServerMemory.compact(0.4, 24.0))
+        assertEquals("45.2/128", ServerMemory.compact(45.2, 128.0))
+        assertEquals("112/128", ServerMemory.compact(112.4, 128.0))
+        assertEquals("5.1 of 8.0 GB · 64%", ServerMemory.detail(5.1, 8.0))
+        assertEquals(0f, ServerMemory.share(1.0, 0.0))
+        assertEquals(1f, ServerMemory.share(9.0, 8.0))
+        assertTrue(ServerMemory.share(7.6, 8.0) >= ServerMemory.ALMOST_FULL)
+        assertTrue(ServerMemory.share(5.1, 8.0) < ServerMemory.ALMOST_FULL)
     }
 }
 

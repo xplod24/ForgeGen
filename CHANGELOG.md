@@ -1,3 +1,15 @@
+## 3.0.0-4
+**Bugfix** · a lighter top bar on the main screen, and unloading the model shows what it freed
+
+### Changed
+- **New top bar on the main screen:** a rounded bar like the ones on the other screens. "ForgeGen" and the connection are on the left (tap them for the server dialog, as before), and next to them two small meters show the server's VRAM and RAM. A meter turns orange when that memory is almost full.
+- **Server Memory panel:** tap the meters to see the VRAM and RAM in full and to unload the model. It replaces the chip icon in the top bar and its confirmation dialog.
+- The notes of every update now say what kind of update it is (Bugfix, Polish, Feature or Overhaul) and list what is new, changed and fixed. The update card in Settings > Updates shows them the same way.
+
+### Fixed
+- After Unload Model the memory shows the drop right away. It used to take up to 10 seconds.
+- Unloading now says what it frees: on Forge Neo the model leaves RAM as well as VRAM, and the next image loads it again. The old dialog spoke only of VRAM.
+
 ## 3.0.0-3
 - **Fixed the update loop:** after the download the "Install Update" button came back, and each tap started the install again while ForgeGen was still open, so it never finished. Updating is now two steps in Settings > Updates: **Download** fetches the update and checks it against the release, then the card shows "Update Ready" with **Install**. Install sends ForgeGen to the background so Android can replace it, and while it installs there is no button to tap again. If Android wants a confirmation, "Confirm Install" opens it; if the install fails, Install can be tapped again without downloading anew.
 - A downloaded update stays ready after the app is closed. When the queue is working, Install asks first, because installing stops the queue (its jobs are kept).

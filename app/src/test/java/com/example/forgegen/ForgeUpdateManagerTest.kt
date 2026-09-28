@@ -79,7 +79,7 @@ class ForgeUpdateManagerTest {
             assertEquals("1.0.1", manifest?.versionName)
             assertEquals("abc123", manifest?.sha256)
             assertEquals(apk().downloadUrl, manifest?.url)
-            assertEquals(listOf("Added cool new feature", "Naprawiono błąd"), manifest?.changelog)
+            assertEquals(listOf("- Added cool new feature", "- Naprawiono błąd"), manifest?.changelog)
         }
 
     @Test

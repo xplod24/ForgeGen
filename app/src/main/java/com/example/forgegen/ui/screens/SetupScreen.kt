@@ -788,18 +788,20 @@ fun SetupScreen(
                             )
                         }
                         Spacer(Modifier.height(4.dp))
-                        val changelogText = manifest.changelog ?: emptyList()
-                        if (changelogText.isNotEmpty()) {
+                        val notes = manifest.changelog ?: emptyList()
+                        val noteCount = releaseNoteCount(notes)
+                        if (notes.isNotEmpty()) {
                             Text("What's new:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.height(4.dp))
-                            // Drawn from Markdown like the What's New notes (3.0.0-2: the ** of bold text showed).
+                            // Drawn from Markdown like the What's New notes (3.0.0-2: the ** of bold text showed), with
+                            // the release's kind and its New / Changed / Fixed headings (3.0.0-4).
                             MarkdownText(
-                                markdown = releaseNotesMarkdown(changelogText.take(3)),
+                                markdown = releaseNotesMarkdown(notes, maxItems = 3),
                                 textStyle = MaterialTheme.typography.bodySmall,
                             )
-                            if (changelogText.size > 3) {
+                            if (noteCount > 3) {
                                 TextButton(onClick = { showAllReleaseNotes = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                                    Text("Show All (${changelogText.size})")
+                                    Text("Show All ($noteCount)")
                                 }
                             }
                         }

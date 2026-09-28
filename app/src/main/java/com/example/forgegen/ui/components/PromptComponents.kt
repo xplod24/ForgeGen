@@ -546,67 +546,6 @@ fun HybridPromptEditor(
  * EXPORTED UI SECTIONS
  * ============================================================================ */
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ForgeTopAppBar(
-    connection: ServerConnection,
-    pingMs: Long,
-    searchEndsAt: Long,
-    onConnectionClick: () -> Unit,
-    vram: String?,
-    isActivelyGenerating: Boolean,
-    onUnloadClick: () -> Unit,
-    onGalleryClick: () -> Unit,
-    onSettingsClick: () -> Unit,
-) {
-    TopAppBar(
-        title = {
-            Column {
-                Text("Forge Generator", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                ConnectionStatus(connection, pingMs, searchEndsAt, onClick = onConnectionClick)
-                // The server memory line already contains both RAM and VRAM ("RAM: x/yGB | VRAM: x/yGB").
-                if (vram != null) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 0.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.DeveloperBoard,
-                            contentDescription = "Memory",
-                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            modifier = Modifier.size(10.dp),
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = vram,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                        )
-                    }
-                }
-            }
-        },
-        actions = {
-            IconButton(
-                onClick = onUnloadClick,
-                enabled = !isActivelyGenerating
-            ) {
-                Icon(Icons.Default.Memory, contentDescription = "Unload Models")
-            }
-
-            IconButton(onClick = onGalleryClick) {
-                Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery")
-            }
-
-            IconButton(onClick = onSettingsClick) {
-                Icon(Icons.Default.Settings, contentDescription = "Settings")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-    )
-}
-
 // The image preview's height on the main screen (folded away while typing leaves no room, TypingLayout).
 val PREVIEW_HEIGHT = 220.dp
 

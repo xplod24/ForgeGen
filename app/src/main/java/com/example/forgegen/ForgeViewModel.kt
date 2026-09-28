@@ -389,7 +389,7 @@ class ForgeViewModel(
         }
 
     val isServerBusy: StateFlow<Boolean> = ForgeRepository.isServerBusy
-    val vramUsage: StateFlow<String?> = ForgeRepository.vramUsage
+    val serverMemory: StateFlow<ServerMemory?> = ForgeRepository.serverMemory
 
     // --- DELEGATION OF STATE FROM FORGE NETWORK MANAGER ---
     val selectedModel: StateFlow<String> = networkManager.selectedModel
@@ -799,17 +799,31 @@ class ForgeViewModel(
 
     fun deleteWildcard(wildcard: WildcardEntity) = ForgePromptManager.deleteWildcard(wildcard.name)
 
+    // Unload Model in the Server Memory panel is running (its button waits).
+    private val _unloadingModel = MutableStateFlow(false)
+    val unloadingModel: StateFlow<Boolean> = _unloadingModel.asStateFlow()
+
+    /**
+     * POST /sdapi/v1/unload-checkpoint, as the web UI's button: Forge Neo drops the model from VRAM and RAM, Forge
+     * only from VRAM; the next image loads it again. The meters then read the memory at once (3.0.0-4).
+     */
     fun unloadCheckpoint() {
+        if (_unloadingModel.value) return
+        _unloadingModel.value = true
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val response = ForgeRepository.forgeApi?.unloadCheckpoint()
                 if (response?.isSuccessful == true) {
+                    ForgeRepository.refreshServerMemory()
                     showToast("Model unloaded")
                 } else {
                     showToast("Failed to unload model")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 showToast("Error unloading model")
+            } finally {
+                _unloadingModel.value = false
             }
         }
     }

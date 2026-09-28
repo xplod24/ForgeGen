@@ -66,7 +66,8 @@ fun MainScreen(
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
-    val vram by viewModel.vramUsage.collectAsStateWithLifecycle()
+    val serverMemory by viewModel.serverMemory.collectAsStateWithLifecycle()
+    val unloadingModel by viewModel.unloadingModel.collectAsStateWithLifecycle()
 
     val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
     val generationQueue by viewModel.generationQueue.collectAsStateWithLifecycle()
@@ -163,7 +164,7 @@ fun MainScreen(
     val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
     val density = LocalDensity.current
 
-    var showUnloadDialog by remember { mutableStateOf(false) }
+    var showMemorySheet by remember { mutableStateOf(false) }
 
     // The rows of the cards left open (the negative prompt, sampling, size and batch), kept between launches.
     val openRows = config.mainOpenRows
@@ -222,16 +223,14 @@ fun MainScreen(
                 modifier = blurModifier,
                 containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
-                    val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
                     AnimatedVisibility(visible = !typingLayout.hideTopBar, enter = expandVertically(), exit = shrinkVertically()) {
-                        ForgeTopAppBar(
+                        MainTopBar(
                             connection = connection,
                             pingMs = pingMs,
                             searchEndsAt = searchEndsAt,
+                            memory = serverMemory,
                             onConnectionClick = { viewModel.openServerDialog() },
-                            vram = vram,
-                            isActivelyGenerating = isActivelyGenerating,
-                            onUnloadClick = { showUnloadDialog = true },
+                            onMemoryClick = { showMemorySheet = true },
                             onGalleryClick = onGalleryClick,
                             onSettingsClick = onSettingsClick,
                         )
@@ -377,31 +376,15 @@ fun MainScreen(
             )
         }
 
-        if (showUnloadDialog) {
-            AlertDialog(
-                onDismissRequest = { showUnloadDialog = false },
-                title = { Text("Unload Model from VRAM", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
-                text = {
-                    Text(
-                        "Are you sure you want to unload the active model from GPU VRAM to free up server memory?",
-                        fontSize = 14.sp,
-                    )
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showUnloadDialog = false
-                            viewModel.unloadCheckpoint()
-                        },
-                    ) {
-                        Text("Unload", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showUnloadDialog = false }) {
-                        Text("Cancel")
-                    }
-                },
+        // Opened by the memory meters in the top bar (3.0.0-4: it replaced the Unload icon and its dialog).
+        if (showMemorySheet) {
+            ServerMemorySheet(
+                memory = serverMemory,
+                modelName = ModelSettingsRules.key(selectedModel),
+                unloading = unloadingModel,
+                busy = isGenerating || isServerBusy || progress > 0f,
+                onUnload = { viewModel.unloadCheckpoint() },
+                onDismiss = { showMemorySheet = false },
             )
         }
     }

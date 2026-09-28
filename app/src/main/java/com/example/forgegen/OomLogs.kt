@@ -150,7 +150,7 @@ object OomLogs {
                         if (phone.lowMemory) " (low on memory)" else "",
                 )
             }
-            ForgeRepository.vramUsage.value?.let { appendLine("Server memory (last reading): $it") }
+            ForgeRepository.serverMemory.value?.let { appendLine("Server memory (last reading): ${it.summary()}") }
             appendLine()
             appendLine("Details:")
             appendLine(details)

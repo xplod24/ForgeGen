@@ -12,6 +12,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
 import com.google.gson.annotations.SerializedName
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /* ============================================================================
  * 1. DOMAIN MODELS (UI & BUSINESS LOGIC)
@@ -541,6 +543,67 @@ data class MemoryStatDto(
     val total: Double?,
 )
 
+/**
+ * The server's RAM and VRAM in GB (3.0.0-4: the meters in the main screen's top bar and the Server Memory panel). A
+ * total of 0 is a part the server did not report.
+ */
+data class ServerMemory(
+    val ramUsed: Double,
+    val ramTotal: Double,
+    val vramUsed: Double,
+    val vramTotal: Double,
+) {
+    val hasRam get() = ramTotal > 0
+    val hasVram get() = vramTotal > 0
+
+    /** "RAM: 12.3/31.9GB | VRAM: 5.1/8.0GB", as the OOM report writes it. */
+    fun summary(): String =
+        listOfNotNull(
+            "RAM: ${gb(ramUsed)}/${gb(ramTotal)}GB".takeIf { hasRam },
+            "VRAM: ${gb(vramUsed)}/${gb(vramTotal)}GB".takeIf { hasVram },
+        ).joinToString(" | ")
+
+    companion object {
+        private const val GIB = 1024.0 * 1024.0 * 1024.0
+
+        // From this share on a meter turns orange: the next job may run out of memory.
+        const val ALMOST_FULL = 0.9f
+
+        /** Null when the server reported neither RAM nor VRAM. */
+        fun of(dto: MemoryResponseDto?): ServerMemory? =
+            ServerMemory(
+                ramUsed = (dto?.ram?.used ?: 0.0) / GIB,
+                ramTotal = (dto?.ram?.total ?: 0.0) / GIB,
+                vramUsed = (dto?.cuda?.system?.used ?: 0.0) / GIB,
+                vramTotal = (dto?.cuda?.system?.total ?: 0.0) / GIB,
+            ).takeIf { it.hasRam || it.hasVram }
+
+        fun gb(value: Double): String = String.format(Locale.US, "%.1f", value)
+
+        /** How full, 0..1 (0 without a total). */
+        fun share(
+            used: Double,
+            total: Double,
+        ): Float = if (total > 0) (used / total).toFloat().coerceIn(0f, 1f) else 0f
+
+        /** The meter's short "used/total": "5.1/8.0", or "12.3/32" once a number reaches 10 GB, so it stays narrow. */
+        fun compact(
+            used: Double,
+            total: Double,
+        ): String {
+            fun short(value: Double) = if (value >= 10) String.format(Locale.US, "%.0f", value) else gb(value)
+            val usedText = if (used >= 100) String.format(Locale.US, "%.0f", used) else gb(used)
+            return "$usedText/${short(total)}"
+        }
+
+        /** The panel's "5.1 of 8.0 GB · 64%". */
+        fun detail(
+            used: Double,
+            total: Double,
+        ): String = "${gb(used)} of ${gb(total)} GB · ${(share(used, total) * 100).roundToInt()}%"
+    }
+}
+
 data class GlobalSettingResponseDto(
     @SerializedName("sd_cwd") val sdCwd: String?,
     @SerializedName("global_setting") val globalSetting: GlobalSettingInnerDto?,
@@ -588,17 +651,46 @@ fun GitHubReleaseDto.toUpdateManifest(): UpdateManifest? {
     )
 }
 
-/** [items] of release notes as a Markdown list, drawn by MarkdownText with their **bold** and `code` (3.0.0-2). */
-fun releaseNotesMarkdown(items: List<String>): String = items.joinToString("\n") { "- $it" }
+/**
+ * The notes of a release (the workflow copies them from CHANGELOG.md) as Markdown lines for the update card. Since
+ * 3.0.0-4 a section starts with the release's kind in bold ("**Bugfix** · ...") and groups its items under
+ * "### New", "### Changed" and "### Fixed": that first line, the headings and the "- item" lines are kept, anything
+ * else (a "## <version>" line, other text) is left out.
+ */
+fun parseReleaseNotes(body: String?): List<String> {
+    val notes = mutableListOf<String>()
+    for (raw in body.orEmpty().lines()) {
+        val line = raw.trim()
+        when {
+            line.startsWith("- ") || line.startsWith("* ") -> notes += "- " + line.drop(2).trim()
+            line.startsWith("### ") -> notes += "### " + line.drop(4).trim()
+            line.startsWith("**") && notes.isEmpty() -> notes += line
+        }
+    }
+    return notes
+}
 
-/** The "- item" lines of a release description (the workflow copies them from CHANGELOG.md). */
-fun parseReleaseNotes(body: String?): List<String> =
-    body
-        .orEmpty()
-        .lines()
-        .map { it.trim() }
-        .filter { it.startsWith("- ") || it.startsWith("* ") }
-        .map { it.drop(2).trim() }
+/** How many items the [notes] of parseReleaseNotes hold. */
+fun releaseNoteCount(notes: List<String>): Int = notes.count { it.startsWith("- ") }
+
+/**
+ * The [notes] of parseReleaseNotes as Markdown for MarkdownText (3.0.0-2: their **bold** and `code` are read), with
+ * at most [maxItems] items (the update card shows the first few) and no heading left without an item under it.
+ */
+fun releaseNotesMarkdown(
+    notes: List<String>,
+    maxItems: Int = Int.MAX_VALUE,
+): String {
+    val lines = mutableListOf<String>()
+    var items = 0
+    for (line in notes) {
+        if (items == maxItems) break
+        if (line.startsWith("- ")) items++
+        lines += line
+    }
+    while (lines.lastOrNull()?.startsWith("### ") == true) lines.removeAt(lines.lastIndex)
+    return lines.joinToString("\n")
+}
 
 fun GalleryItemDto.toDomain() =
     GalleryItem(

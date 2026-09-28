@@ -1,6 +1,5 @@
 package com.example.forgegen.ui.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
@@ -38,7 +36,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -71,22 +68,14 @@ fun rememberSearchSecondsLeft(searchEndsAt: Long): Long {
     return ((searchEndsAt - now + 999) / 1_000).coerceAtLeast(0)
 }
 
-/** "Connecting... 0:42" / "35 ms" / "Offline"; a tap opens the server dialog. */
+/** "Connecting... 0:42" / "35 ms" / "Offline"; the main screen's top bar opens the server dialog on a tap around it. */
 @Composable
 fun ConnectionStatus(
     connection: ServerConnection,
     pingMs: Long,
     searchEndsAt: Long,
-    onClick: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier =
-            Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onClick)
-                .padding(horizontal = 4.dp, vertical = 2.dp),
-    ) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         when (connection) {
             ServerConnection.CONNECTED -> {
                 Icon(Icons.Default.Wifi, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
@@ -147,7 +136,7 @@ fun ServerConnectionDialog(
                             "The server did not answer for a minute, so the app stopped asking. " +
                                 "Check its address and that Forge is running.",
                         )
-                    else -> ConnectionStatus(connection, pingMs, searchEndsAt, onClick = {})
+                    else -> ConnectionStatus(connection, pingMs, searchEndsAt)
                 }
                 OutlinedTextField(
                     value = address,

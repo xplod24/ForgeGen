@@ -151,8 +151,9 @@ object ForgeRepository {
     private val _isServerBusy = MutableStateFlow(false)
     val isServerBusy: StateFlow<Boolean> = _isServerBusy.asStateFlow()
 
-    private val _vramUsage = MutableStateFlow<String?>(null)
-    val vramUsage: StateFlow<String?> = _vramUsage.asStateFlow()
+    // The server's RAM and VRAM (/sdapi/v1/memory): read every few pings, and at once after Unload Model.
+    private val _serverMemory = MutableStateFlow<ServerMemory?>(null)
+    val serverMemory: StateFlow<ServerMemory?> = _serverMemory.asStateFlow()
 
     val selectedModel: StateFlow<String> get() = ForgeModelManager.selectedModel
 
@@ -320,7 +321,7 @@ object ForgeRepository {
     private fun connectionFailed(failCount: Int) {
         _isConnected.value = false
         _isServerBusy.value = false
-        _vramUsage.value = null
+        _serverMemory.value = null
         when {
             _connection.value == ServerConnection.CONNECTED -> startSearch() // lost: a minute of tries starts now
             System.currentTimeMillis() >= _searchEndsAt.value && !queueNeedsServer() ->
@@ -330,6 +331,17 @@ object ForgeRepository {
         // only after as many failed pings as the timeout had seconds, which with the backoff took about 8 minutes.
         if (failCount >= 1 && !ForgeQueueManager.isGenerating.value) {
             ForgeQueueManager.updateStatusText("Connection lost")
+        }
+    }
+
+    /** Reads the server's RAM and VRAM now (3.0.0-4: right after Unload Model, not up to 10 s later). */
+    suspend fun refreshServerMemory() {
+        try {
+            val response = forgeApi?.getMemoryStats()
+            if (response?.isSuccessful == true) _serverMemory.value = ServerMemory.of(response.body())
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            _serverMemory.value = null
         }
     }
 
@@ -413,23 +425,7 @@ object ForgeRepository {
 
                         // RAM/VRAM change slowly: every 5th ping instead of a second request each second.
                         if (failCount == 0 && _isConnected.value && pingCount++ % MEMORY_STATS_EVERY == 0) {
-                            try {
-                                val memRes = forgeApi?.getMemoryStats()
-                                if (memRes?.isSuccessful == true) {
-                                    val body = memRes.body()
-                                    val gib = 1024.0 * 1024.0 * 1024.0
-                                    val ramU = (body?.ram?.used ?: 0.0) / gib
-                                    val ramT = (body?.ram?.total ?: 0.0) / gib
-                                    val vramU = (body?.cuda?.system?.used ?: 0.0) / gib
-                                    val vramT = (body?.cuda?.system?.total ?: 0.0) / gib
-                                    val parts = mutableListOf<String>()
-                                    if (ramT > 0) parts += "RAM: ${String.format(Locale.US, "%.1f/%.1f", ramU, ramT)}GB"
-                                    if (vramT > 0) parts += "VRAM: ${String.format(Locale.US, "%.1f/%.1f", vramU, vramT)}GB"
-                                    _vramUsage.value = parts.joinToString(" | ").ifEmpty { null }
-                                }
-                            } catch (_: Exception) {
-                                _vramUsage.value = null
-                            }
+                            refreshServerMemory()
                         }
                     }
                 } catch (e: Exception) {
