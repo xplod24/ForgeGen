@@ -575,6 +575,8 @@ object ForgeQueueManager {
                     denoising_strength = state.denoising,
                     save_images = state.saveImages,
                     send_images = true,
+                    // The server's styles, only while they are turned on in the settings (3.1.0).
+                    styles = PromptStyles.forJob(ForgeRepository.config.value.serverStyles, state.styles),
                 )
             // The model's type and modules as the user set them (3.0.0); "Auto" changes nothing.
             val payload = ForgeModelManager.withModelSettings(built, currentModel)

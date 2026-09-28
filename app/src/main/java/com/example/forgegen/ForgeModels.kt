@@ -86,6 +86,8 @@ data class AppConfig(
     var galleryTab: String = GalleryTab.GALLERY.name,
     // Tags, wildcards and LoRAs suggested above the keyboard while a prompt is typed (2.4.2).
     var tagSuggestions: Boolean = true,
+    // The styles saved on the server under the prompt (3.1.0); off unless turned on (the owner's decision).
+    var serverStyles: Boolean = false,
     // What each checkpoint is and needs, and its own defaults (3.0.0), under ModelSettingsRules.key of the model.
     var modelSettings: Map<String, ModelSettings> = emptyMap(),
 )
@@ -166,6 +168,8 @@ data class AppState(
     var upscaler: String = "Latent",
     var saveImages: Boolean = true,
     var saveToDevice: Boolean = false,
+    // The server's styles chosen for the next jobs (3.1.0), sent only while AppConfig.serverStyles is on.
+    var styles: List<String> = emptyList(),
 )
 
 /** Width and height swapped (portrait and landscape), the aspect ratio with them ("Custom" stays). */
@@ -416,6 +420,8 @@ data class Txt2ImgPayloadDto(
     val hr_additional_modules: List<String>? = null,
     // FLUX's distilled CFG (3.0.0, the model's settings or the image's data); null is not sent.
     val distilled_cfg_scale: Float? = null,
+    // The server's styles the server adds to the prompts (3.1.0); null is not sent.
+    val styles: List<String>? = null,
 )
 
 /**
@@ -460,6 +466,19 @@ data class OptionsResponseDto(
 
 data class NameResponseDto(
     val name: String,
+)
+
+/** A style saved on the server (/sdapi/v1/prompt-styles, 3.1.0). */
+data class PromptStyleDto(
+    val name: String?,
+    val prompt: String?,
+    @SerializedName("negative_prompt") val negativePrompt: String?,
+)
+
+/** The server's embeddings (/sdapi/v1/embeddings, 3.1.0): name -> details, loaded for the model or skipped. */
+data class EmbeddingsResponseDto(
+    val loaded: Map<String, com.google.gson.JsonElement>?,
+    val skipped: Map<String, com.google.gson.JsonElement>?,
 )
 
 /** Hires fix's upscalers (3.0.1): the latent modes first, then the upscalers, as in the web UI. */

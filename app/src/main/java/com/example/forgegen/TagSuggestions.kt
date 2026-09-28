@@ -357,18 +357,29 @@ data class Suggestion(
 )
 
 object Suggestions {
-    /** The chips for [fragment]: tags from [tags], or the app's wildcards, or the server's LoRAs. */
+    // The category of an embedding's chip (3.1.0); Danbooru's categories are 0..5.
+    const val EMBEDDING = 100
+
+    // At most this many embeddings before the tags.
+    private const val MAX_EMBEDDINGS = 3
+
+    /**
+     * The chips for [fragment]: tags from [tags] (after the server's [embeddings] starting with what was typed, 3.1.0),
+     * or the app's wildcards, or the server's LoRAs.
+     */
     fun forFragment(
         fragment: TypedFragment?,
         tags: TagList?,
         rules: TagInsertRules,
         wildcards: List<String>,
         loras: List<String>,
+        embeddings: List<String> = emptyList(),
     ): List<Suggestion> =
         when (fragment?.kind) {
             null -> emptyList()
             TypedFragment.Kind.TAG ->
-                tags?.search(fragment.query).orEmpty().map {
+                embeddingsFor(embeddings, fragment.query) +
+                    tags?.search(fragment.query).orEmpty().map {
                     Suggestion(
                         rules.label(it.name),
                         rules.format(it.name),
@@ -384,6 +395,20 @@ object Suggestions {
             TypedFragment.Kind.LORA ->
                 PromptTypingRules.matchNames(loras, fragment.query).map { Suggestion(it, "<lora:$it:1.0>", fragment.kind) }
         }
+
+    /** Embeddings whose name starts with [query]: written as they are named, the way the server knows them. */
+    private fun embeddingsFor(
+        embeddings: List<String>,
+        query: String,
+    ): List<Suggestion> {
+        val q = query.trim().lowercase(Locale.ROOT)
+        if (q.isEmpty()) return emptyList()
+        return embeddings
+            .filter { it.lowercase(Locale.ROOT).startsWith(q) }
+            .sortedBy { it.lowercase(Locale.ROOT) }
+            .take(MAX_EMBEDDINGS)
+            .map { Suggestion(it, it, TypedFragment.Kind.TAG, category = EMBEDDING) }
+    }
 
     /** A post count as the chip shows it: 950, 12.3k, 4.4M. */
     fun compactCount(count: Int): String {

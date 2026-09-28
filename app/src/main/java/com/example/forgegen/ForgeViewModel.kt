@@ -400,6 +400,32 @@ class ForgeViewModel(
     val latentModes: StateFlow<List<String>> = networkManager.latentModes
     val availableLoras: StateFlow<List<ApiResource>> = networkManager.availableLoras
 
+    // --- LORA METADATA, EMBEDDINGS AND THE SERVER'S STYLES (3.1.0) ---
+    val loraInfo: StateFlow<LoraInfoIndex> = networkManager.loraInfo
+    val embeddings: StateFlow<EmbeddingList> = networkManager.embeddings
+    val promptStyles: StateFlow<List<PromptStyle>> = networkManager.promptStyles
+
+    /** [tags] added to the positive (or the [negative]) prompt, those it does not have yet (a trigger word, an embedding). */
+    fun addPromptTags(
+        tags: List<String>,
+        negative: Boolean = false,
+    ) = updateState {
+        if (negative) {
+            it.copy(negativePrompt = PromptEdits.addTags(it.negativePrompt, tags))
+        } else {
+            it.copy(positivePrompt = PromptEdits.addTags(it.positivePrompt, tags))
+        }
+    }
+
+    fun refreshEmbeddings() = networkManager.refreshEmbeddings { showToast(it) }
+
+    fun refreshPromptStyles() = networkManager.refreshPromptStyles { showToast(it) }
+
+    fun setStyles(names: List<String>) = updateState { it.copy(styles = names) }
+
+    /** The chosen styles written into the prompts, none chosen any more ("Paste into Prompt"). */
+    fun pasteStyles() = updateState { PromptStyles.pasteInto(it, promptStyles.value) }
+
 
     // --- DELEGATION OF STATE FROM FORGE GALLERY MANAGER ---
     // The three gallery tabs (2.2.0): the open folder (or the search's results), the favorites, every image.

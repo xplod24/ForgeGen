@@ -111,8 +111,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.forgegen.ui.components.LoraDetailsSheet
+import com.example.forgegen.ui.components.LoraPickerSheet
+import com.example.forgegen.ui.components.LoraTriggers
 import com.example.forgegen.ui.components.ResourcePickerSheet
 import com.example.forgegen.ui.components.ResourcePreview
+import com.example.forgegen.ui.components.StylesRow
+import com.example.forgegen.ui.components.StylesSheet
 import com.example.forgegen.ui.components.countTokens
 import com.example.forgegen.ui.components.rememberLastActive
 import java.text.SimpleDateFormat
@@ -543,6 +548,8 @@ fun PromptCard(
     var disabledPosTags by remember(resetKey) { mutableStateOf(emptySet<String>()) }
     var disabledNegTags by remember(resetKey) { mutableStateOf(emptySet<String>()) }
     var showRecent by remember { mutableStateOf(false) }
+    var pickStyles by remember { mutableStateOf(false) }
+    val promptStyles by viewModel.promptStyles.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     fun copy(text: String) {
@@ -575,6 +582,15 @@ fun PromptCard(
                 disabledPosTags = emptySet()
             }
         }
+        // The server's styles (3.1.0), only while "Server Styles" is on in the settings.
+        if (config.serverStyles) {
+            CardDivider()
+            StylesRow(
+                chosen = state.styles,
+                onRemove = { name -> viewModel.setStyles(state.styles - name) },
+                onAdd = { pickStyles = true },
+            )
+        }
         CardDivider()
         val negativeOpen = MainRows.NEGATIVE in openRows
         CardRow(
@@ -602,6 +618,20 @@ fun PromptCard(
                 }
             }
         }
+    }
+
+    if (pickStyles) {
+        StylesSheet(
+            styles = promptStyles,
+            chosen = state.styles,
+            onChosen = { viewModel.setStyles(it) },
+            onPaste = {
+                viewModel.pasteStyles()
+                pickStyles = false
+            },
+            onRefresh = { viewModel.refreshPromptStyles() },
+            onDismiss = { pickStyles = false },
+        )
     }
 
     if (showRecent) {
@@ -1149,6 +1179,15 @@ fun LorasCard(
     activeLoras: List<ActiveLora>,
 ) {
     var pickLora by remember { mutableStateOf(false) }
+    // The LoRA whose details are open (3.1.0), by name.
+    var detailsOf by remember { mutableStateOf<String?>(null) }
+    val loraInfo by viewModel.loraInfo.collectAsStateWithLifecycle()
+    val embeddings by viewModel.embeddings.collectAsStateWithLifecycle()
+    val appState by viewModel.appState.collectAsStateWithLifecycle()
+    val config by viewModel.config.collectAsStateWithLifecycle()
+    val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
+    // The checkpoint's type as the user set it (3.0.0): which LoRAs fit (3.1.0); Auto knows none.
+    val modelType = ModelSettingsRules.of(config.modelSettings, selectedModel).modelType
     MainSectionLabel(
         if (activeLoras.isEmpty()) "LoRAs" else "LoRAs · ${activeLoras.size}",
         actionText = "Add",
@@ -1163,15 +1202,30 @@ fun LorasCard(
             if (index > 0) CardDivider(PICTURE_ROW_INDENT)
             val resource = availableLoras.find { it.name == lora.name }
             val title = resource?.title ?: lora.name
+            val info = loraInfo.of(lora.name, resource?.path.orEmpty())
+            // Aligned to the top: the trigger words under the slider make the row taller (3.1.0).
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
-                ResourceThumb(resource?.let { remember(it.path) { viewModel.previewCandidates(it.path, isLora = true) } }.orEmpty())
+                Box(Modifier.padding(top = 6.dp)) {
+                    ResourceThumb(resource?.let { remember(it.path) { viewModel.previewCandidates(it.path, isLora = true) } }.orEmpty())
+                }
                 Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(title, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // Its details: the model it was made for and its training tags (3.1.0).
+                        Text(
+                            title,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier =
+                                Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(onClickLabel = "LoRA Details") { detailsOf = lora.name },
+                        )
                         Text(
                             String.format(Locale.US, "%.2f", lora.strength),
                             fontSize = 14.sp,
@@ -1184,6 +1238,7 @@ fun LorasCard(
                         onValueChange = { viewModel.updateLoraStrength(lora.name, roundStep(it, 0.05f)) },
                         valueRange = 0.1f..2f,
                     )
+                    LoraTriggers(info, modelType, appState.positivePrompt) { tag -> viewModel.addPromptTags(listOf(tag)) }
                 }
                 IconButton(onClick = { viewModel.removeLora(lora.name) }) {
                     Icon(
@@ -1198,17 +1253,39 @@ fun LorasCard(
     }
 
     if (pickLora) {
-        ResourcePickerSheet(
-            title = "LoRA",
-            items = availableLoras,
-            isSelected = { lora -> activeLoras.any { it.name == lora.name } },
+        // LoRAs with their model and trigger words, and the embeddings (3.1.0).
+        LoraPickerSheet(
+            loras = availableLoras,
+            info = loraInfo,
+            modelType = modelType,
+            isActive = { lora -> activeLoras.any { it.name == lora.name } },
             previewCandidates = { viewModel.previewCandidates(it.path, isLora = true) },
-            onPick = {
+            onPickLora = {
                 viewModel.addLora(it.name)
                 pickLora = false
             },
+            onRefreshLoras = { viewModel.refreshLoras() },
+            embeddings = embeddings,
+            positivePrompt = appState.positivePrompt,
+            negativePrompt = appState.negativePrompt,
+            onAddEmbedding = { name, negative -> viewModel.addPromptTags(listOf(name), negative) },
+            onRefreshEmbeddings = { viewModel.refreshEmbeddings() },
             onDismiss = { pickLora = false },
-            onRefresh = { viewModel.refreshLoras() },
+        )
+    }
+    detailsOf?.let { name ->
+        val resource = availableLoras.find { it.name == name }
+        LoraDetailsSheet(
+            title = resource?.title ?: name,
+            info = loraInfo.of(name, resource?.path.orEmpty()),
+            previewCandidates =
+                remember(resource?.path) {
+                    resource?.let { viewModel.previewCandidates(it.path, isLora = true) }.orEmpty()
+                },
+            modelType = modelType,
+            prompt = appState.positivePrompt,
+            onAddTags = { viewModel.addPromptTags(it) },
+            onDismiss = { detailsOf = null },
         )
     }
 }

@@ -89,6 +89,22 @@ interface ForgeApi {
     @GET("sdapi/v1/loras")
     suspend fun getLoras(): Response<List<LoraItemDto>>
 
+    /** The LoRAs with their whole metadata, read as it streams by LoraMetadata (3.1.0). */
+    @Streaming
+    @GET("sdapi/v1/loras")
+    suspend fun getLorasWithMetadata(): Response<ResponseBody>
+
+    /** Embeddings loaded for the current model and those skipped (3.1.0). */
+    @GET("sdapi/v1/embeddings")
+    suspend fun getEmbeddings(): Response<EmbeddingsResponseDto>
+
+    @POST("sdapi/v1/refresh-embeddings")
+    suspend fun refreshEmbeddings(): Response<Unit>
+
+    /** The styles saved on the server (styles.csv, 3.1.0). */
+    @GET("sdapi/v1/prompt-styles")
+    suspend fun getPromptStyles(): Response<List<PromptStyleDto>>
+
     /** Forge's VAEs and text encoders (3.0.0, model settings). */
     @GET("sdapi/v1/sd-modules")
     suspend fun getSdModules(): Response<List<SdModuleItemDto>>

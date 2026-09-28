@@ -104,6 +104,8 @@ fun MainScreen(
     val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
     val wildcardNames = remember(wildcards) { wildcards.map { it.name } }
     val loraNames = remember(availableLoras) { availableLoras.map { it.name } }
+    // Only the embeddings loaded for the current model are suggested (3.1.0).
+    val embeddingList by viewModel.embeddings.collectAsStateWithLifecycle()
 
     var fullscreenImageIndex by remember { mutableIntStateOf(-1) }
 
@@ -342,6 +344,7 @@ fun MainScreen(
                 status = tagListStatus,
                 wildcards = wildcardNames,
                 loras = loraNames,
+                embeddings = embeddingList.loaded,
                 oneBar = typingLayout.oneBar,
                 height = typingLayout.stripDp.dp,
                 modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.ime),

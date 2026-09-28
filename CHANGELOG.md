@@ -1,3 +1,17 @@
+## 3.1.0
+**Feature** · LoRAs tell which model they were made for and their trigger words, embeddings get their own list, and the server's styles can be used
+
+### New
+- **Which model a LoRA was made for:** the LoRA list shows a badge with the model each LoRA was trained for (SD 1.5, SDXL, FLUX...), read from the LoRA's own file. When the checkpoint's type is set in its model settings, the list opens on the LoRAs that fit it ("Fits SDXL"), with "All" and "In use" next to it; the ones made for another model are listed apart, in orange. With the type on Auto nothing is hidden. Forge itself cannot tell this, so a LoRA whose file says nothing has no badge.
+- **Trigger words:** under each LoRA in the LORAS card are the three words used most in its training, usually the ones that trigger it. Tap one to add it to the prompt; a tick marks those already there. A LoRA made for another model shows a warning there instead of failing quietly.
+- **LoRA details:** tap a LoRA's name in the card to see its model, the resolution and epochs it was trained with and its most used training words, each with how often it was used. "Add All to Prompt" adds the missing ones.
+- **Embeddings:** the LoRA list has a second tab with the server's embeddings (Textual Inversion). Each has Prompt and Negative to add it to either prompt, and says where it is used already. The ones loaded for the current model come first; those the server skipped as made for another model are greyed out. Refresh asks the server to look for new files.
+- **Embeddings while typing:** the suggestion strip above the keyboard shows up to three embeddings starting with what you type, before the tags, marked "embedding".
+- **Server styles** (off by default, turn on in Settings > Appearance > Server Styles): a Styles row in the PROMPT card chooses from the styles saved on the server (styles.csv). The server adds the chosen ones to every job, so the prompt stays as you wrote it, and they are kept with presets. "Paste into Prompt" writes them into the prompts instead, as the web UI does. Taking a prompt from an image (Restore Last, or an image picked in the gallery) clears the chosen styles, as that prompt already has them.
+
+### Changed
+- The LoRA list is a new sheet with a search field, the model badges and the embeddings tab. Its Refresh reads the list and each LoRA's training details again.
+
 ## 3.0.1
 **Bugfix** · hires fix's latent upscalers are back, VAE lists can be refreshed, and more model and LoRA pictures show
 

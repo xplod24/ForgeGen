@@ -487,6 +487,15 @@ fun SetupScreen(
                     TextPreference(title = "Tag List", subtitle = tagListText(tagListStatus)) { viewModel.reloadTagList() }
                 }
             }
+            // Off unless turned on here (3.1.0, the owner's decision).
+            add(SettingsPage.APPEARANCE, "Prompt", "server styles styles.csv prompt style preset web ui") {
+                SwitchPreference(
+                    title = "Server Styles",
+                    subtitle = "The server's saved styles (styles.csv) in a row under the prompt; the chosen ones go with every job",
+                    checked = config.serverStyles,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(serverStyles = it)) },
+                )
+            }
 
             // --- NOTIFICATIONS ---
             add(SettingsPage.NOTIFICATIONS, "Alerts", "notify on batch finish notification completed alert") {

@@ -122,14 +122,16 @@ fun TagSuggestionStrip(
     oneBar: Boolean,
     height: Dp,
     modifier: Modifier = Modifier,
+    // The server's embeddings, suggested before the tags (3.1.0).
+    embeddings: List<String> = emptyList(),
 ) {
     val value = typing.value ?: return
     val caret = if (value.selection.collapsed) value.selection.start else -1
     val fragment = remember(value.text, caret) { if (caret < 0) null else PromptTypingRules.fragmentAt(value.text, caret) }
-    val shown by produceState(Shown(null, emptyList()), fragment, tags, rules, wildcards, loras) {
+    val shown by produceState(Shown(null, emptyList()), fragment, tags, rules, wildcards, loras, embeddings) {
         this.value =
             withContext(Dispatchers.Default) {
-                Shown(fragment, Suggestions.forFragment(fragment, tags, rules, wildcards, loras))
+                Shown(fragment, Suggestions.forFragment(fragment, tags, rules, wildcards, loras, embeddings))
             }
     }
     val listState = rememberLazyListState()
@@ -204,7 +206,9 @@ private fun SuggestionChip(
                 Text("${suggestion.alias} →", fontSize = 11.sp, maxLines = 1, color = dimmed())
             }
             Text(suggestion.label, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-            if (suggestion.count > 0) {
+            if (suggestion.category == Suggestions.EMBEDDING) {
+                Text("embedding", fontSize = 11.sp, maxLines = 1, color = dimmed())
+            } else if (suggestion.count > 0) {
                 Text(
                     Suggestions.compactCount(suggestion.count),
                     fontSize = 11.sp,
@@ -279,6 +283,7 @@ private fun categoryColor(suggestion: Suggestion): Color =
         TypedFragment.Kind.LORA -> Color(0xFFF59E0B)
         TypedFragment.Kind.TAG ->
             when (suggestion.category) {
+                Suggestions.EMBEDDING -> Color(0xFFEC4899)
                 0 -> Color(0xFF2F7FF5)
                 1 -> Color(0xFFE5484D)
                 3 -> Color(0xFFB86BFF)

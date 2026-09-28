@@ -3,6 +3,7 @@ package com.example.forgegen
 import com.example.forgegen.ui.components.*
 import android.util.Log
 import com.google.gson.Gson
+import com.google.gson.stream.JsonReader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -108,6 +109,18 @@ class ForgeNetworkManager(
     private val _availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
     val availableLoras: StateFlow<List<ApiResource>> = _availableLoras.asStateFlow()
 
+    // Each LoRA's training metadata (3.1.0): the model it was made for and its most used training tags.
+    private val _loraInfo = MutableStateFlow(LoraInfoIndex())
+    val loraInfo: StateFlow<LoraInfoIndex> = _loraInfo.asStateFlow()
+
+    // The embeddings the server loaded for the current model, and those it skipped (3.1.0).
+    private val _embeddings = MutableStateFlow(EmbeddingList())
+    val embeddings: StateFlow<EmbeddingList> = _embeddings.asStateFlow()
+
+    // The styles saved on the server (3.1.0); shown only while AppConfig.serverStyles is on.
+    private val _promptStyles = MutableStateFlow<List<PromptStyle>>(emptyList())
+    val promptStyles: StateFlow<List<PromptStyle>> = _promptStyles.asStateFlow()
+
     fun rebuildForgeApi(url: String) {
         var cleanUrl = url.trimEnd('/')
         if (cleanUrl.isNotEmpty() && !cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
@@ -135,6 +148,8 @@ class ForgeNetworkManager(
         managerScope.launch(Dispatchers.IO) {
             try {
                 forgeApi?.setOptions(OptionsPayloadDto(modelTitle))
+                // Which embeddings fit depends on the model (3.1.0).
+                fetchEmbeddings()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed to switch model. Exception: $e")
@@ -269,6 +284,9 @@ class ForgeNetworkManager(
                                         _models.value = checkpoints
                                         _availableLoras.value = loras
                                         customApiSuccess = true
+                                        // The LoRAs' metadata is a large answer: read after the lists, without holding
+                                        // the start (not a child of this fetch).
+                                        managerScope.launch(Dispatchers.IO) { fetchLoraInfo() }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -286,11 +304,12 @@ class ForgeNetworkManager(
                                             fallbackSuccess = true
                                         }
 
-                                        val loraRes = forgeApi?.getLoras()
-                                        if (loraRes?.isSuccessful == true) {
+                                        // The LoRAs and their metadata in one answer (3.1.0).
+                                        fetchLoraInfo()?.let { infos ->
                                             _availableLoras.value =
-                                                loraRes.body()?.map { it.toDomain() }?.sortedBy { it.title.lowercase(Locale.getDefault()) }
-                                                    ?: emptyList()
+                                                infos
+                                                    .map { ApiResource(title = it.name, path = it.path, name = it.name) }
+                                                    .sortedBy { it.title.lowercase(Locale.getDefault()) }
                                         }
                                     } catch (e: Exception) {
                                         if (e is kotlinx.coroutines.CancellationException) throw e
@@ -321,7 +340,14 @@ class ForgeNetworkManager(
                         // The VAEs and text encoders model settings pick from (3.0.0): Forge's list, else A1111's VAEs.
                         val defModules = async { fetchModules() }
 
-                        awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts, defModules)
+                        // The embeddings and the server's styles (3.1.0), small lists.
+                        val defExtras =
+                            async {
+                                fetchEmbeddings()
+                                fetchPromptStyles()
+                            }
+
+                        awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts, defModules, defExtras)
                         lastFetchHadLists = defSamplers.await() && defModelsAndLoras.await()
                     }
                 } catch (e: Exception) {
@@ -330,6 +356,77 @@ class ForgeNetworkManager(
                     lastFetchHadLists = false
                 }
             }
+    }
+
+    /** Every LoRA with its training metadata (3.1.0), read as the answer streams; null when the server gave none. */
+    private suspend fun fetchLoraInfo(): List<LoraInfo>? =
+        try {
+            val res = forgeApi?.getLorasWithMetadata()
+            if (res?.isSuccessful == true) {
+                res.body()?.use { body -> JsonReader(body.charStream()).use { LoraMetadata.readList(it) } }?.also {
+                    _loraInfo.value = LoraInfoIndex(it)
+                }
+            } else {
+                res?.errorBody()?.close()
+                null
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "No LoRA metadata: $e")
+            null
+        }
+
+    private suspend fun fetchEmbeddings() {
+        try {
+            val res = forgeApi?.getEmbeddings()
+            if (res?.isSuccessful == true) {
+                val body = res.body()
+                val loaded = body?.loaded?.keys.orEmpty()
+                val skipped = body?.skipped?.keys.orEmpty()
+                _embeddings.value = EmbeddingList(loaded.toList(), skipped.toList())
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "No embeddings: $e")
+        }
+    }
+
+    private suspend fun fetchPromptStyles() {
+        try {
+            val res = forgeApi?.getPromptStyles()
+            if (res?.isSuccessful == true) {
+                _promptStyles.value =
+                    res.body().orEmpty().mapNotNull { dto ->
+                        dto.name?.takeIf { it.isNotBlank() }?.let { PromptStyle(it, dto.prompt.orEmpty(), dto.negativePrompt.orEmpty()) }
+                    }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.w(TAG, "No prompt styles: $e")
+        }
+    }
+
+    /** Refresh in the embedding list (3.1.0): the server looks for new files, then the list is read again. */
+    fun refreshEmbeddings(onResult: (String) -> Unit) {
+        managerScope.launch(Dispatchers.IO) {
+            val ok =
+                try {
+                    forgeApi?.refreshEmbeddings()?.isSuccessful == true
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    false
+                }
+            fetchEmbeddings()
+            onResult(if (ok) "Embeddings refreshed" else "Could not refresh the embeddings")
+        }
+    }
+
+    /** Refresh in the style list (3.1.0): the server reads styles.csv each time it is asked. */
+    fun refreshPromptStyles(onResult: (String) -> Unit) {
+        managerScope.launch(Dispatchers.IO) {
+            fetchPromptStyles()
+            onResult("Styles read again · ${_promptStyles.value.size}")
+        }
     }
 
     /** The VAEs and text encoders: Forge's module list, else A1111's VAEs, else none. */

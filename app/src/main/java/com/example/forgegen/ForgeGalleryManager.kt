@@ -1425,7 +1425,8 @@ object ForgeGalleryManager {
         if (text.isEmpty()) return
         val info = Infotext.parse(text)
         ForgeSettingsManager.updateState { state: AppState ->
-            val newState = state.copy(positivePrompt = info.positivePrompt, negativePrompt = info.negativePrompt)
+            // An image's prompts already hold the styles it was made with (3.1.0): chosen ones would come twice.
+            val newState = state.copy(positivePrompt = info.positivePrompt, negativePrompt = info.negativePrompt, styles = emptyList())
             info.params["Steps"]?.toIntOrNull()?.let { newState.steps = it }
             info.params["CFG scale"]?.toFloatOrNull()?.let { newState.cfgScale = it }
             info.params["Seed"]?.toLongOrNull()?.let { newState.seed = it }

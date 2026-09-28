@@ -99,7 +99,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   bar. Screenshots are checked with a Robolectric rig in the scratchpad (not in the repo).
 - **API features plan (owner-approved after 3.0.0-4; mockups: artifact "ForgeGen API Features Proposals"):** four
   releases, each accepted by the owner installing it on the phone; on the owner's "OK" the next one starts without
-  asking. 1) 3.0.1 Bugfix: latent hires modes, VAE refresh, model/LoRA pictures (done). 2) 3.1.0 Feature: LoRA
+  asking. 1) 3.0.1 Bugfix: latent hires modes, VAE refresh, model/LoRA pictures (done). 2) 3.1.0 Feature (done): LoRA
   metadata (base model badge, trigger words, details sheet, "fits the model" filter), embeddings (list, suggestions,
   Prompt/Negative), server styles (`/sdapi/v1/prompt-styles` + the txt2img `styles` field) - **off by default, turned
   on in the settings** (owner's decision). 3) 3.2.0 Feature: gallery via IIB: delete with a ~6 s Undo before the
@@ -120,6 +120,23 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   or NONE is remembered per model while the app runs, `forget()` on model/LoRA list refresh.
   `ForgeRepository.previewCandidates` replaced `getPreviewUrl` ("file=...preview.png"). Tests:
   `ResourcePreviewsTest`, `HiresUpscalersTest`, harness G41.
+- **3.1.0 (Feature): LoRA metadata, embeddings, server styles.** `LoraMetadata.readList` (LoraMetadata.kt) reads
+  `/sdapi/v1/loras` with a streaming `JsonReader` (the answer carries every LoRA's whole metadata, megabytes) and keeps
+  per LoRA: `LoraBase` from `ss_base_model_version` / `modelspec.architecture` / `ss_v2` (Forge Neo does not detect a
+  LoRA's model itself), the top 12 tags of `ss_tag_frequency` (an object, or its JSON text), resolution and epochs.
+  `LoraInfoIndex.of(name, path)` finds it by path (case and slashes ignored), else by name. `fits(modelType)` is null
+  for Auto or an unknown base: then nothing is filtered, only badges shown. `ForgeNetworkManager.fetchLoraInfo` runs
+  in the background after the customapi LoRA list (and is the fallback list source); `fetchEmbeddings` also after a
+  checkpoint change (the loaded/skipped split depends on the model); `fetchPromptStyles`. UI (ui/components/
+  PromptExtras.kt): `LoraPickerSheet` (tabs LoRA / Embeddings, filters Fits / All / In use, misfits section),
+  `LoraTriggers` under each LoRA in `LorasCard` (3 compact chips; the 48 dp touch frame is turned off with
+  `LocalMinimumInteractiveComponentSize`, else two rows of chips gape), `LoraDetailsSheet` (tap the LoRA's name),
+  `StylesRow` + `StylesSheet` in `PromptCard`. `PromptEdits.addTags` adds only the missing tags. Embeddings are
+  suggested first in the tag strip (`Suggestions.EMBEDDING`, up to 3 by prefix). Styles: `AppState.styles`, sent as
+  txt2img `styles` only via `PromptStyles.forJob(config.serverStyles, ...)` (null = left out of the JSON);
+  `AppConfig.serverStyles` is **false by default** (owner's decision), switch in Settings > Appearance; "Paste into
+  Prompt" merges them like the web UI (`{prompt}` or ", " after) and clears the choice; taking a prompt from an image
+  clears it too. Tests: `LoraMetadataTest` (+ PromptEdits/PromptStyles/EmbeddingSuggestions), harness G42.
 - **Main screen top bar (3.0.0-4, micro-patch "Bugfix"; the owner picked B of three mockups, same artifact):**
   `MainTopBar` (TopBars.kt) is the same pill, 4 dp above and below so it stays 64 dp (`TypingLayout.TOP_BAR_DP`):
   "ForgeGen" over `ConnectionStatus` (the whole block opens `openServerDialog`), `MemoryMeters` (VRAM = primary,
