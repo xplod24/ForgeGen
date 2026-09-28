@@ -187,3 +187,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
    preview artifact "ForgeGen Tag Suggestions" (https://claude.ai/artifact/C4LixCf4mJPLAH3ejPVnDN).
 2. **"More Like This" in the gallery**: done in 2.4.0 (the owner chose "Similar", variation seeds, as the default).
 3. **"Upscale Selected" in the gallery**: done in 2.4.0 (defaults ×2, denoising 0.35, the hires fix upscaler).
+4. **Checkpoint type with its modules** (pinned 2026-09-28, not started): the user sets a model's type, SD, SDXL or
+   FLUX. SD: a VAE choice. FLUX: a VAE and text encoder(s) choice (Forge's `forge_additional_modules`, the list from
+   the server; Flux also has its distilled CFG). The app sends none of this today (no `sd_vae`, no modules).
+5. **"Variance on seed"** (pinned 2026-09-28, not started; the owner's name): an extra tab/action for several images
+   selected in the gallery (next to Upscale). Each image keeps its seed, and the app queues up to 100 jobs varying
+   the LoRAs it used (a chosen +/- range of each LoRA's weight) and ranges of the other settings (CFG, steps, ...).
+   Builds on `ImageJobs` (2.4.0). txt2img only.
+6. **Default options per model** (pinned 2026-09-28, not started): optional, the user ticks it next to the model;
+   when that model is selected its saved defaults (size, CFG, sampler, steps, ...) are applied. Off unless ticked.
