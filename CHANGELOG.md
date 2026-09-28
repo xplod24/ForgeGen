@@ -1,3 +1,29 @@
+## 3.0.0
+### New main screen
+- **Cards, like the settings:** under the image preview the main screen now has three cards, PROMPT, GENERATION and LORAS, with rows you tap. The generation settings are no longer hidden in a drawer at the bottom.
+- **Prompt:** under the positive prompt are its token count, Undo, Redo, Copy and Clear. The negative prompt is a row that opens when you tap it. "Recent" above the card lists your last prompts.
+- **Generation:** Model (tap it to pick another), Sampling (sampler, schedule, steps, CFG, clip skip), Size & Batch (aspect ratios, width, height, batch count and size, seed) and Hires fix with a switch. A closed row shows how it is set; rows you leave open stay open next time.
+- The aspect-ratio chips follow the model: around 1024×1024 for SDXL and FLUX, around 512×512 for SD. 4:3 and 3:4 are now really 4:3 (768×576).
+- **LoRAs:** the ones in use, each with its strength slider; "Add" is above the card.
+- **Generate bar:** fixed at the bottom: the queue, Stop while generating, Add to Queue (it fills as the image progresses and shows the time left) and ⋯ with Presets, Restore Last, Reset to Defaults, Save on Server and Save to Phone. It steps aside while you type.
+- "Check Checkpoints" and "Check Loras" are now the refresh button in the model and LoRA lists.
+- The "Expand Bottom Drawer by Default" setting is gone with the drawer.
+- Buttons, switches, chips and dialogs across the app use the app's blues and greys instead of Material's default purple.
+
+### Model settings
+- **Checkpoint type:** tap the layers button next to the model and tell the app what the checkpoint is: SD, SDXL or FLUX. Auto, the default, works as before.
+- **SD:** pick its VAE from your server's list, or keep the one built into the checkpoint.
+- **FLUX:** pick its VAE and text encoders (for example ae, clip_l and t5xxl). The app sends them with every job, together with FLUX's distilled CFG, which you set in Sampling.
+- On A1111 servers only the VAE of SD models is sent.
+- **Model defaults (optional):** "Save Current Settings" keeps the size, steps, CFG, sampler, schedule and clip skip as the model's defaults. With "Use Model Defaults" on, they are set whenever you pick that model.
+- Images made with FLUX keep their distilled CFG when they are made again from the gallery.
+
+### Variance on Seed
+- Select images in the gallery, tap Upscale and switch to the new "Variance on Seed" tab. Each image is made again with its own seed while the weights of its LoRAs (± a range, in steps you choose), the CFG and the steps vary. Every combination is one job, up to 100 jobs; the image itself is not made again. In the queue each job says what it changes.
+
+### What's New
+- After an update a half-transparent bar floats at the top of the app for 30 seconds instead of these notes opening by themselves. Tap Show to read them.
+
 ## 2.4.2
 ### Tag suggestions
 - **Tags above the keyboard:** while you type a tag in a prompt, a strip right above the keyboard suggests Danbooru tags: first those starting with what you typed, then those with a later word starting with it (`hair` gives `long hair`), then aliases (`blond` finds `blonde hair`), each most used first. A chip shows the tag's category as a coloured dot, its name and how many Danbooru posts use it. Tap it to put the tag in place of what you typed, followed by ", ".

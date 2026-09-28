@@ -18,7 +18,6 @@ class ForgeSettingsManagerConfigTest {
                 notificationMode = "Verbose",
                 keepScreenOn = true,
                 swipeToBrowseGallery = false,
-                bottomSheetExpandedByDefault = true,
                 serverProfiles = listOf(ServerProfile("A", "http://a")),
                 useNativeSecurity = true,
                 useBiometricLock = true,
@@ -29,9 +28,7 @@ class ForgeSettingsManagerConfigTest {
                 lastUpdateCheckDate = "2026-09-24",
                 defaultState = AppState(steps = 40),
                 presets = listOf(GenerationPreset("P", AppState(), includePrompts = false)),
-                mainPromptsExpanded = false,
-                mainSettingsExpanded = true,
-                mainLorasExpanded = true,
+                mainOpenRows = listOf(MainRows.NEGATIVE, MainRows.SIZE),
                 autoSaveMode = AUTO_SAVE_FAVORITES,
                 autoSaveSince = "2026-09-24 10:00:00",
                 saveOomLogs = true,
@@ -47,6 +44,18 @@ class ForgeSettingsManagerConfigTest {
                 galleryView = GalleryView.LIST_LARGE.name,
                 galleryTab = GalleryTab.FAVORITES.name,
                 tagSuggestions = false,
+                modelSettings =
+                    mapOf(
+                        "flux1-dev" to
+                            ModelSettings(
+                                type = ModelType.FLUX.name,
+                                vae = "ae.safetensors",
+                                textEncoders = listOf("clip_l.safetensors", "t5xxl_fp8.safetensors"),
+                                distilledCfg = 3f,
+                                useDefaults = true,
+                                defaults = ModelDefaults(width = 896, height = 1152, steps = 28),
+                            ),
+                    ),
             )
 
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))

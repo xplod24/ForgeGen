@@ -318,7 +318,6 @@ object ForgeSettingsManager {
             notificationMode = parsed?.notificationMode ?: "Simple",
             keepScreenOn = parsed?.keepScreenOn ?: false,
             swipeToBrowseGallery = parsed?.swipeToBrowseGallery ?: true,
-            bottomSheetExpandedByDefault = parsed?.bottomSheetExpandedByDefault ?: false,
             serverProfiles = parsed?.serverProfiles ?: listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
 
             useNativeSecurity = parsed?.useNativeSecurity ?: false,
@@ -330,9 +329,7 @@ object ForgeSettingsManager {
             lastUpdateCheckDate = parsed?.lastUpdateCheckDate ?: "",
             defaultState = parsed?.defaultState ?: AppState(),
             presets = parsed?.presets ?: emptyList(),
-            mainPromptsExpanded = parsed?.mainPromptsExpanded ?: true,
-            mainSettingsExpanded = parsed?.mainSettingsExpanded ?: false,
-            mainLorasExpanded = parsed?.mainLorasExpanded ?: false,
+            mainOpenRows = parsed?.mainOpenRows.orEmpty(),
             autoSaveMode = parsed?.autoSaveMode ?: AUTO_SAVE_OFF,
             autoSaveSince = parsed?.autoSaveSince ?: "",
             saveOomLogs = parsed?.saveOomLogs ?: false,

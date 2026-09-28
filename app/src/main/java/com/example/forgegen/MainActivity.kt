@@ -605,53 +605,9 @@ class MainActivity : ComponentActivity() {
                     THEME_LIGHT -> false
                     else -> systemDark
                 }
-            val defaultColorScheme =
-                remember(darkTheme) {
-                    if (darkTheme) {
-                        darkColorScheme(
-                            primary = Color(0xFF3E80FF),
-                            background = Color.Black,
-                            surface = Color(0xFF151515),
-                            surfaceVariant = Color(0xFF252525),
-                            primaryContainer = Color.Black,
-                            onPrimaryContainer = Color.White,
-                        )
-                    } else {
-                        lightColorScheme(
-                            primary = Color(0xFF005BFF),
-                            background = Color(0xFFF2F2F2),
-                            surface = Color.White,
-                            surfaceVariant = Color(0xFFE5E5E5),
-                            primaryContainer = Color(0xFFF2F2F2),
-                            onPrimaryContainer = Color.Black,
-                        )
-                    }
-                }
-
-            val defaultTypography =
-                remember {
-                    Typography(
-                        bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp),
-                        bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp),
-                        bodySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp),
-                        labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                        labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, fontWeight = FontWeight.Medium),
-                        labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 10.sp, fontWeight = FontWeight.Medium),
-                        titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 24.sp, fontWeight = FontWeight.Bold),
-                        titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 18.sp, fontWeight = FontWeight.Bold),
-                        titleSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, fontWeight = FontWeight.Bold),
-                    )
-                }
-
-            val defaultShapes =
-                remember {
-                    Shapes(
-                        small = RoundedCornerShape(12.dp),
-                        medium = RoundedCornerShape(20.dp),
-                        large = RoundedCornerShape(26.dp),
-                        extraLarge = RoundedCornerShape(32.dp),
-                    )
-                }
+            val defaultColorScheme = remember(darkTheme) { forgeColorScheme(darkTheme) }
+            val defaultTypography = remember { forgeTypography() }
+            val defaultShapes = remember { forgeShapes() }
 
             if (Build.VERSION.SDK_INT >= 33) {
                 val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -813,10 +769,22 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // WHAT'S NEW after an update: once the app is unlocked and past the start animation.
+                    // WHAT'S NEW after an update, once the app is unlocked and past the start animation: a floating bar
+                    // at the top (3.0.0), and the notes when "Show" is tapped.
                     val whatsNew by viewModel.whatsNew.collectAsStateWithLifecycle()
+                    val whatsNewBar by viewModel.whatsNewBar.collectAsStateWithLifecycle()
+                    val whatsNewOpen by viewModel.whatsNewOpen.collectAsStateWithLifecycle()
+                    val canShowWhatsNew = !isLocked && isStarted && currentRoute != null
+                    WhatsNewBar(
+                        visible = canShowWhatsNew && whatsNewBar && whatsNew != null,
+                        version = viewModel.whatsNewVersion,
+                        onShown = { viewModel.markWhatsNewSeen() },
+                        onShow = { viewModel.openWhatsNew() },
+                        onClose = { viewModel.hideWhatsNewBar() },
+                        modifier = Modifier.align(Alignment.TopCenter).zIndex(90f),
+                    )
                     whatsNew?.let { notes ->
-                        if (!isLocked && isStarted && currentRoute != null) {
+                        if (canShowWhatsNew && whatsNewOpen) {
                             WhatsNewDialog(markdown = notes, onDismiss = { viewModel.dismissWhatsNew() })
                         }
                     }

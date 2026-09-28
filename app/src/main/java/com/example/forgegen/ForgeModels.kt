@@ -43,7 +43,6 @@ data class AppConfig(
     var notificationMode: String = "Simple",
     var keepScreenOn: Boolean = false,
     var swipeToBrowseGallery: Boolean = true,
-    var bottomSheetExpandedByDefault: Boolean = false,
     var serverProfiles: List<ServerProfile> = listOf(ServerProfile("Default Local", "http://192.168.1.90:7860")),
     var useNativeSecurity: Boolean = false,
     var useBiometricLock: Boolean = false,
@@ -54,9 +53,8 @@ data class AppConfig(
     var lastUpdateCheckDate: String = "",
     var defaultState: AppState = AppState(),
     var presets: List<GenerationPreset> = emptyList(),
-    var mainPromptsExpanded: Boolean = true,
-    var mainSettingsExpanded: Boolean = false,
-    var mainLorasExpanded: Boolean = false,
+    // The rows of the main screen's cards left open (3.0.0): MainRows.NEGATIVE, SAMPLING, SIZE.
+    var mainOpenRows: List<String> = emptyList(),
     // Gallery images saved to the phone on their own: AUTO_SAVE_OFF, AUTO_SAVE_FAVORITES or AUTO_SAVE_ALL.
     var autoSaveMode: String = AUTO_SAVE_OFF,
     // With AUTO_SAVE_ALL only images newer than this (the server's "yyyy-MM-dd HH:mm:ss" format) are saved,
@@ -89,6 +87,13 @@ data class AppConfig(
     // What each checkpoint is and needs, and its own defaults (3.0.0), under ModelSettingsRules.key of the model.
     var modelSettings: Map<String, ModelSettings> = emptyMap(),
 )
+
+/** The rows of the main screen's cards that open (AppConfig.mainOpenRows, 3.0.0). */
+object MainRows {
+    const val NEGATIVE = "negative"
+    const val SAMPLING = "sampling"
+    const val SIZE = "size"
+}
 
 /** The gallery's tabs: the folders of the server's gallery, the favorites, and every image newest first. */
 enum class GalleryTab {

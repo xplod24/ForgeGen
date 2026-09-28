@@ -12,7 +12,12 @@ class ImageJobsTest {
     private val models =
         listOf(
             // The owner's server lists full SHA-256 hashes; the fallback lists "name.safetensors [short hash]".
-            ApiResource(title = "animagineXL31", path = "/m/animagineXL31.safetensors", name = "animagineXL31", hash = "1449e5b0b9aabbccdd"),
+            ApiResource(
+                title = "animagineXL31",
+                path = "/m/animagineXL31.safetensors",
+                name = "animagineXL31",
+                hash = "1449e5b0b9aabbccdd",
+            ),
             ApiResource(title = "ponyDiffusion.safetensors [ab12cd34ef]", path = "/m/ponyDiffusion.safetensors", name = "ponyDiffusion"),
         )
 
@@ -133,7 +138,10 @@ class ImageJobsTest {
         assertTrue(json, json.contains("\"subseed\":1234568"))
         assertTrue(json, json.contains("\"subseed_strength\":0.15"))
         assertTrue(json, json.contains("\"eta_noise_seed_delta\":31337"))
-        val plain = Gson().toJson((ImageJobs.remake(info("Steps: 20, Seed: 1, Size: 512x512"), models, null) as ImageJobs.Source.Ready).payload)
+        val plain =
+            Gson().toJson(
+                (ImageJobs.remake(info("Steps: 20, Seed: 1, Size: 512x512"), models, null) as ImageJobs.Source.Ready).payload,
+            )
         assertFalse(plain, plain.contains("eta_noise_seed_delta"))
         assertFalse(plain, plain.contains("randn_source"))
         assertFalse(plain, plain.contains("sd_model_checkpoint"))
@@ -153,5 +161,72 @@ class ImageJobsTest {
 
         val chosen = upscale.copy(hr_additional_modules = listOf("ae.safetensors"))
         assertEquals(chosen, chosen.forServer())
+    }
+
+    // --- Variance on Seed (3.0.0) ---
+
+    private val loraSpec = ImageJobs.VarianceSpec(loras = mapOf("detail" to ImageJobs.Spread(0.2f, 0.1f)))
+
+    @Test
+    fun `Variance on Seed varies a LoRA's weight around the image's own and leaves the image itself out`() {
+        val source = ready(base)
+        val jobs = ImageJobs.variance(source, loraSpec)
+        assertEquals(
+            listOf("0.4", "0.5", "0.7", "0.8"),
+            jobs.map { (payload, _) ->
+                Regex("<lora:detail:([0-9.]+)>").find(payload.prompt)!!.groupValues[1]
+            },
+        )
+        assertTrue("the seed stays", jobs.all { (payload, _) -> payload.seed == 1234567L })
+        assertEquals("Variance · 1234567 · detail 0.4", jobs.first().second)
+        assertEquals(4, ImageJobs.varianceCount(listOf(source), loraSpec))
+    }
+
+    @Test
+    fun `every combination of the varied settings is one job, labelled with what changed`() {
+        val spec = loraSpec.copy(cfg = ImageJobs.Spread(0.5f, 0.5f), steps = ImageJobs.Spread(5f, 5f))
+        val source = ready(base)
+        val jobs = ImageJobs.variance(source, spec)
+        assertEquals(5 * 3 * 3 - 1, jobs.size)
+        assertEquals(jobs.size, ImageJobs.varianceCount(listOf(source), spec))
+        assertEquals("every job differs", jobs.size, jobs.map { it.first }.distinct().size)
+        val job =
+            jobs.single { (payload, _) ->
+                payload.cfg_scale == 7f &&
+                    payload.steps == 23 &&
+                    payload.prompt.contains("<lora:detail:0.6>")
+            }
+        assertEquals("Variance · 1234567 · CFG 7 · 23 steps", job.second)
+    }
+
+    @Test
+    fun `limits keep the values sensible and a LoRA the image does not use is not varied`() {
+        val low =
+            ImageJobs.remake(Infotext.parse("<lora:detail:-3.9>\n" + base.replace("CFG scale: 6.5", "CFG scale: 1")), models, null)
+                as ImageJobs.Source.Ready
+        val spec =
+            ImageJobs.VarianceSpec(
+                loras = mapOf("detail" to ImageJobs.Spread(0.2f, 0.1f), "other" to ImageJobs.Spread(0.5f, 0.1f)),
+                cfg = ImageJobs.Spread(1f, 0.5f),
+            )
+        val jobs = ImageJobs.variance(low, spec)
+        val weights = jobs.map { Regex("<lora:detail:(-?[0-9.]+)>").find(it.first.prompt)!!.groupValues[1].toFloat() }.distinct().sorted()
+        assertEquals(listOf(-4f, -3.9f, -3.8f, -3.7f), weights)
+        assertTrue(jobs.all { it.first.cfg_scale in 1f..2f })
+        assertEquals(4 * 3 - 1, jobs.size)
+        assertEquals(0, ImageJobs.varianceCount(listOf(low), ImageJobs.VarianceSpec()))
+    }
+
+    @Test
+    fun `the LoRAs of the selected images are listed with the weights they use`() {
+        val a = ready(base)
+        val b = ImageJobs.remake(Infotext.parse("<lora:detail:0.8>, <lora:flat:1>\n$base"), models, null) as ImageJobs.Source.Ready
+        assertEquals(mapOf("detail" to listOf(0.6f, 0.8f), "flat" to listOf(1f)), ImageJobs.lorasOf(listOf(a, b)))
+        assertEquals(
+            "1girl, <lora:detail:0.75>, x <lora:detail:0.75>",
+            ImageJobs.withLoraWeight("1girl, <lora:detail:0.6>, x <lora:detail:1>", "detail", 0.75f),
+        )
+        assertEquals("7", ImageJobs.weightText(7f))
+        assertEquals("1.25", ImageJobs.weightText(1.25f))
     }
 }

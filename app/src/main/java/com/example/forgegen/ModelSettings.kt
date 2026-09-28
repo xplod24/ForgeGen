@@ -146,10 +146,11 @@ object ModelSettingsRules {
     // A1111's value for "the VAE of the checkpoint".
     const val AUTOMATIC_VAE = "Automatic"
 
-    /** What the model row says about its settings: "SDXL", "FLUX · ae · 2 text encoders", "SD · defaults". */
+    /** What the model row says about its settings: "Model · SDXL", "Model · FLUX · ae · 2 text encoders". */
     fun summary(settings: ModelSettings): String {
         val type = settings.modelType
-        val parts = mutableListOf(if (type == ModelType.AUTO) "Model" else type.label)
+        val parts = mutableListOf("Model")
+        if (type != ModelType.AUTO) parts += type.label
         if (type == ModelType.SD || type == ModelType.FLUX) settings.vae?.let { parts += key(it) }
         if (type == ModelType.FLUX && settings.textEncoders.isNotEmpty()) {
             parts += "${settings.textEncoders.size} text ${if (settings.textEncoders.size == 1) "encoder" else "encoders"}"
@@ -188,4 +189,38 @@ object ModelSettingsRules {
             "${defaults.sampler} · ${defaults.scheduler} · clip skip ${defaults.clipSkip}"
 
     fun formatCfg(value: Float): String = String.format(Locale.US, "%.1f", value).removeSuffix(".0")
+}
+
+/**
+ * The sizes behind the aspect-ratio chips of the main screen: around 1024² for SDXL and FLUX, around 512² for SD, and
+ * for Auto whichever the current size is closer to.
+ */
+object SizePresets {
+    val RATIOS = listOf("1:1", "4:3", "3:4", "16:9", "9:16")
+
+    private val LARGE =
+        mapOf("1:1" to (1024 to 1024), "4:3" to (1152 to 896), "3:4" to (896 to 1152), "16:9" to (1344 to 768), "9:16" to (768 to 1344))
+    private val SMALL =
+        mapOf("1:1" to (512 to 512), "4:3" to (768 to 576), "3:4" to (576 to 768), "16:9" to (912 to 512), "9:16" to (512 to 912))
+
+    fun isLarge(
+        type: ModelType,
+        width: Int,
+        height: Int,
+    ): Boolean =
+        when (type) {
+            ModelType.SDXL, ModelType.FLUX -> true
+            ModelType.SD -> false
+            ModelType.AUTO -> width.toLong() * height >= 1024L * 1024 * 3 / 4
+        }
+
+    /** [state] in the size of [ratio] (unknown ratios change nothing). */
+    fun apply(
+        state: AppState,
+        ratio: String,
+        large: Boolean,
+    ): AppState {
+        val (width, height) = (if (large) LARGE else SMALL)[ratio] ?: return state
+        return state.copy(aspectRatio = ratio, width = width, height = height)
+    }
 }

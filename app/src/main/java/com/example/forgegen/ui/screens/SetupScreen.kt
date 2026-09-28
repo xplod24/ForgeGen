@@ -444,14 +444,6 @@ fun SetupScreen(
                     subtitle = if (config.themeMode == THEME_SYSTEM) "System default" else config.themeMode,
                 ) { showThemeDialog = true }
             }
-            add(SettingsPage.APPEARANCE, null, "expand bottom drawer by default generation controls sheet start") {
-                SwitchPreference(
-                    title = "Expand Bottom Drawer by Default",
-                    subtitle = "Keep generation controls visible when the app starts",
-                    checked = config.bottomSheetExpandedByDefault,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(bottomSheetExpandedByDefault = it)) },
-                )
-            }
             add(SettingsPage.APPEARANCE, null, "show active tags ui edit tags prompts row") {
                 SwitchPreference(
                     title = "Show Active Tags UI",

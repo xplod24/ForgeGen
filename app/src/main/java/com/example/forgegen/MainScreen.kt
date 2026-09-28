@@ -5,8 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -42,8 +48,8 @@ import kotlinx.coroutines.launch
 
 /* ============================================================================
  * MAIN SCREEN (Orchestrator)
- * UI shell for the main workspace. Core layout sections are imported from MainComponents.kt.
- * Integrates BottomSheetScaffold to overlay parameters and generation controls.
+ * The image preview over the PROMPT, GENERATION and LORAS cards (MainCards.kt, 3.0.0), with the generate bar fixed at
+ * the bottom; it gives way to the keyboard and the tag suggestions while a prompt is typed.
  * ============================================================================ */
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -80,6 +86,8 @@ fun MainScreen(
     val availableLoras by viewModel.availableLoras.collectAsStateWithLifecycle()
     val activeLoras by viewModel.activeLoras.collectAsStateWithLifecycle()
     val upscalers by viewModel.upscalers.collectAsStateWithLifecycle()
+    val serverModules by viewModel.serverModules.collectAsStateWithLifecycle()
+    val moduleSupport by viewModel.moduleSupport.collectAsStateWithLifecycle()
 
     val isRestoringPrompt by viewModel.isRestoringPrompt.collectAsStateWithLifecycle()
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
@@ -150,26 +158,19 @@ fun MainScreen(
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
     val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
-
-    // Calculate device navigation bar height in pixels to correctly align bottom elements
     val density = LocalDensity.current
-    val navBarHeightDp =
-        with(density) {
-            WindowInsets.navigationBars.getBottom(this).toDp()
-        }
-
-    // Elevate the sheet handle (40.dp peek offset) above the system navigation bar to prevent overlaps
-    val peekHeight = 40.dp + navBarHeightDp
-
-    // Initialize bottom sheet state with expand status based on AppConfig preferences
-    val sheetState =
-        rememberStandardBottomSheetState(
-            initialValue = if (config.bottomSheetExpandedByDefault) SheetValue.Expanded else SheetValue.PartiallyExpanded,
-            skipHiddenState = true,
-        )
-    val scaffoldState = rememberBottomSheetScaffoldState(bottomSheetState = sheetState)
 
     var showUnloadDialog by remember { mutableStateOf(false) }
+
+    // The rows of the cards left open (the negative prompt, sampling, size and batch), kept between launches.
+    val openRows = config.mainOpenRows
+    val onToggleRow: (String) -> Unit = { row ->
+        val current = viewModel.config.value
+        val rows = current.mainOpenRows
+        viewModel.saveConfig(current.copy(mainOpenRows = if (row in rows) rows - row else rows + row))
+    }
+    // Reset to Defaults also forgets the tags switched off in the prompts.
+    var promptResets by remember { mutableIntStateOf(0) }
 
     // Estimate image pixel dimensions dynamically and warn the user about potential CUDA VRAM out-of-memory errors.
     // Only crossing the limit warns; otherwise every slider step above it (and every return to this screen) showed a toast.
@@ -200,28 +201,23 @@ fun MainScreen(
     ) {
         // While a prompt is typed with the keyboard up, the screen ends on the keyboard (and the suggestion strip), so
         // the field stays in view above them; with little room the preview, then the top bar give way (TypingLayout).
-        val typingPrompt = promptTyping.value != null && WindowInsets.isImeVisible
+        val keyboardUp = WindowInsets.isImeVisible
+        val typingPrompt = promptTyping.value != null && keyboardUp
         val suggesting = typingPrompt && config.tagSuggestions
         val statusBarDp = with(density) { WindowInsets.statusBarsIgnoringVisibility.getTop(this).toDp() }
         val keyboardDp = with(density) { WindowInsets.imeAnimationTarget.getBottom(this).toDp() }
         val typingLayout =
             if (suggesting) TypingLayout.of((maxHeight - statusBarDp - keyboardDp).value, statusBarDp.value) else TypingLayout()
+        // Any field (the seed too) keeps the content above the keyboard; a prompt with suggestions also above the strip.
         val keyboardNowDp = with(density) { WindowInsets.ime.getBottom(this).toDp() }
-        val typingBottom =
-            when {
-                !typingPrompt -> 0.dp
-                suggesting && !typingLayout.oneBar -> keyboardNowDp + typingLayout.stripDp.dp
-                else -> keyboardNowDp
-            }
+        val keyboardBottom = if (suggesting && !typingLayout.oneBar) keyboardNowDp + typingLayout.stripDp.dp else keyboardNowDp
         val statusBarNowDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
         HideStatusBarWhile(typingLayout.hideStatusBar)
 
         CompositionLocalProvider(LocalPromptTyping provides promptTyping) {
-            BottomSheetScaffold(
+            Scaffold(
                 modifier = blurModifier,
-                scaffoldState = scaffoldState,
-                sheetPeekHeight = peekHeight,
-                sheetContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
                     val isActivelyGenerating = isGenerating || isServerBusy || progress > 0f
                     AnimatedVisibility(visible = !typingLayout.hideTopBar, enter = expandVertically(), exit = shrinkVertically()) {
@@ -238,36 +234,45 @@ fun MainScreen(
                         )
                     }
                 },
-                sheetContent = {
-                    BottomControlsSection(
-                        viewModel = viewModel,
-                        state = state,
-                        generationQueueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
-                        isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
-                        progress = progress,
-                        currentEta = currentEta,
-                        onQueueClick = onQueueClick,
-                        onNavigateToPresets = { navController.navigate("presets") },
-                    )
+                bottomBar = {
+                    // Out of the way while typing and while the settings are open.
+                    AnimatedVisibility(
+                        visible = !keyboardUp && !showSettingsOverlay,
+                        enter = slideInVertically { it } + fadeIn(),
+                        exit = slideOutVertically { it } + fadeOut(),
+                    ) {
+                        GenerateBar(
+                            viewModel = viewModel,
+                            state = state,
+                            queueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
+                            isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
+                            progress = progress,
+                            currentEta = currentEta,
+                            onQueueClick = onQueueClick,
+                            onPresetsClick = { navController.navigate("presets") },
+                            onReset = {
+                                viewModel.resetToDefaults()
+                                promptResets++
+                            },
+                        )
+                    }
                 },
             ) { padding ->
-                // The scaffold places the content under the top bar; without it (typing with little room) the content
-                // starts under the status bar.
+                // Without the top bar (typing with little room) the content starts under the status bar.
                 val topPadding = if (typingLayout.hideTopBar) statusBarNowDp else padding.calculateTopPadding()
-                val bottomPadding = maxOf(padding.calculateBottomPadding(), typingBottom)
+                val bottomPadding = maxOf(padding.calculateBottomPadding(), keyboardBottom)
                 Box(modifier = Modifier.padding(top = topPadding, bottom = bottomPadding).fillMaxSize()) {
                     val scrollState = rememberScrollState()
 
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(8.dp)) {
+                    Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 4.dp)) {
                         OomAlertSection(viewModel)
 
                         // Folded away (not removed, so it keeps its blur) while typing leaves it no room.
-                        val previewHeight by animateDpAsState(if (typingLayout.hidePreview) 0.dp else 240.dp, label = "preview")
+                        val previewHeight by animateDpAsState(if (typingLayout.hidePreview) 0.dp else PREVIEW_HEIGHT, label = "preview")
                         Box(Modifier.fillMaxWidth().height(previewHeight).clipToBounds()) {
                             Box(Modifier.wrapContentHeight(Alignment.Top, unbounded = true)) {
                                 PreviewSection(
                                     isGenerating = isGenerating,
-
                                     livePreview = livePreview,
                                     isShowingGridPreview = isShowingGridPreview,
                                     sessionImages = sessionImages,
@@ -287,44 +292,45 @@ fun MainScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        PromptsSection(
+                        PromptCard(
                             viewModel = viewModel,
                             state = state,
                             config = config,
                             promptHistory = promptHistory,
+                            openRows = openRows,
+                            onToggleRow = onToggleRow,
+                            resetKey = promptResets,
                         )
 
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        GenerationSettingsSection(
+                        GenerationCard(
                             viewModel = viewModel,
                             state = state,
+                            config = config,
                             models = models,
                             selectedModel = selectedModel,
                             samplers = samplers,
                             schedulers = schedulers,
                             upscalers = upscalers,
-                            config = config,
+                            modules = serverModules,
+                            moduleSupport = moduleSupport,
+                            openRows = openRows,
+                            onToggleRow = onToggleRow,
                         )
 
-                        LorasSection(
+                        LorasCard(
                             viewModel = viewModel,
                             availableLoras = availableLoras,
                             activeLoras = activeLoras,
-                            config = config,
                         )
 
-                        // Spacer at the bottom to ensure contents can clear the bottom sheet peek height when scrolled
-                        Spacer(modifier = Modifier.height(24.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
                     }
-                
-                    androidx.compose.animation.AnimatedVisibility(
+
+                    AnimatedVisibility(
                         visible = showSettingsOverlay,
-                        enter = androidx.compose.animation.expandVertically(expandFrom = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.LinearOutSlowInEasing)),
-                        exit = androidx.compose.animation.shrinkVertically(shrinkTowards = androidx.compose.ui.Alignment.Top, animationSpec = tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)),
-                        modifier = Modifier.zIndex(100f)
+                        enter = expandVertically(expandFrom = Alignment.Top, animationSpec = tween(200, easing = LinearOutSlowInEasing)),
+                        exit = shrinkVertically(shrinkTowards = Alignment.Top, animationSpec = tween(200, easing = FastOutLinearInEasing)),
+                        modifier = Modifier.zIndex(100f),
                     ) {
                         Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                             SetupScreen(

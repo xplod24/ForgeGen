@@ -47,7 +47,8 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /* ============================================================================
- * "UPSCALE SELECTED" AND "MORE LIKE THIS" (2.4.0)
+ * JOBS FROM GALLERY IMAGES: "UPSCALE" AND "VARIANCE ON SEED" (tabs for the selected images; the second since 3.0.0),
+ * "MORE LIKE THIS" (the viewer's)
  * The dialogs that turn gallery images into queue jobs (ImageJobs): the options, what the jobs will make, and
  * which images are left out and why. [onQueued] runs once the jobs are in the queue (the gallery then clears its
  * selection).

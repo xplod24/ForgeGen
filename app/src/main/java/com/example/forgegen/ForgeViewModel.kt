@@ -67,11 +67,19 @@ class ForgeViewModel(
     }
 
     // --- WHAT'S NEW ---
-    // The changelog of the versions installed since the app was last opened (shown once, after an update).
+    // The changelog of the versions installed since the app was last opened. After an update a floating bar offers it
+    // once (3.0.0): the version counts as seen when the bar shows, and "Show" opens the notes.
     private val _whatsNew = MutableStateFlow<String?>(null)
     val whatsNew: StateFlow<String?> = _whatsNew.asStateFlow()
+    private val _whatsNewBar = MutableStateFlow(false)
+    val whatsNewBar: StateFlow<Boolean> = _whatsNewBar.asStateFlow()
+    private val _whatsNewOpen = MutableStateFlow(false)
+    val whatsNewOpen: StateFlow<Boolean> = _whatsNewOpen.asStateFlow()
 
     private val installedVersion get() = BuildConfig.VERSION_NAME.removeSuffix("-DEBUG")
+
+    /** The version the bar names ("What's new in 3.0.0"). */
+    val whatsNewVersion: String get() = installedVersion
 
     private suspend fun checkWhatsNew() {
         try {
@@ -84,6 +92,7 @@ class ForgeViewModel(
             val notes = WhatsNew.notesFor(changelog, installedVersion, lastSeen, wasUpdated = info.lastUpdateTime > info.firstInstallTime)
             if (notes != null) {
                 _whatsNew.value = notes
+                _whatsNewBar.value = true
             } else {
                 // A fresh install: nothing to show now, but the next update shows what is new since this version.
                 settings.putSetting(AppSettingEntity(WhatsNew.LAST_SEEN_KEY, installedVersion))
@@ -93,11 +102,32 @@ class ForgeViewModel(
         }
     }
 
-    fun dismissWhatsNew() {
-        _whatsNew.value = null
+    private fun rememberWhatsNewSeen() {
         viewModelScope.launch(Dispatchers.IO) {
             ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(WhatsNew.LAST_SEEN_KEY, installedVersion))
         }
+    }
+
+    /** The bar is on screen: it shows once, so the version is seen now. */
+    fun markWhatsNewSeen() = rememberWhatsNewSeen()
+
+    /** "Show" on the bar: the notes open and the bar leaves. */
+    fun openWhatsNew() {
+        _whatsNewOpen.value = true
+        _whatsNewBar.value = false
+    }
+
+    /** The bar's 30 seconds are up (or it was closed) without the notes being opened. */
+    fun hideWhatsNewBar() {
+        _whatsNewBar.value = false
+        if (!_whatsNewOpen.value) _whatsNew.value = null
+    }
+
+    fun dismissWhatsNew() {
+        _whatsNewOpen.value = false
+        _whatsNewBar.value = false
+        _whatsNew.value = null
+        rememberWhatsNewSeen()
     }
 
     // --- DEBUG MODE (DebugMode) ---
@@ -135,7 +165,7 @@ class ForgeViewModel(
         return null
     }
 
-    /** Shows the "What's New" dialog of the installed version again. */
+    /** Shows the "What's New" bar of the installed version again. */
     fun debugShowWhatsNew() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -143,6 +173,8 @@ class ForgeViewModel(
                 val changelog = assets.open(WhatsNew.CHANGELOG_ASSET).bufferedReader().use { it.readText() }
                 _whatsNew.value = WhatsNew.notesFor(changelog, installedVersion, null, wasUpdated = true)
                     ?: "No notes for $installedVersion in the changelog."
+                _whatsNewOpen.value = false
+                _whatsNewBar.value = true
             } catch (e: Exception) {
                 ForgeSettingsManager.showToast("Cannot read the changelog: ${e.message}")
             }
@@ -741,9 +773,16 @@ class ForgeViewModel(
         saveConfig(current.copy(modelSettings = current.modelSettings + (key to updated)))
     }
 
-    /** The main screen's size, steps, CFG, sampler, schedule and clip skip become [model]'s defaults, switched on. */
-    fun saveModelDefaults(model: String) =
-        updateModelSettings(model) { it.copy(defaults = ModelSettingsRules.defaultsOf(appState.value), useDefaults = true) }
+    /**
+     * The main screen's size, steps, CFG, sampler, schedule and clip skip become [model]'s defaults; they are used only
+     * when the user switches them on ([turnOn]: the switch itself asked for them).
+     */
+    fun saveModelDefaults(
+        model: String,
+        turnOn: Boolean = false,
+    ) = updateModelSettings(model) {
+        it.copy(defaults = ModelSettingsRules.defaultsOf(appState.value), useDefaults = it.useDefaults || turnOn)
+    }
 
 
     fun appendLora(loraName: String) = ForgeRepository.appendLora(loraName)

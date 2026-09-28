@@ -13,9 +13,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -56,6 +58,8 @@ fun ResourcePickerSheet(
     previewUrl: (ApiResource) -> String,
     onPick: (ApiResource) -> Unit,
     onDismiss: () -> Unit,
+    // Asks the server for its list again (the old "Check Checkpoints" / "Check Loras" buttons, 3.0.0).
+    onRefresh: (() -> Unit)? = null,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val shown =
@@ -67,7 +71,14 @@ fun ResourcePickerSheet(
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                if (onRefresh != null) {
+                    IconButton(onClick = onRefresh) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh $title List")
+                    }
+                }
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },

@@ -25,6 +25,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -46,6 +47,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -87,17 +89,22 @@ import kotlin.math.roundToInt
 private const val UNDO_STEPS = 100
 private const val UNDO_GROUP_MS = 800L
 
+/**
+ * A prompt field without a frame, for the cards of the main screen (3.0.0): the text, and under it a footer with [info]
+ * on the left (the token count), then Undo, Redo and [actions] (Copy, Clear).
+ */
 @Composable
 fun UndoRedoTextField(
     value: String,
     onValueChange: (String) -> Unit,
-    label: @Composable () -> Unit,
+    placeholder: String,
     modifier: Modifier = Modifier,
     minLines: Int = 1,
     maxLines: Int = Int.MAX_VALUE,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     // A prompt field: no autocorrect (Gboard split "1girl"), and it tells the tag suggestions what is typed (2.4.2).
     typing: PromptTyping? = null,
+    info: @Composable RowScope.() -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     var history by remember { mutableStateOf(listOf(value)) }
@@ -146,34 +153,9 @@ fun UndoRedoTextField(
         DisposableEffect(typing) { onDispose { typing.left(typingKey) } }
     }
 
+    val textStyle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, color = MaterialTheme.colorScheme.onSurface)
     Column(modifier = modifier) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            IconButton(
-                onClick = {
-                    if (historyIndex > 0) {
-                        historyIndex--
-                        lastTypedAt = 0L
-                        onValueChange(history[historyIndex])
-                    }
-                },
-                enabled = historyIndex > 0,
-                modifier = Modifier.size(32.dp),
-            ) { Icon(Icons.AutoMirrored.Filled.Undo, null, Modifier.size(18.dp)) }
-
-            IconButton(
-                onClick = {
-                    if (historyIndex < history.size - 1) {
-                        historyIndex++
-                        lastTypedAt = 0L
-                        onValueChange(history[historyIndex])
-                    }
-                },
-                enabled = historyIndex < history.size - 1,
-                modifier = Modifier.size(32.dp),
-            ) { Icon(Icons.AutoMirrored.Filled.Redo, null, Modifier.size(18.dp)) }
-        }
-
-        OutlinedTextField(
+        BasicTextField(
             value = fieldValue,
             onValueChange = {
                 fieldState = it
@@ -182,7 +164,8 @@ fun UndoRedoTextField(
                     onValueChange(it.text)
                 }
             },
-            label = label,
+            textStyle = textStyle,
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             minLines = minLines,
             maxLines = maxLines,
             visualTransformation = visualTransformation,
@@ -193,24 +176,38 @@ fun UndoRedoTextField(
                     KeyboardOptions.Default
                 },
             modifier =
-                Modifier.fillMaxWidth().onFocusChanged { focus ->
+                Modifier.fillMaxWidth().padding(end = 8.dp).onFocusChanged { focus ->
                     isFocused = focus.isFocused
                     if (typing != null) {
                         if (focus.isFocused) typing.focused(typingKey, fieldValue, applyEdit) else typing.left(typingKey)
                     }
                 },
-            trailingIcon = {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 4.dp)) {
-                    if (value.isNotEmpty()) {
-                        VerticalDivider(
-                            modifier = Modifier.height(24.dp).padding(horizontal = 4.dp),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                        )
-                    }
-                    actions()
+            decorationBox = { field ->
+                Box {
+                    if (value.isEmpty()) Text(placeholder, style = textStyle.copy(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)))
+                    field()
                 }
             },
         )
+
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, content = info)
+            FieldIconButton(Icons.AutoMirrored.Filled.Undo, "Undo", enabled = historyIndex > 0) {
+                if (historyIndex > 0) {
+                    historyIndex--
+                    lastTypedAt = 0L
+                    onValueChange(history[historyIndex])
+                }
+            }
+            FieldIconButton(Icons.AutoMirrored.Filled.Redo, "Redo", enabled = historyIndex < history.size - 1) {
+                if (historyIndex < history.size - 1) {
+                    historyIndex++
+                    lastTypedAt = 0L
+                    onValueChange(history[historyIndex])
+                }
+            }
+            actions()
+        }
     }
 }
 
@@ -225,19 +222,24 @@ fun HybridPromptEditor(
     onPromptChange: (String) -> Unit,
     disabledTags: Set<String>,
     onDisabledTagsChange: (Set<String>) -> Unit,
-    label: String,
+    placeholder: String,
     showTagEditor: Boolean = true,
+    modifier: Modifier = Modifier,
+    // The footer's buttons after Undo and Redo (Copy, Clear).
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = modifier.fillMaxWidth()) {
         UndoRedoTextField(
             value = prompt,
             onValueChange = onPromptChange,
-            label = { Text(label, fontSize = 12.sp) },
+            placeholder = placeholder,
             minLines = 3,
             maxLines = 8,
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PromptHighlighting,
             typing = LocalPromptTyping.current,
+            info = { TokenCount(prompt) },
+            actions = actions,
         )
 
         // Split tags respecting nesting using a custom Tokenizer
@@ -328,7 +330,7 @@ fun HybridPromptEditor(
                                 // CHIP - Normal or "flying" chip
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
                                     modifier =
                                         flyingModifier.pointerInput(tag) {
                                             detectDragGesturesAfterLongPress(
@@ -407,13 +409,13 @@ fun HybridPromptEditor(
                                                     onPromptChange(newTags.joinToString(", "))
                                                     onDisabledTagsChange(disabledTags + tag)
                                                 },
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                         )
                                         Spacer(Modifier.width(6.dp))
                                         Text(
                                             baseName,
                                             fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
                                             fontWeight = FontWeight.Medium,
                                         )
                                         Spacer(Modifier.width(8.dp))
@@ -537,47 +539,6 @@ fun HybridPromptEditor(
                 } // Ends Column
             } // Ends AnimatedVisibility
         } // Ends if (activeTags.isNotEmpty() || disabledTags.isNotEmpty())
-    }
-}
-
-@Composable
-fun PromptHistoryCarousel(
-    history: List<PromptHistoryItem>,
-    onSelect: (PromptHistoryItem) -> Unit,
-) {
-    if (history.isEmpty()) return
-
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
-            Icon(Icons.Default.History, null, modifier = Modifier.size(14.dp), tint = Color.Gray)
-            Spacer(Modifier.width(4.dp))
-            Text("Recent Prompts", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
-        }
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(history) { item: PromptHistoryItem ->
-                Card(
-                    modifier = Modifier.width(220.dp).clickable { onSelect(item) },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        val timeFormat =
-                            SimpleDateFormat(
-                                "MMM dd, HH:mm",
-                                androidx.compose.ui.platform.LocalConfiguration.current.locales[0],
-                            ).format(item.timestamp)
-                        Text(timeFormat, fontSize = 9.sp, color = Color.Gray, modifier = Modifier.align(Alignment.End))
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            item.positivePrompt,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -737,6 +698,10 @@ fun OomAlertSection(viewModel: ForgeViewModel) {
     }
 }
 
+
+// The image preview's height on the main screen (folded away while typing leaves no room, TypingLayout).
+val PREVIEW_HEIGHT = 220.dp
+
 @Composable
 fun PreviewSection(
     isGenerating: Boolean,
@@ -755,14 +720,15 @@ fun PreviewSection(
 ) {
     var isBlurred by remember { mutableStateOf(true) }
     var showRecoverMenu by remember { mutableStateOf(false) }
+    val quiet = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
 
     Box(
         modifier =
             Modifier
                 .fillMaxWidth()
-                .height(240.dp)
+                .height(PREVIEW_HEIGHT)
                 .clip(MaterialTheme.shapes.medium)
-                .background(Color.DarkGray),
+                .background(MaterialTheme.colorScheme.surface),
     ) {
         val blurModifier = if (isBlurred) Modifier.blur(25.dp) else Modifier
 
@@ -771,12 +737,12 @@ fun PreviewSection(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Generating...", color = Color.LightGray, fontSize = 12.sp)
+                    Text("Generating...", color = quiet, fontSize = 12.sp)
                 }
             } else if (isGenerating && livePreview != null) {
                 // Decoded no bigger than this box (the server may send the preview in full size); the previous
                 // image stays until the next one is ready, so the preview does not flicker.
-                val boxPx = with(LocalDensity.current) { 240.dp.roundToPx() }
+                val boxPx = with(LocalDensity.current) { PREVIEW_HEIGHT.roundToPx() }
                 var previewBitmap by remember { mutableStateOf<Bitmap?>(null) }
                 LaunchedEffect(livePreview) {
                     val preview = livePreview
@@ -806,7 +772,7 @@ fun PreviewSection(
                 val batchImages = sessionImages.subList(batchStart, batchEnd + 1)
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 80.dp),
-                    modifier = Modifier.fillMaxSize().padding(bottom = 36.dp),
+                    modifier = Modifier.fillMaxSize().padding(bottom = 44.dp),
                     contentPadding = PaddingValues(4.dp),
                 ) {
                     items(batchImages.size) { index: Int ->
@@ -836,30 +802,18 @@ fun PreviewSection(
                 )
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.align(Alignment.Center)) {
-                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(48.dp), tint = Color.Gray)
-                    Text("No Preview", color = Color.Gray)
+                    Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(44.dp), tint = quiet)
+                    Spacer(Modifier.height(6.dp))
+                    Text("No Preview", color = quiet, fontSize = 13.sp)
                 }
             }
         }
 
-        Box(modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
-            IconButton(
-                onClick = { showRecoverMenu = true },
-                modifier =
-                    Modifier
-                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                        .size(32.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AutoFixHigh,
-                    contentDescription = "Recover",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
-            }
+        Box(modifier = Modifier.align(Alignment.TopStart).padding(10.dp)) {
+            PreviewButton(Icons.Default.AutoFixHigh, "Recover") { showRecoverMenu = true }
             DropdownMenu(expanded = showRecoverMenu, onDismissRequest = { showRecoverMenu = false }) {
                 DropdownMenuItem(
-                    text = { Text("Last Generated Image", fontSize = 14.sp) },
+                    text = { Text("Last Generated Image") },
                     leadingIcon = { Icon(Icons.Default.Image, null, modifier = Modifier.size(20.dp)) },
                     onClick = {
                         showRecoverMenu = false
@@ -867,7 +821,7 @@ fun PreviewSection(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("From Gallery Image", fontSize = 14.sp) },
+                    text = { Text("From Gallery Image") },
                     leadingIcon = { Icon(Icons.Default.PhotoLibrary, null, modifier = Modifier.size(20.dp)) },
                     onClick = {
                         showRecoverMenu = false
@@ -877,895 +831,50 @@ fun PreviewSection(
             }
         }
 
-        IconButton(
-            onClick = { isBlurred = !isBlurred },
-            modifier =
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                    .size(32.dp),
-        ) {
-            Icon(
-                imageVector = if (isBlurred) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                contentDescription = "Toggle Blur",
-                tint = Color.White,
-                modifier = Modifier.size(18.dp),
-            )
+        Box(modifier = Modifier.align(Alignment.TopEnd).padding(10.dp)) {
+            PreviewButton(if (isBlurred) Icons.Default.VisibilityOff else Icons.Default.Visibility, "Toggle Blur") { isBlurred = !isBlurred }
         }
 
-        Row(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            FilledTonalButton(
-                onClick = onPrev,
-                enabled = currentSessionIndex > batchStart,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.height(32.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null)
-            }
-            FilledTonalButton(
-                onClick = onNext,
-                enabled = currentSessionIndex < batchEnd,
-                contentPadding = PaddingValues(0.dp),
-                modifier = Modifier.height(32.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null)
-            }
-        }
-    }
-}
-
-@Composable
-fun PromptsSection(
-    viewModel: ForgeViewModel,
-    state: AppState,
-    config: AppConfig,
-    promptHistory: List<PromptHistoryItem>,
-) {
-    var disabledPosTags by remember { mutableStateOf(emptySet<String>()) }
-    var disabledNegTags by remember { mutableStateOf(emptySet<String>()) }
-
-    val context = LocalContext.current
-
-    val expanded = config.mainPromptsExpanded
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clickable {
-            viewModel.saveConfig(config.copy(mainPromptsExpanded = !expanded))
-        }.padding(vertical = 12.dp)
-    ) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            "Prompts",
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        Icon(
-            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp)
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-
-    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
-        Column {
-            PromptHistoryCarousel(
-                history = promptHistory,
-                onSelect = { item ->
-                    viewModel.updateState { it.copy(positivePrompt = item.positivePrompt, negativePrompt = item.negativePrompt) }
-                    disabledPosTags = emptySet()
-                    disabledNegTags = emptySet()
-                },
-            )
-
-            HybridPromptEditor(
-                prompt = state.positivePrompt,
-                onPromptChange = {
-                    viewModel.updateState { s -> s.copy(positivePrompt = it) }
-                },
-                disabledTags = disabledPosTags,
-                onDisabledTagsChange = { disabledPosTags = it },
-                label = "Positive Prompt",
-                showTagEditor = config.showActiveTagsUI,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("${countTokens(state.positivePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                Row {
-                    TextButton(onClick = {
-                        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboardManager.setPrimaryClip(ClipData.newPlainText("Prompt", state.positivePrompt))
-                        viewModel.showToast("Prompt Copied")
-                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-                        Text("Copy Prompt", fontSize = 10.sp)
-                    }
-                    TextButton(onClick = {
-                        viewModel.updateState { s -> s.copy(positivePrompt = "") }
-                        disabledPosTags = emptySet()
-                    }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-                        Text("Clear", fontSize = 10.sp)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            HybridPromptEditor(
-                prompt = state.negativePrompt,
-                onPromptChange = { viewModel.updateState { s -> s.copy(negativePrompt = it) } },
-                disabledTags = disabledNegTags,
-                onDisabledTagsChange = { disabledNegTags = it },
-                label = "Negative Prompt",
-                showTagEditor = config.showActiveTagsUI,
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("${countTokens(state.negativePrompt)} / 75", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
-                TextButton(onClick = {
-                    viewModel.resetToDefaults()
-                    disabledPosTags = emptySet()
-                    disabledNegTags = emptySet()
-                }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp), modifier = Modifier.height(24.dp)) {
-                    Text("Reset to Defaults", fontSize = 10.sp, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AppForgeSlider(
-    title: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    decimals: Int,
-    onValueChange: (Float) -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(title, modifier = Modifier.weight(1f), fontSize = 12.sp)
-        Text(String.format(java.util.Locale.US, "%.${decimals}f", value), fontSize = 12.sp, modifier = Modifier.padding(end = 8.dp))
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            modifier = Modifier.weight(2f),
-        )
-    }
-}
-
-@Composable
-fun GenerationSettingsSection(
-    viewModel: ForgeViewModel,
-    state: AppState,
-    models: List<ApiResource>,
-    selectedModel: String,
-    samplers: List<String>,
-    schedulers: List<String>,
-    upscalers: List<String>,
-    config: AppConfig,
-) {
-    val expanded = config.mainSettingsExpanded
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clickable {
-            viewModel.saveConfig(config.copy(mainSettingsExpanded = !expanded))
-        }.padding(vertical = 12.dp)
-    ) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            "Settings",
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        Icon(
-            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp)
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-
-    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-        var modelExpanded by remember { mutableStateOf(false) }
-        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-            OutlinedButton(
-                onClick = { modelExpanded = true },
-                modifier = Modifier.fillMaxWidth().height(54.dp),
-                contentPadding = PaddingValues(8.dp),
-            ) {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    val currentModelResource = models.find { it.name == selectedModel || it.title == selectedModel }
-                    if (currentModelResource != null) {
-                        AsyncImage(
-                            model =
-                                ImageRequest
-                                    .Builder(LocalContext.current)
-                                    .data(viewModel.getPreviewUrl(currentModelResource.path, isLora = false))
-                                    .crossfade(true)
-                                    .build(),
-                            contentDescription = null,
-                            modifier =
-                                Modifier
-                                    .size(32.dp)
-                                    .padding(end = 8.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.DarkGray),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    Text(
-                        "Model: ${currentModelResource?.title ?: selectedModel.ifEmpty { "Loading..." }}",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 12.sp,
-                    )
-                }
-            }
-            if (modelExpanded) {
-                ResourcePickerSheet(
-                    title = "Model",
-                    items = models,
-                    isSelected = { it.name == selectedModel || it.title == selectedModel },
-                    previewUrl = { viewModel.getPreviewUrl(it.path, isLora = false) },
-                    onPick = {
-                        viewModel.changeCheckpoint(it.name)
-                        modelExpanded = false
-                    },
-                    onDismiss = { modelExpanded = false },
-                )
-            }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            // The field keeps its own text: deriving it from state.seed turned an emptied field (or a lone "-")
-            // straight back into "-1", so a new seed could not be typed from scratch.
-            var seedText by remember { mutableStateOf(state.seed.toString()) }
-            LaunchedEffect(state.seed) {
-                // Follow outside changes (dice, recovered seed, preset) without fighting the user's typing.
-                if ((seedText.toLongOrNull() ?: -1L) != state.seed) seedText = state.seed.toString()
-            }
-            OutlinedTextField(
-                value = seedText,
-                onValueChange = {
-                    if (it.isEmpty() || it == "-" || it.toLongOrNull() != null) {
-                        seedText = it
-                        viewModel.updateState { s -> s.copy(seed = it.toLongOrNull() ?: -1L) }
-                    }
-                },
-                label = { Text("Seed", fontSize = 12.sp) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-            )
-
-            var seedExpanded by remember { mutableStateOf(false) }
-            Box {
-                IconButton(onClick = { seedExpanded = true }, modifier = Modifier.padding(start = 8.dp)) {
-                    Icon(Icons.Default.Casino, contentDescription = "Seed Options")
-                }
-                DropdownMenu(expanded = seedExpanded, onDismissRequest = { seedExpanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text("Randomize (-1)", fontSize = 14.sp) },
-                        onClick = {
-                            viewModel.updateState { s -> s.copy(seed = -1L) }
-                            seedExpanded = false
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Recover Last Seed", fontSize = 14.sp) },
-                        onClick = {
-                            viewModel.recoverLastSeed()
-                            seedExpanded = false
-                        },
-                    )
-                }
-            }
-        }
-
-        AppForgeSlider(
-            "Batch Count",
-            state.batchCount.toFloat(),
-            1f..100f,
-            0,
-        ) { value: Float -> viewModel.updateState { s -> s.copy(batchCount = value.toInt()) } }
-        AppForgeSlider("Batch Size", state.batchSize.toFloat(), 1f..16f, 0) { value: Float ->
-            viewModel.updateState { s ->
-                s.copy(batchSize = value.toInt())
-            }
-        }
-        AppForgeSlider("Steps", state.steps.toFloat(), 1f..100f, 0) { value: Float ->
-            viewModel.updateState { s ->
-                s.copy(steps = value.toInt())
-            }
-        }
-        AppForgeSlider("CFG Scale", state.cfgScale, 1f..20f, 1) { value: Float -> viewModel.updateState { s -> s.copy(cfgScale = value) } }
-        AppForgeSlider("Clip Skip", state.clipSkip.toFloat(), 1f..3f, 0) { value: Float ->
-            viewModel.updateState { s ->
-                s.copy(clipSkip = value.toInt())
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-            Text("Aspect Ratio", fontSize = 12.sp, modifier = Modifier.weight(1f))
-            // Portrait and landscape in one tap.
-            TextButton(onClick = { viewModel.updateState { it.withSwappedSize() } }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Swap ${state.width}×${state.height}", fontSize = 12.sp)
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val aspectRatios = listOf("Custom", "1:1", "4:3", "3:4", "16:9", "9:16")
-            aspectRatios.forEach { ratio ->
-                val isSelected = state.aspectRatio == ratio
-                Surface(
-                    modifier =
-                        Modifier.clickable {
-                            viewModel.updateState { s ->
-                                val (w, h) =
-                                    when (ratio) {
-                                        "1:1" -> 512 to 512
-                                        "4:3" -> 768 to 512
-                                        "3:4" -> 512 to 768
-                                        "16:9" -> 912 to 512
-                                        "9:16" -> 512 to 912
-                                        else -> s.width to s.height
-                                    }
-                                s.copy(aspectRatio = ratio, width = w, height = h)
-                            }
-                        },
-                    shape = MaterialTheme.shapes.small,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-                ) {
-                    Text(
-                        text = ratio,
-                        fontSize = 12.sp,
-                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    )
-                }
-            }
-        }
-
-        AppForgeSlider("Width", state.width.toFloat(), 256f..2048f, 0) { value: Float ->
-            viewModel.updateState { s ->
-                s.copy(
-                    width =
-                        (value.toInt() / 64) * 64,
-                    aspectRatio = "Custom",
-                )
-            }
-        }
-        AppForgeSlider("Height", state.height.toFloat(), 256f..2048f, 0) { value: Float ->
-            viewModel.updateState { s ->
-                s.copy(
-                    height =
-                        (value.toInt() / 64) * 64,
-                    aspectRatio = "Custom",
-                )
-            }
-        }
-
-        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            var samplerExpanded by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.weight(1f)) {
-                OutlinedButton(onClick = {
-                    samplerExpanded = true
-                }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                    Text(state.sampler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                }
-                DropdownMenu(
-                    expanded = samplerExpanded,
-                    onDismissRequest = { samplerExpanded = false },
-                    modifier = Modifier.heightIn(max = 350.dp),
-                ) {
-                    samplers.forEach { samp ->
-                        val isSelected = samp == state.sampler
-                        DropdownMenuItem(
-                            modifier =
-                                if (isSelected) {
-                                    Modifier.background(
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                                    )
-                                } else {
-                                    Modifier
-                                },
-                            text = {
-                                Text(
-                                    samp,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                )
-                            },
-                            onClick = {
-                                viewModel.updateState { s -> s.copy(sampler = samp) }
-                                samplerExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-
-            var schedulerExpanded by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.weight(1f)) {
-                OutlinedButton(onClick = {
-                    schedulerExpanded = true
-                }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                    Text(state.scheduler, maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                }
-                DropdownMenu(
-                    expanded = schedulerExpanded,
-                    onDismissRequest = { schedulerExpanded = false },
-                    modifier = Modifier.heightIn(max = 350.dp),
-                ) {
-                    schedulers.forEach { sched ->
-                        val isSelected = sched == state.scheduler
-                        DropdownMenuItem(
-                            modifier =
-                                if (isSelected) {
-                                    Modifier.background(
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                                    )
-                                } else {
-                                    Modifier
-                                },
-                            text = {
-                                Text(
-                                    sched,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                )
-                            },
-                            onClick = {
-                                viewModel.updateState { s -> s.copy(scheduler = sched) }
-                                schedulerExpanded = false
-                            },
-                        )
-                    }
-                }
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-            HorizontalDivider(modifier = Modifier.weight(1f))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 8.dp).clickable { viewModel.updateState { it.copy(hiresFix = !it.hiresFix) } },
-            ) {
-                Checkbox(checked = state.hiresFix, onCheckedChange = { v -> viewModel.updateState { it.copy(hiresFix = v) } })
-                Text("Hires.fix", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-            }
-            HorizontalDivider(modifier = Modifier.weight(1f))
-        }
-
-        AnimatedVisibility(visible = state.hiresFix) {
-            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-                var upscalerExpanded by remember { mutableStateOf(false) }
-                Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                    OutlinedButton(onClick = {
-                        upscalerExpanded = true
-                    }, modifier = Modifier.fillMaxWidth().height(36.dp), contentPadding = PaddingValues(4.dp)) {
-                        Text("Upscaler: ${state.upscaler}", maxLines = 1, fontSize = 11.sp, overflow = TextOverflow.Ellipsis)
-                    }
-                    DropdownMenu(
-                        expanded = upscalerExpanded,
-                        onDismissRequest = { upscalerExpanded = false },
-                        modifier = Modifier.heightIn(max = 350.dp),
-                    ) {
-                        upscalers.forEach { upsc ->
-                            val isSelected = upsc == state.upscaler
-                            DropdownMenuItem(
-                                modifier =
-                                    if (isSelected) {
-                                        Modifier.background(
-                                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-                                        )
-                                    } else {
-                                        Modifier
-                                    },
-                                text = {
-                                    Text(
-                                        upsc,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.updateState { s -> s.copy(upscaler = upsc) }
-                                    upscalerExpanded = false
-                                },
-                            )
-                        }
-                    }
-                }
-                AppForgeSlider("Hires Scale", state.hiresScale, 1f..4f, 2) { value: Float ->
-                    viewModel.updateState { s ->
-                        s.copy(hiresScale = value)
-                    }
-                }
-                AppForgeSlider("Denoising", state.denoising, 0f..1f, 2) { value: Float ->
-                    viewModel.updateState { s ->
-                        s.copy(denoising = value)
-                    }
-                }
-            }
-        }
-    }
-    }
-}
-
-@Composable
-fun LorasSection(
-    viewModel: ForgeViewModel,
-    availableLoras: List<ApiResource>,
-    activeLoras: List<ActiveLora>,
-    config: AppConfig,
-) {
-    val expanded = config.mainLorasExpanded
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clickable {
-            viewModel.saveConfig(config.copy(mainLorasExpanded = !expanded))
-        }.padding(vertical = 12.dp)
-    ) {
-        HorizontalDivider(modifier = Modifier.weight(1f))
-        Text(
-            "LoRAs",
-            fontWeight = FontWeight.Bold,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        Icon(
-            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp)
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f))
-    }
-
-    androidx.compose.animation.AnimatedVisibility(visible = expanded) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp)) {
-        var loraExpanded by remember { mutableStateOf(false) }
-        Box(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-            OutlinedButton(
-                onClick = { loraExpanded = true },
-                modifier = Modifier.fillMaxWidth().height(36.dp),
-                contentPadding = PaddingValues(4.dp),
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Add LoRA...", fontSize = 12.sp)
-            }
-            if (loraExpanded) {
-                ResourcePickerSheet(
-                    title = "LoRA",
-                    items = availableLoras,
-                    isSelected = { lora -> activeLoras.any { it.name == lora.name } },
-                    previewUrl = { viewModel.getPreviewUrl(it.path, isLora = true) },
-                    onPick = {
-                        viewModel.addLora(it.name)
-                        loraExpanded = false
-                    },
-                    onDismiss = { loraExpanded = false },
-                )
-            }
-        }
-
-        activeLoras.forEach { lora ->
-            val loraResource = availableLoras.find { it.name == lora.name }
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                shape = MaterialTheme.shapes.medium,
-            ) {
-                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (loraResource != null) {
-                        AsyncImage(
-                            model =
-                                ImageRequest
-                                    .Builder(LocalContext.current)
-                                    .data(viewModel.getPreviewUrl(loraResource.path, isLora = true))
-                                    .crossfade(true)
-                                    .build(),
-                            contentDescription = null,
-                            modifier =
-                                Modifier
-                                    .size(50.dp)
-                                    .padding(end = 8.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.DarkGray),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = loraResource?.title ?: lora.name,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                            )
-
-                            IconButton(onClick = { viewModel.removeLora(lora.name) }, modifier = Modifier.size(24.dp)) {
-                                Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Strength", fontSize = 10.sp)
-                            Text(String.format(Locale.US, "%.2f", lora.strength), fontSize = 10.sp)
-                        }
-                        Slider(
-                            value = lora.strength,
-                            onValueChange = { viewModel.updateLoraStrength(lora.name, it) },
-                            valueRange = 0.1f..2.0f,
-                            modifier = Modifier.height(24.dp),
-                        )
-                    }
-                }
-            }
-        }
-    }
-    }
-}
-
-// Compact panel dedicated for Bottom Sheet
-@Composable
-fun BottomControlsSection(
-    viewModel: ForgeViewModel,
-    state: AppState,
-    generationQueueSize: Int,
-    isActivelyGenerating: Boolean,
-    progress: Float,
-    currentEta: Double,
-    onQueueClick: () -> Unit,
-    onNavigateToPresets: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .navigationBarsPadding() // Protection against overlapping system buttons (e.g. back, home)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-    ) {
-        // Top row: Checkboxes for managing save location
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        // The images of the last batch: back, where we are, forward.
+        if (batchEnd > batchStart && currentSessionIndex >= batchStart) {
             Row(
                 modifier =
                     Modifier
-                        .weight(1f)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable { viewModel.updateState { it.copy(saveImages = !state.saveImages) } }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 10.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.Black.copy(alpha = 0.55f))
+                        .padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (state.saveImages) Icons.Default.CloudDone else Icons.Default.CloudOff,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint =
-                            if (state.saveImages) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface.copy(
-                                    alpha = 0.6f,
-                                )
-                            },
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Save Server", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                IconButton(onClick = onPrev, enabled = currentSessionIndex > batchStart, modifier = Modifier.size(width = 36.dp, height = 28.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous", tint = Color.White)
                 }
-                Checkbox(
-                    checked = state.saveImages,
-                    onCheckedChange = { isChecked -> viewModel.updateState { it.copy(saveImages = isChecked) } },
-                    modifier = Modifier.size(20.dp),
+                Text(
+                    "${(currentSessionIndex - batchStart + 1).coerceAtMost(batchEnd - batchStart + 1)} / ${batchEnd - batchStart + 1}",
+                    fontSize = 12.sp,
+                    color = Color(0xFFD0D0D0),
                 )
-            }
-
-            Row(
-                modifier =
-                    Modifier
-                        .weight(1f)
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), MaterialTheme.shapes.small)
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable { viewModel.updateState { it.copy(saveToDevice = !state.saveToDevice) } }
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Save,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint =
-                            if (state.saveToDevice) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface.copy(
-                                    alpha = 0.6f,
-                                )
-                            },
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Save Device", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
-                Checkbox(
-                    checked = state.saveToDevice,
-                    onCheckedChange = { isChecked -> viewModel.updateState { it.copy(saveToDevice = isChecked) } },
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-        }
-
-        // Bottom row: Main actions (Queue, Interrupt, Add)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = onQueueClick,
-                modifier = Modifier.height(54.dp).weight(0.35f),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Icon(Icons.AutoMirrored.Filled.List, null)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("$generationQueueSize", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
-
-            if (isActivelyGenerating) {
-                Button(
-                    onClick = { viewModel.interruptGeneration() },
-                    modifier = Modifier.height(54.dp).weight(0.25f),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(0.dp),
-                ) {
-                    Icon(Icons.Default.Stop, contentDescription = "Interrupt", tint = MaterialTheme.colorScheme.onError)
-                }
-            }
-
-            Box(
-                modifier =
-                    Modifier
-                        .weight(if (isActivelyGenerating) 0.75f else 1.2f)
-                        .height(54.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isActivelyGenerating) Color.DarkGray else MaterialTheme.colorScheme.primary)
-                        .clickable(onClick = { viewModel.queueGeneration() }),
-            ) {
-                if (isActivelyGenerating) {
-                    Box(
-                        modifier =
-                            Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(progress.coerceIn(0f, 1f))
-                                .background(MaterialTheme.colorScheme.primary),
-                    )
-                }
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    if (isActivelyGenerating) {
-                        Text(
-                            text = "ADD TO QUEUE • ${(progress * 100).toInt()}%",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f)),
-                        )
-                        Text(
-                            text = "ETA: ${String.format(Locale.US, "%.1f", currentEta)}s",
-                            fontSize = 9.sp,
-                            color = Color.LightGray,
-                            style = TextStyle(shadow = Shadow(color = Color.Black.copy(alpha = 0.8f), blurRadius = 4f)),
-                        )
-                    } else {
-                        Text("ADD TO QUEUE", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                    }
+                IconButton(onClick = onNext, enabled = currentSessionIndex < batchEnd, modifier = Modifier.size(width = 36.dp, height = 28.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next", tint = Color.White)
                 }
             }
         }
+    }
+}
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Bottom row of additional actions
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = { onNavigateToPresets() },
-                modifier = Modifier.height(40.dp).weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Text("Presets", fontSize = 12.sp)
-            }
-            Button(
-                onClick = { viewModel.recoverLastPrompt() },
-                modifier = Modifier.height(40.dp).weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(0.dp),
-            ) {
-                Text("Restore Last", fontSize = 12.sp)
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Button(
-                onClick = { viewModel.refreshCheckpoints() },
-                modifier = Modifier.height(40.dp).weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-            ) {
-                Text("Check Checkpoints", fontSize = 12.sp)
-            }
-            Button(
-                onClick = { viewModel.refreshLoras() },
-                modifier = Modifier.height(40.dp).weight(1f),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = PaddingValues(0.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-            ) {
-                Text("Check Loras", fontSize = 12.sp)
-            }
-        }
+/** A round button over the preview (it stays readable on any image). */
+@Composable
+private fun PreviewButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier.size(36.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape),
+    ) {
+        Icon(icon, contentDescription = description, tint = Color.White, modifier = Modifier.size(18.dp))
     }
 }
 

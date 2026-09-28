@@ -288,9 +288,10 @@ fun GalleryScreen(
                             viewModel.shareImages(selectedItems()) { intent -> context.startActivity(intent) }
                             selected = emptySet()
                         }) { Icon(Icons.Default.Share, "Share") }
-                        // Each image made again with hires fix, one queue job each (2.4.0).
+                        // Each image made again with hires fix, one queue job each (2.4.0); the dialog's second tab
+                        // makes them again with their seeds, varied ("Variance on Seed", 3.0.0).
                         IconButton(onClick = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) }) {
-                            Icon(Icons.Default.OpenInFull, "Upscale Selected")
+                            Icon(Icons.Default.OpenInFull, "Upscale or Vary Selected")
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
