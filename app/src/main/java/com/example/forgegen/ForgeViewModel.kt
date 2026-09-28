@@ -468,6 +468,7 @@ class ForgeViewModel(
     val scheduledStart: StateFlow<Long?> = ForgeQueueManager.scheduledStart
     val isWaitingForSchedule: StateFlow<Boolean> = ForgeQueueManager.isWaitingForSchedule
     val queueSecondsLeft: StateFlow<Long?> = ForgeQueueManager.queueSecondsLeft
+    val queueJobEnds: StateFlow<List<Double?>> = ForgeQueueManager.queueJobEnds
 
     /** "Start at" [hour]:[minute]: today, or tomorrow when that time has passed. */
     fun scheduleQueueStart(

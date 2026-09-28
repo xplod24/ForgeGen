@@ -76,6 +76,37 @@ object QueueEstimate {
         return total
     }
 
+    /**
+     * For each job of [queue], in order, the seconds from now until it should be done: the queue's timeline
+     * (3.0.0-1). Failed jobs are skipped (null); from the first job that cannot be estimated on, every end is null.
+     */
+    fun ends(
+        queue: List<QueuedGeneration>,
+        rates: Map<String, Double>,
+        runningEta: Double,
+    ): List<Double?> {
+        var total = 0.0
+        var known = true
+        return queue.map { job ->
+            if (job.status == GenerationStatus.FAILED) return@map null
+            val seconds =
+                if (!known) {
+                    null
+                } else if (job.status == GenerationStatus.GENERATING) {
+                    runningEta.takeIf { it > 0 } ?: seconds(rates, job.payload)
+                } else {
+                    seconds(rates, job.payload)
+                }
+            if (seconds == null) {
+                known = false
+                null
+            } else {
+                total += seconds
+                total
+            }
+        }
+    }
+
     /** "2 h 15 min", "12 min", "under a minute". */
     fun formatDuration(seconds: Long): String {
         val minutes = (seconds + 30) / 60

@@ -9,6 +9,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -52,14 +53,18 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -104,10 +109,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.forgegen.ui.components.ResourcePickerSheet
 import com.example.forgegen.ui.components.countTokens
+import com.example.forgegen.ui.components.rememberLastActive
 import java.text.SimpleDateFormat
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -189,7 +196,7 @@ fun CardDivider(indent: Dp = 16.dp) {
 
 /** A row's coloured icon on a tile of its colour (the settings' category icons). */
 @Composable
-private fun RowIcon(
+fun RowIcon(
     icon: ImageVector,
     tint: Color,
 ) {
@@ -1197,6 +1204,8 @@ fun GenerateBar(
     onPresetsClick: () -> Unit,
     onReset: () -> Unit,
     modifier: Modifier = Modifier,
+    // The queue stopped (paused, or the server ran out of memory): the queue button turns red (3.0.0-1).
+    queueStopped: Boolean = false,
 ) {
     var menu by remember { mutableStateOf(false) }
     val barShape = RoundedCornerShape(16.dp)
@@ -1210,8 +1219,18 @@ fun GenerateBar(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            BarButton(onClick = onQueueClick, modifier = Modifier.widthIn(min = 76.dp), description = "Queue, $queueSize jobs") {
-                Icon(Icons.AutoMirrored.Filled.List, contentDescription = null, modifier = Modifier.size(20.dp))
+            BarButton(
+                onClick = onQueueClick,
+                modifier = Modifier.widthIn(min = 76.dp),
+                description = if (queueStopped) "Queue paused, $queueSize jobs" else "Queue, $queueSize jobs",
+                color = if (queueStopped) MaterialTheme.colorScheme.error.copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (queueStopped) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            ) {
+                Icon(
+                    if (queueStopped) Icons.Default.Pause else Icons.AutoMirrored.Filled.List,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                )
                 Spacer(Modifier.width(6.dp))
                 Text("$queueSize", fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
@@ -1343,5 +1362,134 @@ private fun BarButton(
             verticalAlignment = Alignment.CenterVertically,
             content = content,
         )
+    }
+}
+
+/* ---------------------------------------------------------------------------
+ * QUEUE STATUS STRIP (3.0.0-1, the owner's pick "B" of three mockups)
+ * --------------------------------------------------------------------------- */
+
+private class StripState(
+    val icon: ImageVector,
+    val tint: Color,
+    val title: String,
+    val subtitle: String,
+    val actions: List<Pair<String, () -> Unit>>,
+)
+
+/**
+ * What stops or holds the queue, in a strip above the generate bar (it replaced the red cards at the top of the
+ * screen): the server out of memory, a paused queue, jobs set aside, or a scheduled start. A tap opens the queue.
+ */
+@Composable
+fun QueueStatusStrip(
+    viewModel: ForgeViewModel,
+    onOpenQueue: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val oomAlert by viewModel.oomAlert.collectAsStateWithLifecycle()
+    val paused by viewModel.isQueuePaused.collectAsStateWithLifecycle()
+    val queue by viewModel.generationQueue.collectAsStateWithLifecycle()
+    val pauseReason by viewModel.queuePauseReason.collectAsStateWithLifecycle()
+    val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
+    val waitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
+    val waiting = queue.count { it.status != GenerationStatus.FAILED }
+    val failed = queue.size - waiting
+    // Every pause with jobs left needs a Resume button, not only the out-of-memory one.
+    val hasPausedJobs = paused && waiting > 0
+    val error = MaterialTheme.colorScheme.error
+    val state =
+        when {
+            oomAlert ->
+                StripState(
+                    Icons.Default.Memory,
+                    error,
+                    "Server out of memory",
+                    if (hasPausedJobs) "The job was skipped · queue paused, $waiting waiting" else "The job was skipped",
+                    listOf((if (hasPausedJobs) "Resume" else "OK") to { viewModel.resumeQueue() }),
+                )
+            hasPausedJobs ->
+                StripState(
+                    Icons.Default.Pause,
+                    error,
+                    "Queue paused · $waiting waiting",
+                    pauseReason ?: "The last generation failed.",
+                    listOf("Resume" to { viewModel.resumeQueue() }),
+                )
+            // Jobs set aside by overnight mode, once nothing else is going on.
+            failed > 0 && waiting == 0 ->
+                StripState(
+                    Icons.Default.Warning,
+                    Color(0xFFFFA726),
+                    "$failed ${if (failed == 1) "job" else "jobs"} set aside",
+                    "The queue shows why",
+                    listOf("Remove" to { viewModel.removeFailedJobs() }, "Retry" to { viewModel.retryFailed() }),
+                )
+            scheduledStart != null && waitingForSchedule && waiting > 0 ->
+                StripState(
+                    Icons.Default.Schedule,
+                    MaterialTheme.colorScheme.secondary,
+                    "Queue starts at ${QueueSchedule.formatTime(scheduledStart!!)}",
+                    "$waiting ${if (waiting == 1) "job waits" else "jobs wait"}",
+                    listOf("Start Now" to { viewModel.startScheduledQueueNow() }),
+                )
+            else -> null
+        }
+    // The last state stays while the strip leaves.
+    val shown = rememberLastActive(state, null)
+    AnimatedVisibility(
+        visible = state != null,
+        modifier = modifier,
+        enter = fadeIn() + expandVertically(expandFrom = Alignment.Bottom),
+        exit = fadeOut() + shrinkVertically(shrinkTowards = Alignment.Bottom),
+    ) {
+        shown?.let { strip ->
+            Surface(
+                onClick = onOpenQueue,
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, strip.tint.copy(alpha = 0.5f)),
+                shadowElevation = 6.dp,
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier.size(32.dp).clip(RoundedCornerShape(11.dp)).background(strip.tint.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(strip.icon, contentDescription = null, tint = strip.tint, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            strip.title,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            strip.subtitle,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    strip.actions.forEach { (label, action) ->
+                        TextButton(
+                            onClick = action,
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.secondary),
+                        ) {
+                            Text(label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
+        }
     }
 }

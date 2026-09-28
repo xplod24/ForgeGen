@@ -202,6 +202,12 @@ object ForgeQueueManager {
             QueueEstimate.remaining(queue, rates, eta)?.toLong()
         }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, null)
 
+    /** When each job of the queue should be done, in seconds from now (QueueEstimate.ends; the queue's timeline). */
+    val queueJobEnds: StateFlow<List<Double?>> =
+        combine(_generationQueue, _currentEta, speedRates) { queue, eta, rates ->
+            QueueEstimate.ends(queue, rates, eta)
+        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, emptyList())
+
     private val _completedQueueItems = MutableStateFlow(0)
     val completedQueueItems: StateFlow<Int> = _completedQueueItems.asStateFlow()
 

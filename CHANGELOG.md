@@ -1,3 +1,8 @@
+## 3.0.0-1
+- **Queue as a timeline:** next to each job is the time it should start, the running job shows its progress and when it will be done, and "All done" at the end says when the whole queue should finish. Jobs set aside after an error are listed below, each with Retry, and "Remove All" clears them. Tap a job for its whole prompt and settings and for Duplicate, Edit and Remove; drag its handle to move it. The "Starts now" chip sets the start time ("Start at"), and while the queue waits for it, starts it now or changes the time.
+- **Queue status above the Add to Queue button:** a paused queue, the server running out of memory, jobs set aside and a scheduled start now show in a small strip right above the generate bar, with Resume, Retry or Start Now. Tap it to open the queue. While the queue is paused, the queue button turns red with a pause sign. The red cards at the top of the main screen are gone.
+- **Floating top bars:** the queue, presets, wildcards and gallery have a rounded bar floating at the top, like the generate bar at the bottom. In the gallery's selection mode it turns blue.
+
 ## 3.0.0
 ### New main screen
 - **Cards, like the settings:** under the image preview the main screen now has three cards, PROMPT, GENERATION and LORAS, with rows you tap. The generation settings are no longer hidden in a drawer at the bottom.

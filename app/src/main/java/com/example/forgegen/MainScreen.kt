@@ -70,6 +70,9 @@ fun MainScreen(
 
     val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
     val generationQueue by viewModel.generationQueue.collectAsStateWithLifecycle()
+    val oomAlert by viewModel.oomAlert.collectAsStateWithLifecycle()
+    val isQueuePaused by viewModel.isQueuePaused.collectAsStateWithLifecycle()
+    val queueStopped = oomAlert || (isQueuePaused && generationQueue.any { it.status != GenerationStatus.FAILED })
 
     val sessionImages by viewModel.sessionImages.collectAsStateWithLifecycle()
     val currentSessionIndex by viewModel.currentSessionIndex.collectAsStateWithLifecycle()
@@ -241,6 +244,9 @@ fun MainScreen(
                         enter = slideInVertically { it } + fadeIn(),
                         exit = slideOutVertically { it } + fadeOut(),
                     ) {
+                        Column {
+                        // What stops or holds the queue (3.0.0-1: it replaced the red cards at the top).
+                        QueueStatusStrip(viewModel = viewModel, onOpenQueue = onQueueClick)
                         GenerateBar(
                             viewModel = viewModel,
                             state = state,
@@ -254,7 +260,9 @@ fun MainScreen(
                                 viewModel.resetToDefaults()
                                 promptResets++
                             },
+                            queueStopped = queueStopped,
                         )
+                        }
                     }
                 },
             ) { padding ->
@@ -265,8 +273,6 @@ fun MainScreen(
                     val scrollState = rememberScrollState()
 
                     Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(horizontal = 16.dp, vertical = 4.dp)) {
-                        OomAlertSection(viewModel)
-
                         // Folded away (not removed, so it keeps its blur) while typing leaves it no room.
                         val previewHeight by animateDpAsState(if (typingLayout.hidePreview) 0.dp else PREVIEW_HEIGHT, label = "preview")
                         Box(Modifier.fillMaxWidth().height(previewHeight).clipToBounds()) {

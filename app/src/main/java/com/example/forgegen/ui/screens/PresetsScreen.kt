@@ -41,19 +41,15 @@ fun PresetsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Generation Presets", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showDefaultConfirm = true }) {
-                        Icon(Icons.Default.SettingsBackupRestore, contentDescription = "Set current settings as startup default")
-                    }
-                },
-            )
+            FloatingTopBar(
+                title = "Presets",
+                subtitle = config.presets.size.takeIf { it > 0 }?.let { "$it saved" },
+                onNavigate = { navController.popBackStack() },
+            ) {
+                IconButton(onClick = { showDefaultConfirm = true }) {
+                    Icon(Icons.Default.SettingsBackupRestore, contentDescription = "Set current settings as startup default")
+                }
+            }
         },
         floatingActionButton = {
             FloatingActionButton(

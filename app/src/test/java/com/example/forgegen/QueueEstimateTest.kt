@@ -74,6 +74,32 @@ class QueueEstimateTest {
     }
 
     @Test
+    fun `the timeline gives each job the time it should be done, failed jobs none`() {
+        val rates = mapOf("sdxl" to 0.5, QueueEstimate.ANY_MODEL to 1.0)
+        val queue =
+            listOf(
+                job(payload(), GenerationStatus.GENERATING),
+                job(payload(steps = 40)),
+                job(payload(steps = 10), GenerationStatus.FAILED),
+                job(payload(model = "flux")),
+            )
+        // The running job by the server's 4 s, then 20 s (40 × 0.5), then 20 s (20 × the common rate).
+        assertEquals(listOf(4.0, 24.0, null, 44.0), QueueEstimate.ends(queue, rates, runningEta = 4.0))
+        assertEquals("without the server's estimate the running job is estimated too", 10.0, QueueEstimate.ends(queue, rates, 0.0)[0])
+        assertEquals(
+            "nothing learned: only the running job has a time, the server's own",
+            listOf(4.0, null, null, null),
+            QueueEstimate.ends(queue, emptyMap(), 4.0),
+        )
+        val unknownModel = listOf(job(payload()), job(payload(model = "new")), job(payload()))
+        assertEquals(
+            "from a job that cannot be estimated on, none can",
+            listOf(10.0, null, null),
+            QueueEstimate.ends(unknownModel, mapOf("sdxl" to 0.5), 0.0),
+        )
+    }
+
+    @Test
     fun `durations read like a clock`() {
         assertEquals("under a minute", QueueEstimate.formatDuration(20))
         assertEquals("12 min", QueueEstimate.formatDuration(12 * 60))

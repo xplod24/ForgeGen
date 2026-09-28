@@ -266,13 +266,14 @@ fun GalleryScreen(
     Scaffold(
         topBar = {
             if (selectionMode) {
-                TopAppBar(
+                FloatingTopBar(
                     // One line: five actions leave little room on a narrow phone.
-                    title = { Text("${selected.size} selected", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    navigationIcon = {
-                        IconButton(onClick = { selected = emptySet() }) { Icon(Icons.Default.Close, "Clear Selection") }
-                    },
-                    actions = {
+                    title = "${selected.size} selected",
+                    onNavigate = { selected = emptySet() },
+                    navigationIcon = Icons.Default.Close,
+                    navigationDescription = "Clear Selection",
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
                         IconButton(onClick = { selected = itemsOf(shownTab).filter { !it.isDir }.map { it.fullpath }.toSet() }) {
                             Icon(Icons.Default.SelectAll, "Select All")
                         }
@@ -293,18 +294,12 @@ fun GalleryScreen(
                         IconButton(onClick = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) }) {
                             Icon(Icons.Default.OpenInFull, "Upscale or Vary Selected")
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                )
+                }
             } else {
-                TopAppBar(
-                    title = { Text(if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery") },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                        }
-                    },
-                    actions = {
+                FloatingTopBar(
+                    title = if (galleryMode == GalleryMode.PROMPT_PICKER) "Select Image" else "Gallery",
+                    onNavigate = onBack,
+                ) {
                         IconButton(onClick = { toggleMenu(ActiveMenu.SETTINGS) }) {
                             Icon(Icons.Default.Settings, "Settings")
                         }
@@ -330,8 +325,7 @@ fun GalleryScreen(
                         IconButton(onClick = { viewModel.refreshGallery() }) {
                             Icon(Icons.Default.Refresh, "Refresh")
                         }
-                    },
-                )
+                }
             }
         },
     ) { padding ->

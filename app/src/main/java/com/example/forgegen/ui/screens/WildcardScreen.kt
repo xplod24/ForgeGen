@@ -1,6 +1,7 @@
 
 package com.example.forgegen
 
+import com.example.forgegen.ui.components.FloatingTopBar
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -110,22 +111,11 @@ fun WildcardsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Wildcards", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onSave) {
-                        // Save icon
-
-                        Icon(Icons.Default.Save, "Save to disk")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-            )
+            FloatingTopBar(title = "Wildcards", onNavigate = { navController.popBackStack() }) {
+                IconButton(onClick = onSave) {
+                    Icon(Icons.Default.Save, "Save to disk")
+                }
+            }
         },
     ) { padding ->
 
