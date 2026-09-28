@@ -41,6 +41,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -150,6 +151,16 @@ fun GalleryScreen(
     // Subscription to the list of favorite paths
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
 
+    // 3.2.0: deleting with Undo, moving and copying (where the server allows it), folder covers, favorites gone
+    // from the server, and All Images shuffled.
+    val pendingDelete by viewModel.galleryPendingDelete.collectAsStateWithLifecycle()
+    val folderCovers by viewModel.galleryFolderCovers.collectAsStateWithLifecycle()
+    val folderCounts by viewModel.galleryFolderImageCounts.collectAsStateWithLifecycle()
+    val missingFavorites by viewModel.missingFavorites.collectAsStateWithLifecycle()
+    val canWrite = extension.canWrite
+    // The images the folder picker moves or copies, and which of the two it offers first.
+    var transfer by remember { mutableStateOf<Pair<List<GalleryItem>, ForgeGalleryManager.Transfer>?>(null) }
+
     val view = GalleryView.of(config.galleryView)
     // The image shown full screen: the tab it was opened from and its place in that tab's list.
     var fullscreen by remember { mutableStateOf<Pair<GalleryTab, Int>?>(null) }
@@ -203,7 +214,7 @@ fun GalleryScreen(
     }
     ScrollToTopOnNewFilters(folder.filters, folderState)
     ScrollToTopOnNewFilters(favorites.filters, favoritesState)
-    ScrollToTopOnNewFilters(allImages.filters, allState)
+    ScrollToTopOnNewFilters(allImages.filters to allImages.order, allState) // shuffled again: from the top too
 
     fun itemsOf(tab: GalleryTab): List<GalleryItem> =
         when (tab) {
@@ -235,6 +246,8 @@ fun GalleryScreen(
     val selectedItems = { itemsOf(shownTab).filter { !it.isDir && it.fullpath in selected } }
     val context = LocalContext.current
     LaunchedEffect(currentPath, galleryFilters, shownTab) { selected = emptySet() }
+    // Favorites whose files are gone from the server are looked for when the tab shows (at most every 5 minutes).
+    LaunchedEffect(shownTab, favoritePaths.size) { if (shownTab == GalleryTab.FAVORITES) viewModel.checkFavorites() }
 
     BackHandler(onBack = {
         when {
@@ -282,18 +295,30 @@ fun GalleryScreen(
                             selected = emptySet()
                         }) { Icon(Icons.Default.Star, "Add to Favorites") }
                         IconButton(onClick = {
-                            viewModel.downloadImages(selectedItems())
-                            selected = emptySet()
-                        }) { Icon(Icons.Default.Save, "Save to Phone") }
-                        IconButton(onClick = {
                             viewModel.shareImages(selectedItems()) { intent -> context.startActivity(intent) }
                             selected = emptySet()
                         }) { Icon(Icons.Default.Share, "Share") }
-                        // Each image made again with hires fix, one queue job each (2.4.0); the dialog's second tab
-                        // makes them again with their seeds, varied ("Variance on Seed", 3.0.0).
-                        IconButton(onClick = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) }) {
-                            Icon(Icons.Default.OpenInFull, "Upscale or Vary Selected")
-                        }
+                        // The rest in one menu (3.2.0, board 3A).
+                        SelectionMoreMenu(
+                            canWrite = canWrite,
+                            onSave = {
+                                viewModel.downloadImages(selectedItems())
+                                selected = emptySet()
+                            },
+                            onZip = {
+                                viewModel.downloadGalleryZip(selectedItems())
+                                selected = emptySet()
+                            },
+                            // Each image made again with hires fix, one queue job each (2.4.0); the dialog's second
+                            // tab makes them again with their seeds, varied ("Variance on Seed", 3.0.0).
+                            onUpscale = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) },
+                            onMove = { transfer = selectedItems() to ForgeGalleryManager.Transfer.MOVE },
+                            onCopy = { transfer = selectedItems() to ForgeGalleryManager.Transfer.COPY },
+                            onDelete = {
+                                viewModel.deleteGalleryImages(selectedItems())
+                                selected = emptySet()
+                            },
+                        )
                 }
             } else {
                 FloatingTopBar(
@@ -331,7 +356,11 @@ fun GalleryScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!showExtensionStatus) {
-                GalleryTabs(selected = pagerState.currentPage, onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } })
+                GalleryTabs(
+                    selected = pagerState.currentPage,
+                    random = allImages.order.random,
+                    onSelect = { page -> scope.launch { pagerState.animateScrollToPage(page) } },
+                )
             }
 
             // The index updates itself; only this thin bar shows it.
@@ -379,6 +408,23 @@ fun GalleryScreen(
                             } else if (isSearch) {
                                 PathBar(crumbs = emptyList(), searchFound = itemsOf(pageTab).size, onOpen = {})
                             }
+                            if (pageTab == GalleryTab.FAVORITES && !isSearch) {
+                                val missing = missingFavorites.count { it in favoritePaths }
+                                if (missing > 0) {
+                                    MissingFavoritesNote(
+                                        missing = missing,
+                                        onRemove = { viewModel.removeMissingFavorites() },
+                                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 2.dp),
+                                    )
+                                }
+                            }
+                            if (pageTab == GalleryTab.ALL_IMAGES) {
+                                AllImagesOrderRow(
+                                    order = allImages.order,
+                                    onRandom = { viewModel.setAllImagesRandom(it) },
+                                    onStatistics = { navController.navigate("gallery_stats") },
+                                )
+                            }
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                 val items = itemsOf(pageTab)
                                 val emptyText =
@@ -420,6 +466,8 @@ fun GalleryScreen(
                                                     GalleryTab.ALL_IMAGES -> allState
                                                 },
                                             favoritePaths = favoritePaths,
+                                            folderCovers = folderCovers,
+                                            folderCounts = folderCounts,
                                             inFavorites = pageTab == GalleryTab.FAVORITES,
                                             selected = selected,
                                             onClick = { index, item -> onItemClick(pageTab, index, item) },
@@ -507,6 +555,11 @@ fun GalleryScreen(
                                         viewModel = viewModel,
                                         config = config,
                                         extensionReady = extension.state == ForgeGalleryManager.Extension.READY,
+                                        indexedImageCount = indexedImageCount,
+                                        onStatistics = {
+                                            activeMenu = ActiveMenu.NONE
+                                            navController.navigate("gallery_stats")
+                                        },
                                         onClose = { activeMenu = ActiveMenu.NONE },
                                     )
                                 ActiveMenu.NONE -> Spacer(Modifier.fillMaxWidth())
@@ -514,6 +567,18 @@ fun GalleryScreen(
                         }
                     }
                 }
+
+                // A delete can be taken back for a few seconds (3.2.0).
+                UndoDeleteBar(
+                    pending = pendingDelete,
+                    onUndo = { viewModel.undoGalleryDelete() },
+                    modifier =
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(12.dp)
+                            .zIndex(50f),
+                )
             }
         }
 
@@ -540,6 +605,21 @@ fun GalleryScreen(
         // "Upscale Selected" and "More Like This" (2.4.0); after the viewer, so it opens above it. Leaving the
         // gallery closes it (it would open again with the next gallery).
         ImageJobsDialog(viewModel, onQueued = { selected = emptySet() })
+
+        // Move or copy to a folder (3.2.0); closing it keeps the selection.
+        transfer?.let { (items, kind) ->
+            FolderPickerSheet(
+                viewModel = viewModel,
+                items = items,
+                kind = kind,
+                onPick = { dest, chosen ->
+                    viewModel.transferGalleryImages(items, dest, chosen)
+                    transfer = null
+                    selected = emptySet()
+                },
+                onDismiss = { transfer = null },
+            )
+        }
         DisposableEffect(Unit) { onDispose { viewModel.dismissImageJobs() } }
     }
 }
@@ -574,7 +654,7 @@ private fun RecordScroll(
 /** Back to the top when a list made with other filters (a search, another order) arrives; not when it is the same. */
 @Composable
 private fun ScrollToTopOnNewFilters(
-    filters: ForgeGalleryManager.GalleryFilters,
+    filters: Any,
     state: LazyGridState,
 ) {
     var shown by remember { mutableStateOf(filters) }
@@ -586,10 +666,11 @@ private fun ScrollToTopOnNewFilters(
     }
 }
 
-/** The three tabs; "All Images" says it is always the newest first. */
+/** The three tabs; "All Images" says in which order it shows (the newest first, or random). */
 @Composable
 private fun GalleryTabs(
     selected: Int,
+    random: Boolean,
     onSelect: (Int) -> Unit,
 ) {
     PrimaryTabRow(selectedTabIndex = selected) {
@@ -615,7 +696,7 @@ private fun GalleryTabs(
                                 Spacer(Modifier.width(4.dp))
                                 Text("All Images", style = MaterialTheme.typography.titleSmall, maxLines = 1)
                             }
-                            Text("(newest first)", fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1)
+                            Text(if (random) "(random)" else "(newest first)", fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1)
                         }
                 }
             }
@@ -865,6 +946,8 @@ private fun GalleryItems(
     items: List<GalleryItem>,
     state: LazyGridState,
     favoritePaths: Set<String>,
+    folderCovers: Map<String, List<GalleryItem>>,
+    folderCounts: Map<String, Int>,
     inFavorites: Boolean,
     selected: Set<String>,
     onClick: (Int, GalleryItem) -> Unit,
@@ -887,6 +970,8 @@ private fun GalleryItems(
                     viewModel = viewModel,
                     view = view,
                     item = item,
+                    covers = if (item.isDir) folderCovers[GalleryPaths.key(item.fullpath)] else null,
+                    folderCount = if (item.isDir) folderCounts[GalleryPaths.key(item.fullpath)] else null,
                     isFavorite = inFavorites || item.fullpath in favoritePaths,
                     isSelected = item.fullpath in selected,
                     onClick = { onClick(index, item) },
@@ -910,6 +995,8 @@ private fun GalleryItems(
                     viewModel = viewModel,
                     columns = view.columns,
                     item = item,
+                    covers = if (item.isDir) folderCovers[GalleryPaths.key(item.fullpath)] else null,
+                    folderCount = if (item.isDir) folderCounts[GalleryPaths.key(item.fullpath)] else null,
                     isFavorite = inFavorites || item.fullpath in favoritePaths,
                     isSelected = item.fullpath in selected,
                     onClick = { onClick(index, item) },
@@ -926,6 +1013,8 @@ private fun GridCell(
     viewModel: ForgeViewModel,
     columns: Int,
     item: GalleryItem,
+    covers: List<GalleryItem>?,
+    folderCount: Int?,
     isFavorite: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -933,6 +1022,53 @@ private fun GridCell(
 ) {
     // Small cells: smaller folder icons, and no names over the images (unreadable at that size).
     val small = columns >= 4
+    if (item.isDir && !covers.isNullOrEmpty()) {
+        // Its newest images as a cover, with its name and number of images over them (3.2.0).
+        Box(
+            modifier =
+                Modifier
+                    .padding(cellPadding(columns))
+                    .aspectRatio(1f)
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(onClick = onClick),
+        ) {
+            FolderCover(covers, { viewModel.getGalleryThumbnailUrl(it) }, Modifier.fillMaxSize(), gap = if (small) 1.dp else 2.dp)
+            Column(
+                modifier =
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))))
+                        .padding(start = 6.dp, end = 6.dp, top = if (small) 8.dp else 16.dp, bottom = if (small) 3.dp else 6.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(if (small) 10.dp else 14.dp),
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        item.name,
+                        color = Color.White,
+                        fontSize = if (small) 9.sp else 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (!small && folderCount != null) {
+                    Text(
+                        if (folderCount == 1) "1 image" else "$folderCount images",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+        }
+        return
+    }
     if (item.isDir) {
         Card(
             modifier = Modifier.padding(cellPadding(columns)).aspectRatio(1f).clickable(onClick = onClick),
@@ -1022,6 +1158,8 @@ private fun ListRow(
     viewModel: ForgeViewModel,
     view: GalleryView,
     item: GalleryItem,
+    covers: List<GalleryItem>?,
+    folderCount: Int?,
     isFavorite: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -1045,7 +1183,9 @@ private fun ListRow(
     ) {
         Row(modifier = Modifier.padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(modifier = Modifier.size(listThumbnailSize(view)).clip(MaterialTheme.shapes.small)) {
-                if (item.isDir) {
+                if (item.isDir && !covers.isNullOrEmpty()) {
+                    FolderCover(covers, { viewModel.getGalleryThumbnailUrl(it) }, Modifier.fillMaxSize())
+                } else if (item.isDir) {
                     Box(
                         modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center,
@@ -1073,6 +1213,14 @@ private fun ListRow(
                     maxLines = if (view == GalleryView.LIST_LARGE) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (item.isDir && folderCount != null) {
+                    Text(
+                        if (folderCount == 1) "1 image" else "$folderCount images",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
                 if (!item.isDir) {
                     // The prompt comes from the index, row by row (the gallery keeps no prompts in memory).
                     val prompt by produceState<String?>(initialValue = null, item.fullpath) {
@@ -1288,6 +1436,8 @@ private fun GallerySettingsPanel(
     viewModel: ForgeViewModel,
     config: AppConfig,
     extensionReady: Boolean,
+    indexedImageCount: Int,
+    onStatistics: () -> Unit,
     onClose: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(16.dp).heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
@@ -1298,6 +1448,25 @@ private fun GallerySettingsPanel(
             }
         }
         Spacer(Modifier.height(8.dp))
+
+        // Worked out from the index on the phone (3.2.0); also under All Images.
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onStatistics).padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.BarChart, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = "Statistics", fontSize = 16.sp, color = MaterialTheme.colorScheme.onBackground)
+                Text(
+                    text = "Images per day, top models, LoRAs and tags of the $indexedImageCount indexed images",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                    lineHeight = 18.sp,
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
 
         // The folders are read from the server's gallery extension; nothing to set by hand (2.1.0).
         Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
@@ -1401,6 +1570,8 @@ fun FullscreenGalleryViewer(
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
     val isFavorite = currentItem != null && currentItem.fullpath in favoritePaths
     val showMetadata by viewModel.showGalleryMetadata.collectAsStateWithLifecycle()
+    val extension by viewModel.galleryExtension.collectAsStateWithLifecycle()
+    val pendingDelete by viewModel.galleryPendingDelete.collectAsStateWithLifecycle()
 
     // Generation data is only fetched while the info panel is open.
     LaunchedEffect(currentItem?.fullpath, showMetadata) {
@@ -1458,6 +1629,12 @@ fun FullscreenGalleryViewer(
                 }
                 IconButton(onClick = { currentItem?.let { viewModel.downloadImage(it) } }) {
                     Icon(Icons.Default.Save, "Save", tint = Color.White)
+                }
+                // The next image shows in its place; Undo below brings it back (3.2.0).
+                if (extension.canWrite) {
+                    IconButton(onClick = { currentItem?.let { viewModel.deleteGalleryImages(listOf(it)) } }) {
+                        Icon(Icons.Default.Delete, "Delete from Server", tint = Color.White)
+                    }
                 }
             }
 
@@ -1528,6 +1705,12 @@ fun FullscreenGalleryViewer(
                         },
                     )
                 }
+
+                UndoDeleteBar(
+                    pending = pendingDelete,
+                    onUndo = { viewModel.undoGalleryDelete() },
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(12.dp),
+                )
             }
 
             // The image made again: more like it, or larger (2.4.0).

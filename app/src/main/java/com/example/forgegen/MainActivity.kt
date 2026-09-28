@@ -227,6 +227,7 @@ fun AppNavigation(
             popEnterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(200)) },
             popExitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) }
         ) { GalleryScreen(viewModel, navController) }
+        composable("gallery_stats") { GalleryStatsScreen(viewModel, navController) }
         composable("queue") { QueueScreen(viewModel, navController) }
         composable("wildcards") { WildcardsScreen(viewModel, navController) }
         composable("presets") { PresetsScreen(viewModel, navController) }

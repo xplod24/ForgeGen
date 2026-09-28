@@ -11,6 +11,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.Update
 import com.google.gson.annotations.SerializedName
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -241,6 +242,8 @@ data class GalleryItem(
     val date: String? = null,
     val createdTime: String? = null,
     val size: String? = null,
+    // The file's size in bytes, as the gallery extension lists it (3.2.0); null when it does not say.
+    val bytes: Long? = null,
 ) {
     val isDir: Boolean get() = type == "dir"
     val displaySize: String get() {
@@ -275,6 +278,17 @@ interface FavoriteImageDao {
 
     @Query("DELETE FROM favorite_images WHERE fullpath = :path")
     suspend fun deleteFavorite(path: String)
+
+    /** Favorites whose files were deleted or are gone from the server (3.2.0). */
+    @Query("DELETE FROM favorite_images WHERE fullpath IN (:paths)")
+    suspend fun deleteFavorites(paths: List<String>)
+
+    /** A favorite follows its file when the app moves it to another folder (3.2.0). */
+    @Query("UPDATE OR REPLACE favorite_images SET fullpath = :newPath WHERE fullpath = :oldPath")
+    suspend fun moveFavorite(
+        oldPath: String,
+        newPath: String,
+    )
 }
 
 @Entity(tableName = "gallery_images")
@@ -290,6 +304,20 @@ data class GalleryImageEntity(
     val loras: String,
     // When the generation data was read; 0 while it could not be read (the image is shown, the data is tried again).
     val savedAt: Long,
+    // The file's size in bytes (3.2.0, statistics); 0 until a sync lists it.
+    @ColumnInfo(defaultValue = "0") val size: Long = 0,
+)
+
+/** A file's size for [GalleryImageDao.updateSizes]. */
+data class GalleryImageSize(
+    val fullpath: String,
+    val size: Long,
+)
+
+/** An image's positive prompt, read page by page for the statistics' tags. */
+data class GalleryImagePrompt(
+    val fullpath: String,
+    val positivePrompt: String,
 )
 
 @Dao
@@ -307,8 +335,26 @@ interface GalleryImageDao {
     suspend fun clearAll()
 
     /** The index without the prompts, which are most of its size; they are searched with [findPathsByPrompt]. */
-    @Query("SELECT fullpath, name, date, model, loras FROM gallery_images")
+    @Query("SELECT fullpath, name, date, model, loras, size FROM gallery_images")
     suspend fun getIndexedImages(): List<IndexedImage>
+
+    /** Sizes of images indexed before the index kept them (3.2.0), filled in by the next sync. */
+    @Update(entity = GalleryImageEntity::class)
+    suspend fun updateSizes(sizes: List<GalleryImageSize>)
+
+    /** An image moved by the app to another folder keeps its generation data (3.2.0). */
+    @Query("UPDATE OR REPLACE gallery_images SET fullpath = :newPath WHERE fullpath = :oldPath")
+    suspend fun movePath(
+        oldPath: String,
+        newPath: String,
+    )
+
+    /** The positive prompts, [limit] at a time (the statistics count the tags without loading them all at once). */
+    @Query("SELECT fullpath, positivePrompt FROM gallery_images ORDER BY fullpath LIMIT :limit OFFSET :offset")
+    suspend fun getPrompts(
+        limit: Int,
+        offset: Int,
+    ): List<GalleryImagePrompt>
 
     @Query("SELECT fullpath FROM gallery_images")
     suspend fun getAllPaths(): List<String>
@@ -333,6 +379,8 @@ data class IndexedImage(
     val date: String,
     val model: String,
     val loras: String,
+    // Bytes; 0 while not known (3.2.0).
+    val size: Long = 0,
 )
 
 @Entity(tableName = "app_settings")
@@ -361,7 +409,8 @@ interface AppSettingDao {
         AppSettingEntity::class
     ],
     // 12 (1.6.1): the civitai_models table is gone (MIGRATION_11_12).
-    version = 12,
+    // 13 (3.2.0): gallery_images.size (MIGRATION_12_13).
+    version = 13,
     exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
@@ -556,6 +605,7 @@ data class GalleryItemDto(
     val date: String? = null,
     @SerializedName("created_time") val createdTime: String? = null,
     val size: String? = null,
+    val bytes: Long? = null,
 )
 
 // New DTO for Custom API (replaces org.json.JSONObject)
@@ -649,6 +699,31 @@ data class ServerMemory(
 data class GlobalSettingResponseDto(
     @SerializedName("sd_cwd") val sdCwd: String?,
     @SerializedName("global_setting") val globalSetting: GlobalSettingInnerDto?,
+    // True when the extension may not change files (IIB_ACCESS_CONTROL_PERMISSION=read-only, 3.2.0).
+    @SerializedName("is_readonly") val isReadonly: Boolean? = null,
+)
+
+/** The gallery extension's delete_files (3.2.0). */
+data class GalleryDeleteRequestDto(
+    @SerializedName("file_paths") val filePaths: List<String>,
+)
+
+/** The gallery extension's move_files and copy_files (3.2.0); each file's .txt goes with it. */
+data class GalleryTransferRequestDto(
+    @SerializedName("file_paths") val filePaths: List<String>,
+    val dest: String,
+    @SerializedName("create_dest_folder") val createDestFolder: Boolean = false,
+    @SerializedName("continue_on_error") val continueOnError: Boolean = true,
+)
+
+/** What move_files and copy_files could not do, one message per file (naming its path). */
+data class GalleryTransferResultDto(
+    val errors: List<String>? = null,
+)
+
+/** The gallery extension's mkdirs (3.2.0). */
+data class GalleryMkdirsRequestDto(
+    @SerializedName("dest_folder") val destFolder: String,
 )
 
 data class GlobalSettingInnerDto(
@@ -742,6 +817,7 @@ fun GalleryItemDto.toDomain() =
         date = this.date,
         createdTime = this.createdTime,
         size = this.size,
+        bytes = this.bytes,
     )
 
 fun SdModelItemDto.toDomain() =

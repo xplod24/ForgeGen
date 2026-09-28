@@ -115,6 +115,51 @@ object DeviceImages {
         }
     }
 
+    /** Where a ZIP of gallery images goes (3.2.0): Downloads, or the private folder with "Save to Phone Privately". */
+    fun archiveLocationName(private: Boolean = savesPrivately) = if (private) "the app's private folder" else "Downloads"
+
+    /**
+     * Saves a ZIP archive that [write] fills (it downloads the images, so it may take a while). Like an image, it
+     * stays hidden until complete and is removed again if writing fails.
+     */
+    suspend fun saveArchive(
+        context: Context,
+        displayName: String,
+        write: suspend (OutputStream) -> Unit,
+    ) {
+        if (savesPrivately) {
+            val dir = privateDir(context)
+            val partial = File(dir, ".$displayName.part")
+            try {
+                partial.outputStream().use { write(it) }
+                if (!partial.renameTo(File(dir, displayName))) throw IOException("Cannot save $displayName")
+            } catch (e: Exception) {
+                partial.delete()
+                throw e
+            }
+            return
+        }
+        val resolver = context.contentResolver
+        val values =
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/zip")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        val uri =
+            resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IOException("The phone refused to create $displayName")
+        try {
+            val stream = resolver.openOutputStream(uri) ?: throw IOException("Cannot write $displayName")
+            stream.use { write(it) }
+            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        } catch (e: Exception) {
+            resolver.delete(uri, null, null)
+            throw e
+        }
+    }
+
     /** A share sheet for a temporary copy of an image; [write] fills the copy. */
     fun shareIntent(
         context: Context,

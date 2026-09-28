@@ -202,6 +202,15 @@ object ForgeRepository {
             }
         }
 
+    // 3.2.0: the files' sizes in the gallery index (statistics). The next sync lists every folder, which fills them in.
+    val MIGRATION_12_13 =
+        object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `gallery_images` ADD COLUMN `size` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("DELETE FROM `app_settings` WHERE `key` = 'gallery_full_sync_at'")
+            }
+        }
+
     val MIGRATION_9_10 = object : Migration(9, 10) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
@@ -215,7 +224,7 @@ object ForgeRepository {
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 

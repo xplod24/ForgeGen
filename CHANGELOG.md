@@ -1,3 +1,20 @@
+## 3.2.0
+**Feature** · the gallery can delete, move and copy images on the server, folders show their newest images, and statistics
+
+### New
+- **Delete from the server:** select images, then More (⋮) > Delete from Server, or tap the bin in the full-screen viewer. The images leave the gallery at once, and **Undo** at the bottom brings them back for about 6 seconds. After that the server deletes them together with their .txt files, and they leave the favorites too.
+- **Move and copy to a folder:** More > Move to Folder or Copy to Folder shows the gallery's folders with their covers and numbers of images. Open a folder, then tap Move Here or Copy Here. New Folder makes a folder where you are, and the folder used last is offered first. Moved images keep their generation data in the search and stay favorites. An image whose name is already taken in that folder stays where it is, because the server would replace the other file.
+- Deleting, moving and copying need Infinite Image Browsing to allow changes. When the server's IIB may only read (`IIB_ACCESS_CONTROL_PERMISSION=read-only`), they are greyed out and the menu says why.
+- **Download as ZIP:** More > Download as ZIP packs the selected images into one file in Downloads, or in the app's private folder with "Save to Phone Privately". The phone makes it, so the server writes nothing.
+- **Folder covers:** in the Gallery tab each folder shows its four newest images and how many images it holds.
+- **Favorites gone from the server:** the Favorites tab says when favorites are no longer on the server, and Remove takes them out.
+- **Random in All Images:** choose Newest First or Random at the top of the tab. Tap Shuffle Again for another order.
+- **Statistics:** the chart button in All Images (or Gallery Settings > Statistics) shows how many images the gallery has, how many came this month and how much room they take. It also shows images per day over the last 17 weeks and the models, LoRAs and tags used most. It is worked out on the phone from the gallery index.
+
+### Changed
+- The selection bar keeps Select All, Add to Favorites and Share. Save to Phone and Upscale or Vary moved into its More menu.
+- The gallery index now keeps each file's size, for the statistics. The first indexing after the update lists every folder once to fill the sizes in.
+
 ## 3.1.0
 **Feature** · LoRAs tell which model they were made for and their trigger words, embeddings get their own list, and the server's styles can be used
 

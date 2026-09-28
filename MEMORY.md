@@ -102,7 +102,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   asking. 1) 3.0.1 Bugfix: latent hires modes, VAE refresh, model/LoRA pictures (done). 2) 3.1.0 Feature (done): LoRA
   metadata (base model badge, trigger words, details sheet, "fits the model" filter), embeddings (list, suggestions,
   Prompt/Negative), server styles (`/sdapi/v1/prompt-styles` + the txt2img `styles` field) - **off by default, turned
-  on in the settings** (owner's decision). 3) 3.2.0 Feature: gallery via IIB: delete with a ~6 s Undo before the
+  on in the settings** (owner's decision). 3) 3.2.0 Feature (done): gallery via IIB: delete with a ~6 s Undo before the
   request (only where the server allows writing: IIB answers 403 without write permission), move/copy/mkdirs, ZIP,
   folder covers (`batch_top_4_media_info`), favorites gone from the server (`check_path_exists`), Random and
   statistics from the app's own index (never IIB's `/db/*`, whose index build blocks Forge). 4) 3.3.0 Feature: Skip
@@ -137,6 +137,29 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `AppConfig.serverStyles` is **false by default** (owner's decision), switch in Settings > Appearance; "Paste into
   Prompt" merges them like the web UI (`{prompt}` or ", " after) and clears the choice; taking a prompt from an image
   clears it too. Tests: `LoraMetadataTest` (+ PromptEdits/PromptStyles/EmbeddingSuggestions), harness G42.
+- **3.2.0 (Feature): changing the gallery's files, covers, favorites gone, Random, statistics.** IIB endpoints (all
+  POST with `ForgeApi` `@Url`): `delete_files` {file_paths}, `move_files`/`copy_files` {file_paths, dest,
+  create_dest_folder, continue_on_error=true} -> {errors: ["Error moving file <path> to ..."]}, `mkdirs`
+  {dest_folder}, `batch_top_4_media_info` {paths} -> folder -> newest 4, `check_path_exists` {paths} -> bool. Write
+  endpoints answer 403 when IIB may only read; `global_setting.is_readonly` says so up front ->
+  `ExtensionStatus.writable`/`canWrite` (a 403 also sets it false, "Check Again" re-reads it). Delete: images hidden at
+  once (`hiddenPaths` filters all three tab flows), `PendingDelete` (AtomicInteger state so Undo and the 6 s timer
+  cannot both win), sent after `DELETE_DELAY_MS`; a second delete sends the earlier one at once; on success
+  `forgetFiles` (listing, index, favorites), on error the folder is listed again. Move: `GalleryTransfer.plan` leaves
+  out images already there and names taken in dest (IIB/shutil would overwrite silently), then `followMoved` renames
+  index rows and favorites (`movePath`/`moveFavorite`, UPDATE OR REPLACE) so no generation data is read again. Copy:
+  `mkdirs(dest)` first (shutil.copy into a missing folder makes a FILE of that name). ZIP is made on the phone
+  (`DeviceImages.saveArchive`, Downloads or private), not with IIB's `/zip` (needs write permission and leaves
+  `zip_temp` files on the server). Folder covers cached per session in `folderCovers` (cleared on Refresh and for
+  folders a change touched; an older IIB without the endpoint -> plain icons); counts from the index
+  (`GalleryFolders.imageCounts`, subfolders included). Favorites check when the Favorites tab shows (every 5 min at
+  most). All Images order `AllImagesOrder` (seeded shuffle). Statistics screen (route `gallery_stats`, `GalleryStatsScreen`)
+  from `indexedImages` + prompts read 2000 at a time (`getPrompts`), `GalleryStatistics` (pure). DB 13:
+  `gallery_images.size` (bytes, from the listing's `bytes`), `MIGRATION_12_13` also deletes `gallery_full_sync_at` so
+  the first sync after the update lists every folder and `updateSizes` fills old rows. UI: `SelectionMoreMenu`,
+  `UndoDeleteBar` (gallery and viewer), `FolderPickerSheet`, `FolderCover`, `MissingFavoritesNote`,
+  `AllImagesOrderRow` (ui/components/GalleryActions.kt). Tests: `GalleryEditsTest`, harness G43 (13), Robolectric rig
+  `MigrationTest` (real Room, 12 -> 13).
 - **Main screen top bar (3.0.0-4, micro-patch "Bugfix"; the owner picked B of three mockups, same artifact):**
   `MainTopBar` (TopBars.kt) is the same pill, 4 dp above and below so it stays 64 dp (`TypingLayout.TOP_BAR_DP`):
   "ForgeGen" over `ConnectionStatus` (the whole block opens `openServerDialog`), `MemoryMeters` (VRAM = primary,

@@ -146,6 +146,41 @@ interface ForgeApi {
         @Body body: GalleryPathsRequestDto,
     ): Response<Map<String, String?>>
 
+    // --- Changing the gallery's files (3.2.0; the extension answers 403 when it may only read) ---
+
+    @POST
+    suspend fun deleteGalleryFiles(
+        @Url url: String,
+        @Body body: GalleryDeleteRequestDto,
+    ): Response<ResponseBody>
+
+    /** move_files or copy_files, by [url]. */
+    @POST
+    suspend fun transferGalleryFiles(
+        @Url url: String,
+        @Body body: GalleryTransferRequestDto,
+    ): Response<GalleryTransferResultDto>
+
+    @POST
+    suspend fun makeGalleryFolder(
+        @Url url: String,
+        @Body body: GalleryMkdirsRequestDto,
+    ): Response<ResponseBody>
+
+    /** The newest (up to) four images of each folder, for its cover: folder -> images. */
+    @POST
+    suspend fun getGalleryFolderCovers(
+        @Url url: String,
+        @Body body: GalleryPathsRequestDto,
+    ): Response<Map<String, List<GalleryItemDto>>>
+
+    /** Whether each path is still on the server: path -> exists. */
+    @POST
+    suspend fun checkGalleryPaths(
+        @Url url: String,
+        @Body body: GalleryPathsRequestDto,
+    ): Response<Map<String, Boolean>>
+
     /** A file the web UI serves (`file=<path>`, e.g. the tagcomplete extension's tag list), streamed. */
     @Streaming
     @GET

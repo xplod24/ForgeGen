@@ -40,9 +40,12 @@ import okhttp3.Request
 import java.io.IOException
 import java.io.InputStream
 import java.text.SimpleDateFormat
+import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /* ============================================================================
  * GALLERY MANAGER
@@ -57,6 +60,10 @@ import java.util.concurrent.atomic.AtomicInteger
  * text, 100 images per request. It is kept up to date on its own (2.1.0): after the extension is found, when the
  * gallery opens or is refreshed and after the app generated images. Such a sync only lists folders that changed
  * (or are recent); once a day it lists every folder, which also forgets images deleted anywhere.
+ *
+ * 3.2.0: images are deleted (after a few seconds in which Undo takes it back), moved or copied to another folder
+ * through the extension, where it may change files (IIB answers 403 when it may only read); folders show their
+ * newest images as a cover; favorites gone from the server are found; statistics come from the index.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeGalleryManager {
@@ -73,6 +80,15 @@ object ForgeGalleryManager {
     private const val AUTO_SYNC_INTERVAL_MS = 30_000L
     private const val NEW_IMAGE_SYNC_DELAY_MS = 2_000L
     private const val PROMPT_CACHE_SIZE = 300
+    private const val LAST_FOLDER_KEY = "gallery_last_folder"
+    private const val DELETE_DELAY_MS = 6_000L
+    private const val FAVORITES_CHECK_INTERVAL_MS = 5 * 60 * 1000L
+    private const val PATHS_PER_REQUEST = 200
+    private const val PROMPT_PAGE = 2_000
+    private const val HTTP_FORBIDDEN = 403
+
+    /** Said when the extension refuses to change files (IIB_ACCESS_CONTROL_PERMISSION=read-only on the server). */
+    const val READ_ONLY_MESSAGE = "The server's gallery is read-only: Infinite Image Browsing may not change its files."
     private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "avif", "gif")
 
     /** [GalleryImageEntity.savedAt] of an image whose generation data could not be read yet. */
@@ -147,7 +163,11 @@ object ForgeGalleryManager {
     data class ExtensionStatus(
         val state: Extension,
         val message: String? = null,
-    )
+        // False when the extension may only read (3.2.0): deleting, moving and copying are then not offered.
+        val writable: Boolean = true,
+    ) {
+        val canWrite: Boolean get() = state == Extension.READY && writable
+    }
 
     private val _extension = MutableStateFlow(ExtensionStatus(Extension.UNKNOWN))
     val extension: StateFlow<ExtensionStatus> = _extension.asStateFlow()
@@ -196,6 +216,53 @@ object ForgeGalleryManager {
     @Volatile private var resyncRequested = false
 
     @Volatile private var lastAutoSyncAt = 0L
+
+    // --- Changing files (3.2.0) ---
+
+    /** Images deleted a moment ago, which Undo still brings back; the server deletes them when the time is up. */
+    class PendingDelete(
+        val items: List<GalleryItem>,
+    ) {
+        val paths: Set<String> = items.mapTo(HashSet()) { it.fullpath }
+
+        // 0: waiting, 1: sent to the server, 2: undone. Undo and the timer may meet; only one of them wins.
+        private val state = AtomicInteger(0)
+
+        internal fun send() = state.compareAndSet(0, 1)
+
+        internal fun undo() = state.compareAndSet(0, 2)
+    }
+
+    private val _pendingDelete = MutableStateFlow<PendingDelete?>(null)
+    val pendingDelete: StateFlow<PendingDelete?> = _pendingDelete.asStateFlow()
+
+    // Deleted images the lists leave out: from the tap on Delete until the server's answer (or Undo).
+    private val hiddenPaths = MutableStateFlow<Set<String>>(emptySet())
+    private var deleteTimer: Job? = null
+    private val deleteLock = Any()
+
+    /** The newest images of each folder, for its cover (keys: [GalleryPaths.key]); an empty list: none there. */
+    private val _folderCovers = MutableStateFlow<Map<String, List<GalleryItem>>>(emptyMap())
+    val folderCovers: StateFlow<Map<String, List<GalleryItem>>> = _folderCovers.asStateFlow()
+
+    @Volatile private var coversSupported = true
+
+    /** How many indexed images each folder holds, its subfolders included (keys: [GalleryPaths.key]). */
+    private val _folderImageCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val folderImageCounts: StateFlow<Map<String, Int>> = _folderImageCounts.asStateFlow()
+
+    /** Favorites whose files are no longer on the server, as the last check found them. */
+    private val _missingFavorites = MutableStateFlow<Set<String>>(emptySet())
+    val missingFavorites: StateFlow<Set<String>> = _missingFavorites.asStateFlow()
+
+    @Volatile private var favoritesCheckedAt = 0L
+
+    /** The folder images were moved or copied to last, offered first next time. */
+    private val _lastFolder = MutableStateFlow<String?>(null)
+    val lastFolder: StateFlow<String?> = _lastFolder.asStateFlow()
+
+    private val _allImagesOrder = MutableStateFlow(AllImagesOrder())
+    val allImagesOrder: StateFlow<AllImagesOrder> = _allImagesOrder.asStateFlow()
 
     fun cancelPromptRestore() {
         if (_isRestoringPrompt.value == IndicatorState.LOADING) {
@@ -263,34 +330,43 @@ object ForgeGalleryManager {
         val isSearch: Boolean get() = filters.isSearch
     }
 
-    /** What the Favorites and All Images tabs show, with the filters it was made with. */
+    /** What the Favorites and All Images tabs show, with the filters (and the All Images order) it was made with. */
     data class ImagesView(
         val items: List<GalleryItem>,
         val filters: GalleryFilters,
+        val order: AllImagesOrder = AllImagesOrder(),
     )
 
     // A stopped flow keeps its last value (WhileSubscribed keeps the replay), so a reopened gallery shows its lists at
     // once and its tabs return to where they were scrolled.
     val folderView: StateFlow<FolderView> =
-        combine(listing, search) { folder, found ->
+        combine(listing, search, hiddenPaths) { folder, found, hidden ->
             val hits = found.hits
             val items = if (hits != null) hits.map { it.toGalleryItem() } else folder.items
-            FolderView(folder.path, sortItems(items, found.filters.sortOrder), found.filters)
+            FolderView(folder.path, sortItems(items.withoutPaths(hidden), found.filters.sortOrder), found.filters)
         }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), FolderView("", emptyList(), GalleryFilters()))
 
     /** The Favorites tab: every favorite (the search narrows them), in the sort panel's order. */
     val favoriteImages: StateFlow<ImagesView> =
-        combine(favoriteItems, search) { favorites, found ->
+        combine(favoriteItems, search, hiddenPaths) { favorites, found, hidden ->
             val hits = found.hits?.mapTo(HashSet()) { it.fullpath }
             val shown = if (hits == null) favorites else favorites.filter { it.fullpath in hits }
-            ImagesView(sortItems(shown, found.filters.sortOrder), found.filters)
+            ImagesView(sortItems(shown.withoutPaths(hidden), found.filters.sortOrder), found.filters)
         }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
 
-    /** The All Images tab: every image of the gallery (or the search's results), always the newest first. */
+    /** The All Images tab: every image of the gallery (or the search's results), the newest first or shuffled. */
     val allImages: StateFlow<ImagesView> =
-        search
-            .map { found -> ImagesView(sortItems((found.hits ?: found.inGallery).map { it.toGalleryItem() }, SortOrder.NEWEST), found.filters) }
-            .stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
+        combine(search, _allImagesOrder, hiddenPaths) { found, order, hidden ->
+            val newest = sortItems((found.hits ?: found.inGallery).map { it.toGalleryItem() }, SortOrder.NEWEST)
+            ImagesView(order.apply(newest.withoutPaths(hidden)), found.filters, order)
+        }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
+
+    private fun List<GalleryItem>.withoutPaths(paths: Set<String>) = if (paths.isEmpty()) this else filterNot { it.fullpath in paths }
+
+    /** All Images the newest first, or shuffled; Random chosen again shuffles anew. */
+    fun setAllImagesRandom(random: Boolean) {
+        _allImagesOrder.value = if (random) AllImagesOrder(true, System.nanoTime()) else AllImagesOrder()
+    }
 
     /** Paths of the images whose prompts contain [text] (ignoring case), found by the database. */
     private suspend fun promptMatches(text: String): Set<String> {
@@ -359,6 +435,12 @@ object ForgeGalleryManager {
             _showGalleryMetadata.value = getDb().appSettingDao().getSetting(SHOW_META_KEY)?.value?.toBoolean() ?: false
             migratePinnedToFavorites()
             loadFavoritePaths()
+            _lastFolder.value =
+                getDb()
+                    .appSettingDao()
+                    .getSetting(LAST_FOLDER_KEY)
+                    ?.value
+                    ?.takeIf { it.isNotBlank() }
             reloadIndex()
         }
         // The index follows new images: the server saved them a moment ago (the extension is found on connecting,
@@ -396,6 +478,7 @@ object ForgeGalleryManager {
             val inGallery = all.filter { root == null || isUnderNormalized(it.fullpath, root) }
             indexedImages.value = all
             _indexedImageCount.value = inGallery.size
+            _folderImageCounts.value = galleryRoot()?.let { GalleryFolders.imageCounts(inGallery, it) }.orEmpty()
             _availableModels.value = inGallery.map { it.model }.filter { it.isNotBlank() }.distinct().sorted()
             _availableLoras.value =
                 inGallery
@@ -572,7 +655,7 @@ object ForgeGalleryManager {
                 ForgeSettingsManager.saveConfig(config.copy(galleryPath = folder, serverBasePath = sdCwd.ifEmpty { config.serverBasePath }))
             }
             Log.d(TAG, "Gallery extension found at $prefix, images in $folder")
-            return ExtensionStatus(Extension.READY)
+            return ExtensionStatus(Extension.READY, writable = settings?.isReadonly != true)
         }
         return ExtensionStatus(Extension.MISSING)
     }
@@ -768,6 +851,7 @@ object ForgeGalleryManager {
 
     /** Refresh (and Retry after an error): the folder asked for last again, and the index brought up to date at once. */
     fun refreshGallery() {
+        _folderCovers.value = emptyMap() // new images may have come
         val path = requestedPath
         if (path.isEmpty()) {
             checkExtension()
@@ -800,6 +884,7 @@ object ForgeGalleryManager {
                     if (items != null) {
                         listing.value = FolderListing(target, items)
                         _currentGalleryPath.value = target
+                        requestCovers(items.filter { it.isDir }.map { it.fullpath })
                     }
                     _isGalleryLoading.value = false
                 } catch (e: CancellationException) {
@@ -1006,6 +1091,15 @@ object ForgeGalleryManager {
             _gallerySyncProgress.value = done to newFiles.size
         }
 
+        // Sizes of images indexed before the index kept them (3.2.0): the listing tells them.
+        val knownSizes = indexedImages.value.associate { it.fullpath to it.size }
+        listing.files
+            .mapNotNull { file ->
+                val bytes = file.bytes ?: 0L
+                if (bytes > 0 && knownSizes[file.fullpath] == 0L) GalleryImageSize(file.fullpath, bytes) else null
+            }.chunked(500)
+            .forEach { dao.updateSizes(it) }
+
         // Folders with unreadable images are listed again next time, so those images get another try.
         saveFolderDates(listing.folderDates.filterKeys { it !in failedFolders })
         reloadIndex()
@@ -1092,6 +1186,7 @@ object ForgeGalleryManager {
             seed = info.seed,
             loras = info.loras.joinToString(","),
             savedAt = System.currentTimeMillis(),
+            size = file.bytes ?: 0L,
         )
     }
 
@@ -1108,6 +1203,7 @@ object ForgeGalleryManager {
             seed = "",
             loras = "",
             savedAt = INFO_NOT_READ,
+            size = file.bytes ?: 0L,
         )
 
     /**
@@ -1366,6 +1462,390 @@ object ForgeGalleryManager {
             }
         }
     }
+
+    // --- CHANGING THE SERVER'S FILES (3.2.0) ---
+
+    private fun count(n: Int) = if (n == 1) "1 image" else "$n images"
+
+    /** The extension refused to change a file: it may only read, and the app stops offering such changes. */
+    private fun markReadOnly() {
+        _extension.update { it.copy(writable = false) }
+    }
+
+    private fun errorText(response: retrofit2.Response<*>): String {
+        val detail =
+            try {
+                response.errorBody()?.string()?.let { ForgeQueueManager.serverDetail(it) }
+            } catch (e: Exception) {
+                null
+            }
+        return detail ?: "the server answered with error ${response.code()}"
+    }
+
+    /**
+     * Deletes [items] from the server after [DELETE_DELAY_MS], in which [undoDelete] takes it back. They leave the
+     * lists at once. Deleting again within that time sends the earlier ones at once (only the last can be undone).
+     */
+    fun deleteImages(items: List<GalleryItem>) {
+        val images = items.filter { !it.isDir }.distinctBy { it.fullpath }
+        if (images.isEmpty()) return
+        val pending = PendingDelete(images)
+        val earlier: PendingDelete?
+        synchronized(deleteLock) {
+            earlier = _pendingDelete.value
+            deleteTimer?.cancel()
+            hiddenPaths.update { it + pending.paths }
+            _pendingDelete.value = pending
+            deleteTimer =
+                managerScope.launch {
+                    delay(DELETE_DELAY_MS)
+                    sendDelete(pending)
+                }
+        }
+        if (earlier != null) managerScope.launch { sendDelete(earlier) }
+    }
+
+    /** Undo: the images deleted last come back, and the server is not asked to delete them. */
+    fun undoDelete() {
+        synchronized(deleteLock) {
+            val pending = _pendingDelete.value ?: return
+            if (!pending.undo()) return
+            deleteTimer?.cancel()
+            _pendingDelete.value = null
+            hiddenPaths.update { it - pending.paths }
+        }
+    }
+
+    private suspend fun sendDelete(pending: PendingDelete) {
+        if (!pending.send()) return
+        _pendingDelete.compareAndSet(pending, null)
+        val paths = pending.items.map { it.fullpath }
+        val error =
+            try {
+                val response = api().deleteGalleryFiles("${prefix()}/delete_files", GalleryDeleteRequestDto(paths))
+                when {
+                    response.isSuccessful -> null
+                    response.code() == HTTP_FORBIDDEN -> READ_ONLY_MESSAGE.also { markReadOnly() }
+                    else -> "Delete failed: ${errorText(response)}"
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                "Delete failed: ${e.message ?: e.javaClass.simpleName}"
+            }
+        if (error == null) {
+            forgetFiles(paths)
+        } else {
+            // The server stops at the first file it cannot delete, so some may be gone: the folder is listed again.
+            ForgeRepository.showToast(error)
+            relistFolder()
+            requestSync()
+        }
+        hiddenPaths.update { it - pending.paths }
+    }
+
+    /** Files gone from the server: out of the open folder, the index and the favorites. */
+    private suspend fun forgetFiles(paths: List<String>) {
+        val gone = paths.toHashSet()
+        listing.update { it.copy(items = it.items.filterNot { item -> item.fullpath in gone }) }
+        paths.chunked(500).forEach { getDb().galleryImageDao().deleteImages(it) }
+        val favorites = paths.filter { it in _favoritePaths.value }
+        if (favorites.isNotEmpty()) {
+            getDb().favoriteImageDao().deleteFavorites(favorites)
+            _favoritePaths.update { it - favorites.toSet() }
+            favoriteItems.update { files -> files.filterNot { it.fullpath in gone } }
+        }
+        forgetCovers(paths.map { GalleryPaths.parentOf(it) })
+        reloadIndex()
+    }
+
+    enum class Transfer { MOVE, COPY }
+
+    /** Moves or copies [items] to [dest] (each with its .txt of generation data); one message at the end. */
+    fun transferImages(
+        items: List<GalleryItem>,
+        dest: String,
+        kind: Transfer,
+    ) {
+        managerScope.launch {
+            val message =
+                try {
+                    transfer(items.filter { !it.isDir }.distinctBy { it.fullpath }, dest, kind)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "${if (kind == Transfer.MOVE) "Moving" else "Copying"} failed: ${e.message ?: e.javaClass.simpleName}"
+                }
+            ForgeRepository.showToast(message)
+        }
+    }
+
+    private suspend fun transfer(
+        images: List<GalleryItem>,
+        dest: String,
+        kind: Transfer,
+    ): String {
+        val folderName = folderName(dest)
+        // The server would replace a file of the same name without asking, so those stay where they are.
+        val plan = GalleryTransfer.plan(images, dest, listFolder(dest).map { it.name })
+        val left =
+            listOfNotNull(
+                "${count(plan.nameTaken.size)} left out: the name is taken there".takeIf { plan.nameTaken.isNotEmpty() },
+                "${count(plan.alreadyThere.size)} already there".takeIf { plan.alreadyThere.isNotEmpty() },
+            )
+        if (plan.send.isEmpty()) return "Nothing to ${if (kind == Transfer.MOVE) "move" else "copy"}: " + left.joinToString(", ")
+
+        val sent = plan.send.map { it.fullpath }
+        if (kind == Transfer.COPY) {
+            // IIB copies into a folder that is not there as a file of that name: the folder is made first.
+            val made = api().makeGalleryFolder("${prefix()}/mkdirs", GalleryMkdirsRequestDto(dest))
+            if (made.code() == HTTP_FORBIDDEN) {
+                markReadOnly()
+                return READ_ONLY_MESSAGE
+            }
+        }
+        val endpoint = if (kind == Transfer.MOVE) "move_files" else "copy_files"
+        val response = api().transferGalleryFiles("${prefix()}/$endpoint", GalleryTransferRequestDto(sent, dest))
+        if (response.code() == HTTP_FORBIDDEN) {
+            markReadOnly()
+            return READ_ONLY_MESSAGE
+        }
+        if (!response.isSuccessful) return "${if (kind == Transfer.MOVE) "Moving" else "Copying"} failed: ${errorText(response)}"
+        val failed = GalleryTransfer.failed(sent, response.body()?.errors.orEmpty())
+        val done = plan.send.filter { it.fullpath !in failed }
+
+        if (kind == Transfer.MOVE) followMoved(done, dest)
+        rememberFolder(dest)
+        forgetCovers(listOf(dest) + done.map { GalleryPaths.parentOf(it.fullpath) })
+        relistFolder()
+        requestSync()
+        val verb = if (kind == Transfer.MOVE) "Moved" else "Copied"
+        val notes = left + listOfNotNull("${failed.size} failed".takeIf { failed.isNotEmpty() })
+        return "$verb ${count(done.size)} to $folderName" + notes.joinToString("") { ", $it" }
+    }
+
+    /** Moved images keep their generation data in the index and stay favorites under their new paths. */
+    private suspend fun followMoved(
+        moved: List<GalleryItem>,
+        dest: String,
+    ) {
+        if (moved.isEmpty()) return
+        val index = getDb().galleryImageDao()
+        val favorites = getDb().favoriteImageDao()
+        for (item in moved) {
+            val newPath = GalleryPaths.child(dest, item.name)
+            index.movePath(item.fullpath, newPath)
+            if (item.fullpath in _favoritePaths.value) favorites.moveFavorite(item.fullpath, newPath)
+        }
+        val paths = moved.mapTo(HashSet()) { it.fullpath }
+        listing.update { it.copy(items = it.items.filterNot { item -> item.fullpath in paths }) }
+        loadFavoritePaths()
+        reloadIndex()
+    }
+
+    private suspend fun rememberFolder(folder: String) {
+        _lastFolder.value = folder
+        getDb().appSettingDao().putSetting(AppSettingEntity(LAST_FOLDER_KEY, folder))
+    }
+
+    /** A folder's name in messages ("Gallery" for the top folder). */
+    fun folderName(path: String): String = galleryRoot()?.takeIf { samePath(it, path) }?.let { GALLERY_NAME } ?: GalleryPaths.nameOf(path)
+
+    /** The open folder listed again without the loading placeholders (after files were changed). */
+    private suspend fun relistFolder() {
+        val root = galleryRoot() ?: return
+        val path = listing.value.path.ifEmpty { return }
+        val request = folderRequest.get()
+        try {
+            val items = listServerFolder(path, root) ?: return
+            if (request == folderRequest.get()) {
+                listing.value = FolderListing(path, items)
+                requestCovers(items.filter { it.isDir }.map { it.fullpath })
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Listing $path again failed: ${e.message}")
+        }
+    }
+
+    /** The subfolders of [path] for the folder picker, the most recently changed first. */
+    suspend fun subfolders(path: String): List<GalleryItem> =
+        withContext(Dispatchers.IO) {
+            listFolder(path).filter { it.isDir }.sortedByDescending { it.date.orEmpty() }.also { folders ->
+                requestCovers(folders.map { it.fullpath })
+            }
+        }
+
+    /** Makes the folder [name] in [parent]; its path, or the reason it could not be made. */
+    suspend fun createFolder(
+        parent: String,
+        name: String,
+    ): Result<String> =
+        withContext(Dispatchers.IO) {
+            GalleryPaths.folderNameProblem(name)?.let { return@withContext Result.failure(GalleryException(it)) }
+            val path = GalleryPaths.child(parent, name.trim())
+            try {
+                val response = api().makeGalleryFolder("${prefix()}/mkdirs", GalleryMkdirsRequestDto(path))
+                when {
+                    response.isSuccessful -> {
+                        if (samePath(parent, listing.value.path)) relistFolder()
+                        Result.success(path)
+                    }
+                    response.code() == HTTP_FORBIDDEN -> {
+                        markReadOnly()
+                        Result.failure(GalleryException(READ_ONLY_MESSAGE))
+                    }
+                    else -> Result.failure(GalleryException("The folder could not be made: ${errorText(response)}"))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Result.failure(GalleryException("The folder could not be made: ${e.message ?: e.javaClass.simpleName}"))
+            }
+        }
+
+    /**
+     * Packs [items] into one ZIP on the phone (Downloads, or the private folder with "Save to Phone Privately"). The
+     * images are downloaded into it one by one, so the server writes nothing and it works where IIB may only read.
+     */
+    fun downloadZip(items: List<GalleryItem>) {
+        val images = items.filter { !it.isDir }.distinctBy { it.fullpath }
+        if (images.isEmpty()) return
+        managerScope.launch {
+            val name = "ForgeGen_${SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())}.zip"
+            ForgeRepository.showToast("Packing ${count(images.size)}...")
+            try {
+                DeviceImages.saveArchive(application, name) { out ->
+                    ZipOutputStream(out).use { zip ->
+                        val used = HashSet<String>()
+                        for (item in images) {
+                            currentCoroutineContext().ensureActive()
+                            val name = DeviceImages.nameFor(item.fullpath)
+                            var entry = name
+                            var n = 2
+                            while (!used.add(entry.lowercase(Locale.ROOT))) {
+                                entry = "${name.substringBeforeLast('.')}-${n++}.${name.substringAfterLast('.')}"
+                            }
+                            val request = Request.Builder().url(getGalleryImageUrl(item)).build()
+                            networkManager.client.newCall(request).awaitResponse().use { response ->
+                                if (!response.isSuccessful) throw IOException("${item.name}: the server answered ${response.code}")
+                                zip.putNextEntry(ZipEntry(entry))
+                                response.body.byteStream().use { it.copyTo(zip) }
+                                zip.closeEntry()
+                            }
+                        }
+                    }
+                }
+                ForgeRepository.showToast("Saved $name (${count(images.size)}) to ${DeviceImages.archiveLocationName()}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ForgeRepository.showToast("ZIP failed: ${e.message ?: e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /** Asks the server for the covers of [folders] it has not given yet (IIB keeps them, so it answers quickly). */
+    private fun requestCovers(folders: List<String>) {
+        if (!coversSupported) return
+        val missing = folders.filter { GalleryPaths.key(it) !in _folderCovers.value }
+        if (missing.isEmpty()) return
+        managerScope.launch {
+            for (chunk in missing.chunked(PATHS_PER_REQUEST)) {
+                try {
+                    val response = api().getGalleryFolderCovers("${prefix()}/batch_top_4_media_info", GalleryPathsRequestDto(chunk))
+                    if (response.code() in UNSUPPORTED_ENDPOINT) {
+                        coversSupported = false // an older IIB: plain folder icons
+                        return@launch
+                    }
+                    if (!response.isSuccessful) return@launch
+                    val body = response.body().orEmpty()
+                    val found =
+                        chunk.associate { folder ->
+                            GalleryPaths.key(folder) to body[folder].orEmpty().map { it.toDomain() }.filter { isImage(it.name) }
+                        }
+                    _folderCovers.update { it + found }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "No folder covers: ${e.message}")
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private fun forgetCovers(folders: List<String>) {
+        val keys = folders.mapTo(HashSet()) { GalleryPaths.key(it) }
+        _folderCovers.update { covers -> covers.filterKeys { it !in keys } }
+        // The open folder's again.
+        requestCovers(
+            listing.value.items
+                .filter { it.isDir }
+                .map { it.fullpath },
+        )
+    }
+
+    private val UNSUPPORTED_ENDPOINT = setOf(404, 405, 422)
+
+    /** Asks the server which favorites are still there (when the Favorites tab shows; at most every 5 minutes). */
+    fun checkFavorites() {
+        if (readyRoot() == null) return
+        val now = System.currentTimeMillis()
+        if (now - favoritesCheckedAt < FAVORITES_CHECK_INTERVAL_MS) return
+        favoritesCheckedAt = now
+        managerScope.launch {
+            val missing = HashSet<String>()
+            try {
+                for (chunk in _favoritePaths.value.toList().chunked(PATHS_PER_REQUEST)) {
+                    val response = api().checkGalleryPaths("${prefix()}/check_path_exists", GalleryPathsRequestDto(chunk))
+                    if (!response.isSuccessful) return@launch // an older IIB, or it could not tell: nothing is marked
+                    val body = response.body().orEmpty()
+                    chunk.filterTo(missing) { body[it] == false }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                favoritesCheckedAt = 0L
+                return@launch
+            }
+            _missingFavorites.value = missing
+        }
+    }
+
+    /** Removes the favorites whose files are gone from the server. */
+    fun removeMissingFavorites() {
+        managerScope.launch {
+            val gone = _missingFavorites.value.filter { it in _favoritePaths.value }
+            if (gone.isNotEmpty()) {
+                getDb().favoriteImageDao().deleteFavorites(gone)
+                _favoritePaths.update { it - gone.toSet() }
+                favoriteItems.update { files -> files.filterNot { it.fullpath in gone } }
+            }
+            _missingFavorites.value = emptySet()
+            ForgeRepository.showToast("Removed ${gone.size} ${if (gone.size == 1) "favorite" else "favorites"}")
+        }
+    }
+
+    /** The gallery's statistics from the index on the phone; the prompts' tags are read from the database page by page. */
+    suspend fun statistics(): GalleryStats =
+        withContext(Dispatchers.IO) {
+            val root = galleryRoot()?.let { norm(it) }
+            val images = indexedImages.value.filter { root == null || isUnderNormalized(it.fullpath, root) }
+            val inGallery = images.mapTo(HashSet()) { it.fullpath }
+            val tags = HashMap<String, Int>()
+            val dao = getDb().galleryImageDao()
+            var offset = 0
+            while (true) {
+                ensureActive()
+                val page = dao.getPrompts(PROMPT_PAGE, offset)
+                page.forEach { if (it.fullpath in inGallery) GalleryStatistics.countTags(it.positivePrompt, tags) }
+                if (page.size < PROMPT_PAGE) break
+                offset += PROMPT_PAGE
+            }
+            GalleryStatistics.compute(images, LocalDate.now(), tags)
+        }
 
     // --- METADATA ---
 

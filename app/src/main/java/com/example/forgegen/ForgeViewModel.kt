@@ -462,6 +462,43 @@ class ForgeViewModel(
 
     fun queueVariance(spec: ImageJobs.VarianceSpec) = ForgeGalleryManager.queueVariance(spec)
 
+    // --- The gallery's files, folder covers, favorites gone, Random and statistics (3.2.0) ---
+    val galleryPendingDelete: StateFlow<ForgeGalleryManager.PendingDelete?> = ForgeGalleryManager.pendingDelete
+    val galleryFolderCovers: StateFlow<Map<String, List<GalleryItem>>> = ForgeGalleryManager.folderCovers
+    val galleryFolderImageCounts: StateFlow<Map<String, Int>> = ForgeGalleryManager.folderImageCounts
+    val missingFavorites: StateFlow<Set<String>> = ForgeGalleryManager.missingFavorites
+    val galleryLastFolder: StateFlow<String?> = ForgeGalleryManager.lastFolder
+    val allImagesOrder: StateFlow<AllImagesOrder> = ForgeGalleryManager.allImagesOrder
+
+    fun deleteGalleryImages(items: List<GalleryItem>) = ForgeGalleryManager.deleteImages(items)
+
+    fun undoGalleryDelete() = ForgeGalleryManager.undoDelete()
+
+    fun transferGalleryImages(
+        items: List<GalleryItem>,
+        dest: String,
+        kind: ForgeGalleryManager.Transfer,
+    ) = ForgeGalleryManager.transferImages(items, dest, kind)
+
+    suspend fun gallerySubfolders(path: String): List<GalleryItem> = ForgeGalleryManager.subfolders(path)
+
+    suspend fun createGalleryFolder(
+        parent: String,
+        name: String,
+    ): Result<String> = ForgeGalleryManager.createFolder(parent, name)
+
+    fun galleryFolderName(path: String): String = ForgeGalleryManager.folderName(path)
+
+    fun downloadGalleryZip(items: List<GalleryItem>) = ForgeGalleryManager.downloadZip(items)
+
+    fun checkFavorites() = ForgeGalleryManager.checkFavorites()
+
+    fun removeMissingFavorites() = ForgeGalleryManager.removeMissingFavorites()
+
+    fun setAllImagesRandom(random: Boolean) = ForgeGalleryManager.setAllImagesRandom(random)
+
+    suspend fun galleryStatistics(): GalleryStats = ForgeGalleryManager.statistics()
+
     fun galleryBreadcrumb(path: String): List<Pair<String, String>> = ForgeGalleryManager.breadcrumb(path)
 
     fun galleryParentFolder(path: String): String? = ForgeGalleryManager.parentFolder(path)
