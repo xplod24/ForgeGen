@@ -106,6 +106,8 @@ fun WhatsNewBar(
         Surface(
             shape = RoundedCornerShape(24.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.8f),
+            // Set: a colour with its own alpha has no content colour of its own (the text came out black).
+            contentColor = MaterialTheme.colorScheme.onSurface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.8f)),
             shadowElevation = 6.dp,
             modifier =

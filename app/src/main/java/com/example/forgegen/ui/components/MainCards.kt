@@ -11,7 +11,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -66,7 +65,6 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -426,12 +424,14 @@ private fun <T> SegmentedChoice(
                         .clip(RoundedCornerShape(10.dp))
                         .background(if (on) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onSelect(option) }
-                        .padding(horizontal = 10.dp),
+                        .padding(horizontal = if (fill) 2.dp else 10.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     label(option),
-                    fontSize = 14.sp,
+                    fontSize = if (fill) 13.sp else 14.sp,
+                    maxLines = 1,
+                    softWrap = false,
                     fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                 )
@@ -749,21 +749,17 @@ fun GenerationCard(
             onToggle = { onToggleRow(MainRows.SIZE) },
         ) {
             val large = SizePresets.isLarge(type, state.width, state.height)
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                SizePresets.RATIOS.forEach { ratio ->
-                    FilterChip(
-                        selected = state.aspectRatio == ratio,
-                        onClick = { viewModel.updateState { SizePresets.apply(it, ratio, large) } },
-                        label = { Text(ratio) },
-                    )
+            // The ratios side by side (none lit after the sliders set a size of their own), then portrait/landscape.
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SegmentedChoice(SizePresets.RATIOS, state.aspectRatio, { it }, Modifier.weight(1f), fill = true) { ratio ->
+                    viewModel.updateState { SizePresets.apply(it, ratio, large) }
                 }
-                // Portrait and landscape in one tap.
                 IconButton(onClick = { viewModel.updateState { it.withSwappedSize() } }) {
-                    Icon(Icons.Default.SwapHoriz, contentDescription = "Swap Width and Height")
+                    Icon(
+                        Icons.Default.SwapHoriz,
+                        contentDescription = "Swap Width and Height",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             ValueSlider("Width", state.width.toFloat(), 256f..2048f, "${state.width}", { roundStep(it, 64f) }, { v ->
