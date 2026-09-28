@@ -23,6 +23,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -43,15 +44,20 @@ import com.example.forgegen.Markdown
 fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
+    // The text of paragraphs and list items (the update card in the settings uses a smaller one).
+    textStyle: TextStyle = MaterialTheme.typography.bodyMedium,
 ) {
     val blocks = remember(markdown) { Markdown.parse(markdown) }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        blocks.forEach { MarkdownBlock(it) }
+        blocks.forEach { MarkdownBlock(it, textStyle) }
     }
 }
 
 @Composable
-private fun MarkdownBlock(block: Markdown.Block) {
+private fun MarkdownBlock(
+    block: Markdown.Block,
+    textStyle: TextStyle,
+) {
     when (block) {
         is Markdown.Block.Heading ->
             Text(
@@ -67,10 +73,10 @@ private fun MarkdownBlock(block: Markdown.Block) {
             )
         is Markdown.Block.ListItem ->
             Row(modifier = Modifier.padding(start = (block.depth * 16).dp)) {
-                Text(block.marker, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(20.dp))
-                Text(annotated(block.text), style = MaterialTheme.typography.bodyMedium)
+                Text(block.marker, style = textStyle, modifier = Modifier.width(20.dp))
+                Text(annotated(block.text), style = textStyle)
             }
-        is Markdown.Block.Paragraph -> Text(annotated(block.text), style = MaterialTheme.typography.bodyMedium)
+        is Markdown.Block.Paragraph -> Text(annotated(block.text), style = textStyle)
         is Markdown.Block.Code ->
             Text(
                 text = block.text,
@@ -116,12 +122,13 @@ private fun annotated(spans: List<Markdown.Span>): AnnotatedString {
 fun WhatsNewDialog(
     markdown: String,
     onDismiss: () -> Unit,
+    title: String = "What's New",
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         // Not closed by a tap outside, which happens easily while scrolling; Back and OK close it.
         properties = DialogProperties(dismissOnClickOutside = false),
-        title = { Text("What's New") },
+        title = { Text(title) },
         text = {
             MarkdownText(
                 markdown = markdown,

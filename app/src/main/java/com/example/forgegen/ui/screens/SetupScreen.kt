@@ -1,6 +1,8 @@
 package com.example.forgegen
 
 import android.app.KeyguardManager
+import com.example.forgegen.ui.components.MarkdownText
+import com.example.forgegen.ui.components.WhatsNewDialog
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -222,6 +224,8 @@ fun SetupScreen(
     var showNotificationModeDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
+    // All notes of the offered update, from "Show All" on its card.
+    var showAllReleaseNotes by remember { mutableStateOf(false) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
     var testStatus by remember { mutableStateOf<String?>(null) }
@@ -727,7 +731,17 @@ fun SetupScreen(
                         val changelogText = manifest.changelog ?: emptyList()
                         if (changelogText.isNotEmpty()) {
                             Text("What's new:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            changelogText.take(3).forEach { Text("• $it", fontSize = 12.sp) }
+                            Spacer(Modifier.height(4.dp))
+                            // Drawn from Markdown like the What's New notes (3.0.0-2: the ** of bold text showed).
+                            MarkdownText(
+                                markdown = releaseNotesMarkdown(changelogText.take(3)),
+                                textStyle = MaterialTheme.typography.bodySmall,
+                            )
+                            if (changelogText.size > 3) {
+                                TextButton(onClick = { showAllReleaseNotes = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                    Text("Show All (${changelogText.size})")
+                                }
+                            }
                         }
                         Spacer(Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1070,6 +1084,15 @@ fun SetupScreen(
         }
 
         // The download progress dialog is shown globally by MainActivity.
+
+        val notesOf = updateManifest
+        if (showAllReleaseNotes && notesOf != null) {
+            WhatsNewDialog(
+                markdown = releaseNotesMarkdown(notesOf.changelog.orEmpty()),
+                onDismiss = { showAllReleaseNotes = false },
+                title = "What's New in ${notesOf.versionName}",
+            )
+        }
 
         if (showThemeDialog) {
             AlertDialog(

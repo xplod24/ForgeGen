@@ -588,6 +588,9 @@ fun GitHubReleaseDto.toUpdateManifest(): UpdateManifest? {
     )
 }
 
+/** [items] of release notes as a Markdown list, drawn by MarkdownText with their **bold** and `code` (3.0.0-2). */
+fun releaseNotesMarkdown(items: List<String>): String = items.joinToString("\n") { "- $it" }
+
 /** The "- item" lines of a release description (the workflow copies them from CHANGELOG.md). */
 fun parseReleaseNotes(body: String?): List<String> =
     body

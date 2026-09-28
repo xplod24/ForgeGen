@@ -94,6 +94,21 @@ class MarkdownTest {
     }
 }
 
+/** 3.0.0-2: the update card in the settings draws the release notes as Markdown too. */
+class ReleaseNotesMarkdownTest {
+    @Test
+    fun `release notes are a Markdown list whose bold and code are read`() {
+        val items = parseReleaseNotes("## 3.0.0-1\n### Queue\n- **Queue as a timeline:** next to each job\n- the `Start at` chip\n")
+        val blocks = Markdown.parse(releaseNotesMarkdown(items))
+        assertEquals(2, blocks.size)
+        val first = blocks[0] as Block.ListItem
+        assertEquals(listOf(Span("Queue as a timeline:", bold = true), Span(" next to each job")), first.text)
+        val second = blocks[1] as Block.ListItem
+        assertTrue(second.text.any { it.code && it.text == "Start at" })
+        assertTrue("no ** or ` left in the text", blocks.flatMap { (it as Block.ListItem).text }.none { "**" in it.text || "`" in it.text })
+    }
+}
+
 class WhatsNewTest {
     private val changelog =
         """
