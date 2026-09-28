@@ -16,6 +16,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -97,6 +98,7 @@ private fun SelectionJobsDialog(
 ) {
     val state by viewModel.appState.collectAsStateWithLifecycle()
     val upscalers by viewModel.upscalers.collectAsStateWithLifecycle()
+    val latentModes by viewModel.latentModes.collectAsStateWithLifecycle()
     // Upscale.
     var scale by remember { mutableFloatStateOf(ImageJobs.DEFAULT_SCALE) }
     // The upscaler of the hires fix settings, as the owner asked.
@@ -163,6 +165,7 @@ private fun SelectionJobsDialog(
                         scale = scale,
                         onScale = { scale = it },
                         upscalers = upscalers,
+                        latentModes = latentModes,
                         upscaler = upscaler,
                         onUpscaler = { upscaler = it },
                         denoising = denoising,
@@ -211,6 +214,7 @@ private fun UpscaleOptions(
     scale: Float,
     onScale: (Float) -> Unit,
     upscalers: List<String>,
+    latentModes: List<String>,
     upscaler: String,
     onUpscaler: (String) -> Unit,
     denoising: Float,
@@ -227,7 +231,7 @@ private fun UpscaleOptions(
     }
 
     Label("Upscaler")
-    UpscalerPicker(upscalers = upscalers, selected = upscaler, onSelect = onUpscaler)
+    UpscalerPicker(latentModes = latentModes, upscalers = upscalers, selected = upscaler, onSelect = onUpscaler)
 
     Label("Denoising: ${"%.2f".format(Locale.US, denoising)}")
     Slider(
@@ -336,6 +340,7 @@ private fun SkippedNotes(reasons: List<String>) {
 
 @Composable
 private fun UpscalerPicker(
+    latentModes: List<String>,
     upscalers: List<String>,
     selected: String,
     onSelect: (String) -> Unit,
@@ -347,6 +352,14 @@ private fun UpscalerPicker(
             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // The latent modes first, as in hires fix's own picker (3.0.1).
+            latentModes.forEach { name ->
+                DropdownMenuItem(text = { Text(name) }, onClick = {
+                    onSelect(name)
+                    expanded = false
+                })
+            }
+            if (latentModes.isNotEmpty() && upscalers.isNotEmpty()) HorizontalDivider()
             upscalers.forEach { name ->
                 DropdownMenuItem(text = { Text(name) }, onClick = {
                     onSelect(name)

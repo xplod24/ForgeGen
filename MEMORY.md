@@ -97,6 +97,29 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   12 dp sides) under the status bar with back, title 17 sp, optional subtitle and actions; used by the queue, presets
   ("n saved"), wildcards and gallery (selection mode: close icon, secondaryContainer). The settings keep their own
   bar. Screenshots are checked with a Robolectric rig in the scratchpad (not in the repo).
+- **API features plan (owner-approved after 3.0.0-4; mockups: artifact "ForgeGen API Features Proposals"):** four
+  releases, each accepted by the owner installing it on the phone; on the owner's "OK" the next one starts without
+  asking. 1) 3.0.1 Bugfix: latent hires modes, VAE refresh, model/LoRA pictures (done). 2) 3.1.0 Feature: LoRA
+  metadata (base model badge, trigger words, details sheet, "fits the model" filter), embeddings (list, suggestions,
+  Prompt/Negative), server styles (`/sdapi/v1/prompt-styles` + the txt2img `styles` field) - **off by default, turned
+  on in the settings** (owner's decision). 3) 3.2.0 Feature: gallery via IIB: delete with a ~6 s Undo before the
+  request (only where the server allows writing: IIB answers 403 without write permission), move/copy/mkdirs, ZIP,
+  folder covers (`batch_top_4_media_info`), favorites gone from the server (`check_path_exists`), Random and
+  statistics from the app's own index (never IIB's `/db/*`, whose index build blocks Forge). 4) 3.3.0 Feature: Skip
+  Image (`/sdapi/v1/skip`), own task id (`force_task_id`) + `/internal/progress` and `/internal/pending-tasks` (fall
+  back to `/sdapi/v1/progress` on 401/404), server page (`/internal/sysinfo`, `/sdapi/v1/extensions`, `cmd-flags`),
+  Restart Forge (`server-restart`, only with `--api-server-stop`; 501 when not started by webui.bat/webui.sh).
+- **3.0.1 (Bugfix):** `HiresUpscalers` (ForgeModels): `/sdapi/v1/latent-upscale-modes` (else the six usual names) go
+  first in hires fix's Upscaler picker (`OptionPickerSheet(groups = ...)`, sections LATENT/UPSCALERS) and in "Upscale
+  Selected"; `/upscalers` lists them without the latent ones. `ForgeNetworkManager.refreshModules` (refresh icon in
+  the VAE and text encoder pickers): `POST /sdapi/v1/refresh-vae`, then `fetchModules()` again. On Forge Neo that
+  endpoint only rescans A1111's VAE list; `sd-modules` (`main_entry.module_list`) is rebuilt only by the web UI's
+  Refresh or a restart, so the toast says so. `ResourcePreviews` + `ResourcePreview` (ResourcePicker.kt): a model's or
+  LoRA's picture via `/sd_extra_networks/thumb?filename=` trying `SUFFIXES` (.preview.png, .png, .jpg, .jpeg, .webp,
+  .preview.jpg/.jpeg/.webp) in turn; only an HTTP error moves on (no network: tried again later); the working index
+  or NONE is remembered per model while the app runs, `forget()` on model/LoRA list refresh.
+  `ForgeRepository.previewCandidates` replaced `getPreviewUrl` ("file=...preview.png"). Tests:
+  `ResourcePreviewsTest`, `HiresUpscalersTest`, harness G41.
 - **Main screen top bar (3.0.0-4, micro-patch "Bugfix"; the owner picked B of three mockups, same artifact):**
   `MainTopBar` (TopBars.kt) is the same pill, 4 dp above and below so it stays 64 dp (`TypingLayout.TOP_BAR_DP`):
   "ForgeGen" over `ConnectionStatus` (the whole block opens `openServerDialog`), `MemoryMeters` (VRAM = primary,

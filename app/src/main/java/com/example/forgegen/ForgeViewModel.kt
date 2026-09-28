@@ -397,6 +397,7 @@ class ForgeViewModel(
     val schedulers: StateFlow<List<String>> = networkManager.schedulers
     val models: StateFlow<List<ApiResource>> = networkManager.models
     val upscalers: StateFlow<List<String>> = networkManager.upscalers
+    val latentModes: StateFlow<List<String>> = networkManager.latentModes
     val availableLoras: StateFlow<List<ApiResource>> = networkManager.availableLoras
 
 
@@ -533,10 +534,10 @@ class ForgeViewModel(
         updated: GenerationPreset,
     ) = ForgeSettingsManager.updatePreset(oldName, updated)
 
-    fun getPreviewUrl(
+    fun previewCandidates(
         originalPath: String,
         isLora: Boolean = false,
-    ) = ForgeRepository.getPreviewUrl(originalPath, isLora)
+    ) = ForgeRepository.previewCandidates(originalPath, isLora)
 
     fun addServerProfile(
         name: String,
@@ -678,6 +679,10 @@ class ForgeViewModel(
     fun installUpdate(sendToBackground: () -> Unit) = updateManager.installUpdate(sendToBackground)
 
     // --- REFRESH, VRAM & PNG INFO ACTIONS ---
+
+    /** Refresh in the VAE and text encoder lists (3.0.1). */
+    fun refreshModules() = networkManager.refreshModules { showToast(it) }
+
     fun refreshCheckpoints() {
         networkManager.refreshCheckpoints { success, msg ->
             showToast(msg)

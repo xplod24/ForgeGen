@@ -215,6 +215,7 @@ object ForgeSettingsManager {
                 val isImage =
                     path.endsWith("/file") ||
                         path.endsWith("/image-thumbnail") ||
+                        path.endsWith("/sd_extra_networks/thumb") ||
                         path.endsWith("sdapi/v1/txt2img") ||
                         path.contains("/file=")
                 when {

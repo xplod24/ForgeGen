@@ -75,6 +75,14 @@ interface ForgeApi {
     @GET("sdapi/v1/upscalers")
     suspend fun getUpscalers(): Response<List<NameResponseDto>>
 
+    /** Hires fix's latent modes ("Latent", "Latent (antialiased)", ...), which /upscalers leaves out (3.0.1). */
+    @GET("sdapi/v1/latent-upscale-modes")
+    suspend fun getLatentUpscaleModes(): Response<List<NameResponseDto>>
+
+    /** Rescans the VAE folder. Forge Neo's own module list (sd-modules) is not rescanned by it (3.0.1). */
+    @POST("sdapi/v1/refresh-vae")
+    suspend fun refreshVae(): Response<Unit>
+
     @GET("sdapi/v1/sd-models")
     suspend fun getSdModels(): Response<List<SdModelItemDto>>
 

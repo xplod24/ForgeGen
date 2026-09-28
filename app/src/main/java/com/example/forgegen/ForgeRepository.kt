@@ -250,16 +250,24 @@ object ForgeRepository {
 
     fun deletePreset(name: String) = ForgeSettingsManager.deletePreset(name)
 
-    fun getPreviewUrl(
+    /**
+     * The pictures a model or LoRA may have on the server, in the order to try them (ResourcePreviews, 3.0.1). A bare
+     * file name is looked for in the server's default model folders.
+     */
+    fun previewCandidates(
         originalPath: String,
         isLora: Boolean = false,
-    ): String {
-        if (originalPath.isEmpty()) return ""
-        if (originalPath.startsWith("http://") || originalPath.startsWith("https://")) {
-            return originalPath
-        }
+    ): List<String> {
+        if (originalPath.isEmpty()) return emptyList()
+        if (originalPath.startsWith("http://") || originalPath.startsWith("https://")) return listOf(originalPath)
 
-        val urlStr = config.value.apiUrl.trimEnd('/')
+        var serverUrl =
+            config.value.apiUrl
+                .trim()
+                .trimEnd('/')
+        if (serverUrl.isNotEmpty() && !serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
+            serverUrl = "http://$serverUrl"
+        }
 
         val sdCwd = config.value.serverBasePath
         val fullPath =
@@ -270,9 +278,7 @@ object ForgeRepository {
             } else {
                 originalPath
             }
-
-        val basePath = fullPath.substringBeforeLast(".safetensors").substringBeforeLast(".ckpt").substringBeforeLast(".pt")
-        return "$urlStr/file=$basePath.preview.png"
+        return ResourcePreviews.candidates(serverUrl, fullPath)
     }
 
     private var pingJob: kotlinx.coroutines.Job? = null

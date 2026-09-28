@@ -101,6 +101,10 @@ class ForgeNetworkManager(
     private val _upscalers = MutableStateFlow<List<String>>(emptyList())
     val upscalers: StateFlow<List<String>> = _upscalers.asStateFlow()
 
+    // Hires fix's latent modes (3.0.1), the usual ones until the server lists its own.
+    private val _latentModes = MutableStateFlow(HiresUpscalers.LATENT_MODES)
+    val latentModes: StateFlow<List<String>> = _latentModes.asStateFlow()
+
     private val _availableLoras = MutableStateFlow<List<ApiResource>>(emptyList())
     val availableLoras: StateFlow<List<ApiResource>> = _availableLoras.asStateFlow()
 
@@ -208,9 +212,20 @@ class ForgeNetworkManager(
                         val defUpscalers =
                             async {
                                 try {
+                                    // A server without the list keeps the usual latent modes.
+                                    try {
+                                        val latent = forgeApi?.getLatentUpscaleModes()
+                                        if (latent?.isSuccessful == true) {
+                                            _latentModes.value = HiresUpscalers.latentModes(latent.body()?.map { it.name })
+                                        }
+                                    } catch (e: Exception) {
+                                        if (e is kotlinx.coroutines.CancellationException) throw e
+                                        Log.w(TAG, "No latent upscale modes: $e")
+                                    }
                                     val res = forgeApi?.getUpscalers()
                                     if (res?.isSuccessful == true) {
-                                        _upscalers.value = res.body()?.map { it.name } ?: emptyList()
+                                        val names = res.body()?.map { it.name }.orEmpty()
+                                        _upscalers.value = HiresUpscalers.upscalers(_latentModes.value, names)
                                     }
                                 } catch (
                                     e: Exception,
@@ -304,30 +319,7 @@ class ForgeNetworkManager(
                             }
 
                         // The VAEs and text encoders model settings pick from (3.0.0): Forge's list, else A1111's VAEs.
-                        val defModules =
-                            async {
-                                try {
-                                    val forge = forgeApi?.getSdModules()
-                                    if (forge?.isSuccessful == true) {
-                                        val modules = forge.body().orEmpty().mapNotNull { ModelSettingsRules.module(it.modelName, it.filename) }
-                                        ForgeModelManager.updateModules(modules, ModuleSupport.FORGE)
-                                    } else {
-                                        val a1111 = forgeApi?.getSdVaes()
-                                        if (a1111?.isSuccessful == true) {
-                                            val vaes =
-                                                a1111.body().orEmpty().mapNotNull {
-                                                    ModelSettingsRules.module(it.modelName, it.filename)?.copy(kind = ServerModule.Kind.VAE)
-                                                }
-                                            ForgeModelManager.updateModules(vaes, ModuleSupport.A1111)
-                                        } else {
-                                            ForgeModelManager.updateModules(emptyList(), ModuleSupport.NONE)
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    if (e is kotlinx.coroutines.CancellationException) throw e
-                                    Log.e(TAG, "Failed modules: $e")
-                                }
-                            }
+                        val defModules = async { fetchModules() }
 
                         awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts, defModules)
                         lastFetchHadLists = defSamplers.await() && defModelsAndLoras.await()
@@ -340,11 +332,63 @@ class ForgeNetworkManager(
             }
     }
 
+    /** The VAEs and text encoders: Forge's module list, else A1111's VAEs, else none. */
+    private suspend fun fetchModules() {
+        try {
+            val forge = forgeApi?.getSdModules()
+            if (forge?.isSuccessful == true) {
+                val modules = forge.body().orEmpty().mapNotNull { ModelSettingsRules.module(it.modelName, it.filename) }
+                ForgeModelManager.updateModules(modules, ModuleSupport.FORGE)
+            } else {
+                val a1111 = forgeApi?.getSdVaes()
+                if (a1111?.isSuccessful == true) {
+                    val vaes =
+                        a1111.body().orEmpty().mapNotNull {
+                            ModelSettingsRules.module(it.modelName, it.filename)?.copy(kind = ServerModule.Kind.VAE)
+                        }
+                    ForgeModelManager.updateModules(vaes, ModuleSupport.A1111)
+                } else {
+                    ForgeModelManager.updateModules(emptyList(), ModuleSupport.NONE)
+                }
+            }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Log.e(TAG, "Failed modules: $e")
+        }
+    }
+
+    /**
+     * Refresh in the VAE and text encoder lists (3.0.1): the server rescans its VAE folder, then both lists are read
+     * again. Forge Neo's refresh-vae only rescans A1111's VAE list; its own list (sd-modules) is made at start and by
+     * Refresh in its web UI, which the API cannot do, so there the lists only catch up with the server.
+     */
+    fun refreshModules(onResult: (String) -> Unit) {
+        managerScope.launch(Dispatchers.IO) {
+            val rescanned =
+                try {
+                    forgeApi?.refreshVae()?.isSuccessful == true
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    false
+                }
+            fetchModules()
+            onResult(
+                when {
+                    ForgeModelManager.moduleSupport.value == ModuleSupport.FORGE ->
+                        "Lists read again. Forge adds new files after Refresh in its web UI or a restart."
+                    rescanned -> "VAE list refreshed"
+                    else -> "Could not refresh the VAE list"
+                },
+            )
+        }
+    }
+
     fun refreshCheckpoints(onResult: (Boolean, String) -> Unit) {
         managerScope.launch(Dispatchers.IO) {
             try {
                 val res = forgeApi?.refreshCheckpoints()
                 if (res?.isSuccessful == true) {
+                    ResourcePreviews.forget() // new pictures may have come with the new files
                     fetchApiData()
                     onResult(true, "Models list refreshed successfully")
                 } else {
@@ -362,6 +406,7 @@ class ForgeNetworkManager(
             try {
                 val res = forgeApi?.refreshLoras()
                 if (res?.isSuccessful == true) {
+                    ResourcePreviews.forget() // new pictures may have come with the new files
                     fetchApiData()
                     onResult(true, "LoRAs list refreshed successfully")
                 } else {

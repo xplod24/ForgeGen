@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
@@ -110,9 +111,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.forgegen.ui.components.ResourcePickerSheet
+import com.example.forgegen.ui.components.ResourcePreview
 import com.example.forgegen.ui.components.countTokens
 import com.example.forgegen.ui.components.rememberLastActive
 import java.text.SimpleDateFormat
@@ -210,36 +210,19 @@ fun RowIcon(
 
 /** A model's or LoRA's preview in a row (a plain tile while it loads or when there is none). */
 @Composable
-private fun ResourceThumb(url: String?) {
-    val context = LocalContext.current
-    Box(
+private fun ResourceThumb(candidates: List<String>) {
+    ResourcePreview(
+        candidates = candidates,
         modifier = Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (url.isNullOrEmpty()) {
+        placeholder = {
             Icon(
                 Icons.Default.Image,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                 modifier = Modifier.size(20.dp),
             )
-        } else {
-            AsyncImage(
-                model =
-                    remember(url) {
-                        ImageRequest
-                            .Builder(context)
-                            .data(url)
-                            .size(150)
-                            .crossfade(true)
-                            .build()
-                    },
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -473,7 +456,10 @@ fun TokenCount(prompt: String) {
     Text("$tokens / $limit tokens", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
 }
 
-/** A plain list to pick one of (samplers, schedules, upscalers, VAEs). */
+/**
+ * A plain list to pick one of (samplers, schedules, upscalers, VAEs). With [groups] the options come in labelled
+ * sections instead (hires fix: LATENT, UPSCALERS, 3.0.1); [onRefresh] adds a refresh button next to the title.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OptionPickerSheet(
@@ -482,10 +468,18 @@ fun OptionPickerSheet(
     selected: String?,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
+    groups: List<Pair<String, List<String>>> = emptyList(),
+    onRefresh: (() -> Unit)? = null,
 ) {
+    val sections = groups.filter { it.second.isNotEmpty() }.ifEmpty { listOf("" to options) }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-        if (options.isEmpty()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 24.dp, end = 12.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp, modifier = Modifier.weight(1f).padding(vertical = 8.dp))
+            if (onRefresh != null) {
+                IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Refresh $title List") }
+            }
+        }
+        if (sections.all { it.second.isEmpty() }) {
             Text(
                 "Not loaded from the server yet.",
                 fontSize = 14.sp,
@@ -494,20 +488,34 @@ fun OptionPickerSheet(
             )
         }
         LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
-            items(options) { option ->
-                val on = option == selected
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { onPick(option) }.padding(horizontal = 24.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        option,
-                        fontSize = 15.sp,
-                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (on) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            sections.forEach { (label, sectionOptions) ->
+                if (label.isNotEmpty()) {
+                    item(key = "label:$label") {
+                        Text(
+                            label.uppercase(Locale.getDefault()),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.96.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 4.dp),
+                        )
+                    }
+                }
+                items(sectionOptions, key = { "$label:$it" }) { option ->
+                    val on = option == selected
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onPick(option) }.padding(horizontal = 24.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            option,
+                            fontSize = 15.sp,
+                            color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (on) Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }
@@ -671,6 +679,7 @@ fun GenerationCard(
 ) {
     val modelResource = models.find { it.name == selectedModel || it.title == selectedModel }
     val modelTitle = modelResource?.title ?: selectedModel
+    val latentModes by viewModel.latentModes.collectAsStateWithLifecycle()
     val settings = ModelSettingsRules.of(config.modelSettings, modelTitle)
     val type = settings.modelType
     var pickModel by remember { mutableStateOf(false) }
@@ -684,7 +693,10 @@ fun GenerationCard(
             title = if (modelTitle.isEmpty()) "No Model Loaded" else ModelSettingsRules.key(modelTitle),
             subtitle = ModelSettingsRules.summary(settings),
             onClick = { pickModel = true },
-            leading = { ResourceThumb(modelResource?.let { remember(it.path) { viewModel.getPreviewUrl(it.path, isLora = false) } }) },
+            leading = {
+                val candidates = remember(modelResource?.path) { modelResource?.let { viewModel.previewCandidates(it.path, isLora = false) } }
+                ResourceThumb(candidates.orEmpty())
+            },
             trailing = {
                 IconButton(onClick = { tuneModel = true }, enabled = modelTitle.isNotEmpty()) {
                     Icon(Icons.Default.Layers, contentDescription = "Model Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -821,7 +833,7 @@ fun GenerationCard(
             title = "Model",
             items = models,
             isSelected = { it.name == selectedModel || it.title == selectedModel },
-            previewUrl = { viewModel.getPreviewUrl(it.path, isLora = false) },
+            previewCandidates = { viewModel.previewCandidates(it.path, isLora = false) },
             onPick = {
                 viewModel.changeCheckpoint(it.name)
                 pickModel = false
@@ -840,6 +852,7 @@ fun GenerationCard(
             onSaveDefaults = { turnOn -> viewModel.saveModelDefaults(modelTitle, turnOn) },
             onApplyDefaults = { defaults -> viewModel.updateState { ModelSettingsRules.applyDefaults(it, defaults) } },
             onDismiss = { tuneModel = false },
+            onRefreshModules = { viewModel.refreshModules() },
         )
     }
     when (picking) {
@@ -854,10 +867,18 @@ fun GenerationCard(
                 picking = null
             }, onDismiss = { picking = null })
         "Upscaler" ->
-            OptionPickerSheet("Upscaler", upscalers, state.upscaler, onPick = { v ->
-                viewModel.updateState { it.copy(upscaler = v) }
-                picking = null
-            }, onDismiss = { picking = null })
+            // The latent modes first (3.0.1: they were missing, so "Latent" could not be picked again).
+            OptionPickerSheet(
+                "Upscaler",
+                latentModes + upscalers,
+                state.upscaler,
+                onPick = { v ->
+                    viewModel.updateState { it.copy(upscaler = v) }
+                    picking = null
+                },
+                onDismiss = { picking = null },
+                groups = listOf("Latent" to latentModes, "Upscalers" to upscalers),
+            )
     }
 }
 
@@ -947,6 +968,8 @@ fun ModelSettingsSheet(
     onSaveDefaults: (turnOn: Boolean) -> Unit,
     onApplyDefaults: (ModelDefaults) -> Unit,
     onDismiss: () -> Unit,
+    // Refresh in the VAE and text encoder lists (3.0.1).
+    onRefreshModules: (() -> Unit)? = null,
 ) {
     val type = settings.modelType
     var pickVae by remember { mutableStateOf(false) }
@@ -1067,6 +1090,7 @@ fun ModelSettingsSheet(
                 pickVae = false
             },
             onDismiss = { pickVae = false },
+            onRefresh = onRefreshModules,
         )
     }
     if (pickEncoders) {
@@ -1074,12 +1098,17 @@ fun ModelSettingsSheet(
             onDismissRequest = { pickEncoders = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
-            Text(
-                "Text Encoders",
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 24.dp, end = 12.dp)) {
+                Text(
+                    "Text Encoders",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+                )
+                if (onRefreshModules != null) {
+                    IconButton(onClick = onRefreshModules) { Icon(Icons.Default.Refresh, contentDescription = "Refresh Text Encoder List") }
+                }
+            }
             if (encoders.isEmpty()) {
                 Text(
                     "The server lists no text encoders.",
@@ -1138,7 +1167,7 @@ fun LorasCard(
                 modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ResourceThumb(resource?.let { remember(it.path) { viewModel.getPreviewUrl(it.path, isLora = true) } })
+                ResourceThumb(resource?.let { remember(it.path) { viewModel.previewCandidates(it.path, isLora = true) } }.orEmpty())
                 Spacer(Modifier.width(14.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1173,7 +1202,7 @@ fun LorasCard(
             title = "LoRA",
             items = availableLoras,
             isSelected = { lora -> activeLoras.any { it.name == lora.name } },
-            previewUrl = { viewModel.getPreviewUrl(it.path, isLora = true) },
+            previewCandidates = { viewModel.previewCandidates(it.path, isLora = true) },
             onPick = {
                 viewModel.addLora(it.name)
                 pickLora = false

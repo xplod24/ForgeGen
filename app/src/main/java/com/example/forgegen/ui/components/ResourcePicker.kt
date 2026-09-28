@@ -2,8 +2,10 @@ package com.example.forgegen.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -25,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -40,8 +43,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.network.HttpException
 import coil.request.ImageRequest
 import com.example.forgegen.ApiResource
+import com.example.forgegen.ResourcePreviews
 
 /* ============================================================================
  * RESOURCE PICKER
@@ -55,7 +60,8 @@ fun ResourcePickerSheet(
     title: String,
     items: List<ApiResource>,
     isSelected: (ApiResource) -> Boolean,
-    previewUrl: (ApiResource) -> String,
+    // The pictures a model may have, in the order to try them (ResourcePreviews, 3.0.1).
+    previewCandidates: (ApiResource) -> List<String>,
     onPick: (ApiResource) -> Unit,
     onDismiss: () -> Unit,
     // Asks the server for its list again (the old "Check Checkpoints" / "Check Loras" buttons, 3.0.0).
@@ -101,25 +107,15 @@ fun ResourcePickerSheet(
                                 ).clickable { onPick(resource) }
                                 .padding(vertical = 6.dp, horizontal = 4.dp),
                     ) {
-                        val url = remember(resource.path) { previewUrl(resource) }
-                        AsyncImage(
-                            model =
-                                remember(url) {
-                                    ImageRequest
-                                        .Builder(context)
-                                        .data(url)
-                                        .size(160) // a small preview, not the full picture
-                                        .crossfade(true)
-                                        .build()
-                                },
-                            contentDescription = null,
+                        val candidates = remember(resource.path) { previewCandidates(resource) }
+                        ResourcePreview(
+                            candidates = candidates,
                             modifier =
                                 Modifier
                                     .padding(end = 10.dp)
                                     .size(44.dp)
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(Color.DarkGray),
-                            contentScale = ContentScale.Crop,
                         )
                         Text(
                             text = resource.title,
@@ -139,3 +135,47 @@ fun ResourcePickerSheet(
         }
     }
 }
+
+/**
+ * A model's or LoRA's picture (3.0.1): tries [candidates] in turn until the server has one, and remembers the answer
+ * (ResourcePreviews); [placeholder] shows while none is loaded. Only a missing file (an HTTP error) moves on: with no
+ * network the same picture is tried again next time.
+ */
+@Composable
+fun ResourcePreview(
+    candidates: List<String>,
+    modifier: Modifier = Modifier,
+    placeholder: @Composable () -> Unit = {},
+) {
+    val context = LocalContext.current
+    var index by remember(candidates) { mutableIntStateOf(ResourcePreviews.startIndex(candidates)) }
+    var loaded by remember(candidates) { mutableStateOf(false) }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        if (!loaded) placeholder()
+        val url = candidates.getOrNull(index)
+        if (url != null) {
+            AsyncImage(
+                model =
+                    remember(url) {
+                        ImageRequest
+                            .Builder(context)
+                            .data(url)
+                            .size(160) // a small preview, not the full picture
+                            .crossfade(true)
+                            .build()
+                    },
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onSuccess = {
+                    loaded = true
+                    ResourcePreviews.loaded(candidates, index)
+                },
+                onError = { error ->
+                    if (error.result.throwable is HttpException) index = ResourcePreviews.missing(candidates, index)
+                },
+            )
+        }
+    }
+}
+

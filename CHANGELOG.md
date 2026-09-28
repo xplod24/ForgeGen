@@ -1,3 +1,13 @@
+## 3.0.1
+**Bugfix** · hires fix's latent upscalers are back, VAE lists can be refreshed, and more model and LoRA pictures show
+
+### New
+- **Refresh in the VAE and text encoder lists** (model settings): the server looks for new VAE files and the lists are read again. Forge itself adds new files to these lists after Refresh in its web UI or a restart; the app then shows them without reconnecting.
+
+### Fixed
+- **Hires fix's latent upscalers:** the Upscaler list now starts with Latent, Latent (antialiased), Latent (bicubic), Latent (bicubic antialiased), Latent (nearest) and Latent (nearest-exact), as in the web UI. Before, after picking another upscaler there was no way back to Latent. "Upscale Selected" in the gallery lists them too.
+- **Model and LoRA pictures:** a picture saved next to the file as .png, .jpg, .jpeg or .webp (with or without ".preview") now shows in the model and LoRA lists. Before, only `<name>.preview.png` did. The app remembers which picture a model has, and that it has none, so the lists do not ask the server again; refreshing the model or LoRA list asks anew.
+
 ## 3.0.0-4
 **Bugfix** · a lighter top bar on the main screen, and unloading the model shows what it freed
 

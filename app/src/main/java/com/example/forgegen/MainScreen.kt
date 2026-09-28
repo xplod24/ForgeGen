@@ -113,40 +113,24 @@ fun MainScreen(
     // Focus manager to clear focus and dismiss keyboard
     val focusManager = LocalFocusManager.current
 
+    // The pictures of the model and the LoRAs in use, loaded ahead once the app knows which file each has
+    // (ResourcePreviews, 3.0.1); unknown ones are found by the rows themselves.
     LaunchedEffect(selectedModel, activeLoras, models, availableLoras) {
         launch(Dispatchers.IO) {
-            val currentModelResource = models.find { it.name == selectedModel || it.title == selectedModel }
-            if (currentModelResource != null) {
-                val url = viewModel.getPreviewUrl(currentModelResource.path, isLora = false)
-                if (url.isNotEmpty()) {
-                    val request =
-                        ImageRequest
-                            .Builder(context)
-                            .data(url)
-                            .size(150)
-                            .memoryCachePolicy(CachePolicy.ENABLED)
-                            .diskCachePolicy(CachePolicy.ENABLED)
-                            .build()
-                    imageLoader.enqueue(request)
-                }
-            }
-
-            activeLoras.forEach { activeLora ->
-                val loraResource = availableLoras.find { it.name == activeLora.name }
-                if (loraResource != null) {
-                    val url = viewModel.getPreviewUrl(loraResource.path, isLora = true)
-                    if (url.isNotEmpty()) {
-                        val request =
-                            ImageRequest
-                                .Builder(context)
-                                .data(url)
-                                .size(150)
-                                .memoryCachePolicy(CachePolicy.ENABLED)
-                                .diskCachePolicy(CachePolicy.ENABLED)
-                                .build()
-                        imageLoader.enqueue(request)
-                    }
-                }
+            val paths =
+                listOfNotNull(models.find { it.name == selectedModel || it.title == selectedModel }?.path?.let { it to false }) +
+                    activeLoras.mapNotNull { active -> availableLoras.find { it.name == active.name }?.path?.let { it to true } }
+            paths.forEach { (path, isLora) ->
+                val url = ResourcePreviews.known(viewModel.previewCandidates(path, isLora)) ?: return@forEach
+                val request =
+                    ImageRequest
+                        .Builder(context)
+                        .data(url)
+                        .size(150)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build()
+                imageLoader.enqueue(request)
             }
         }
     }

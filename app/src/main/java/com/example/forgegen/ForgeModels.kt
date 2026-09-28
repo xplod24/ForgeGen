@@ -462,6 +462,29 @@ data class NameResponseDto(
     val name: String,
 )
 
+/** Hires fix's upscalers (3.0.1): the latent modes first, then the upscalers, as in the web UI. */
+object HiresUpscalers {
+    // Forge's and A1111's shared.latent_upscale_modes, for a server that does not list them.
+    val LATENT_MODES =
+        listOf(
+            "Latent",
+            "Latent (antialiased)",
+            "Latent (bicubic)",
+            "Latent (bicubic antialiased)",
+            "Latent (nearest)",
+            "Latent (nearest-exact)",
+        )
+
+    /** The server's latent modes, or the usual ones when it listed none. */
+    fun latentModes(fromServer: List<String>?): List<String> = fromServer?.filter { it.isNotBlank() }?.ifEmpty { null } ?: LATENT_MODES
+
+    /** The upscalers without the latent modes (a server listing both would show them twice). */
+    fun upscalers(
+        latent: List<String>,
+        upscalers: List<String>,
+    ): List<String> = upscalers.filter { it !in latent }
+}
+
 /** One module of Forge's `sd-modules` (VAEs and text encoders) or of A1111's `sd-vae`. */
 data class SdModuleItemDto(
     @SerializedName("model_name") val modelName: String? = null,
