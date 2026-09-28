@@ -303,7 +303,33 @@ class ForgeNetworkManager(
                                 }
                             }
 
-                        awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts)
+                        // The VAEs and text encoders model settings pick from (3.0.0): Forge's list, else A1111's VAEs.
+                        val defModules =
+                            async {
+                                try {
+                                    val forge = forgeApi?.getSdModules()
+                                    if (forge?.isSuccessful == true) {
+                                        val modules = forge.body().orEmpty().mapNotNull { ModelSettingsRules.module(it.modelName, it.filename) }
+                                        ForgeModelManager.updateModules(modules, ModuleSupport.FORGE)
+                                    } else {
+                                        val a1111 = forgeApi?.getSdVaes()
+                                        if (a1111?.isSuccessful == true) {
+                                            val vaes =
+                                                a1111.body().orEmpty().mapNotNull {
+                                                    ModelSettingsRules.module(it.modelName, it.filename)?.copy(kind = ServerModule.Kind.VAE)
+                                                }
+                                            ForgeModelManager.updateModules(vaes, ModuleSupport.A1111)
+                                        } else {
+                                            ForgeModelManager.updateModules(emptyList(), ModuleSupport.NONE)
+                                        }
+                                    }
+                                } catch (e: Exception) {
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                    Log.e(TAG, "Failed modules: $e")
+                                }
+                            }
+
+                        awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts, defModules)
                         lastFetchHadLists = defSamplers.await() && defModelsAndLoras.await()
                     }
                 } catch (e: Exception) {

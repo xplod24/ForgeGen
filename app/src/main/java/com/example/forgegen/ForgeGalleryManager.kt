@@ -1717,6 +1717,11 @@ object ForgeGalleryManager {
         _imageJobs.value = null
     }
 
+    /** Another tab of the selection's dialog (Upscale, Variance on Seed); the images' data stays. */
+    fun setImageJobsKind(kind: ImageJobs.Kind) {
+        _imageJobs.update { it?.copy(kind = kind) }
+    }
+
     /** Queues the upscales of the dialog's images, one job per image; images already that large are left out. */
     fun queueUpscales(
         scale: Float,
@@ -1744,6 +1749,20 @@ object ForgeGalleryManager {
         ForgeQueueManager.queueJobs(jobs)
         _imageJobs.value = null
         ForgeRepository.showToast(queuedMessage(jobs.size, 0))
+    }
+
+    /**
+     * Queues "Variance on Seed" of the dialog's images (3.0.0): each keeps its seed, the jobs vary what [spec] says;
+     * nothing when that is more than MAX_VARIANCE_JOBS (the dialog does not offer it then).
+     */
+    fun queueVariance(spec: ImageJobs.VarianceSpec) {
+        val sources = _imageJobs.value?.sources ?: return
+        val ready = sources.filterIsInstance<ImageJobs.Source.Ready>()
+        if (ImageJobs.varianceCount(ready, spec) > ImageJobs.MAX_VARIANCE_JOBS) return
+        val jobs = ready.flatMap { ImageJobs.variance(it, spec) }
+        ForgeQueueManager.queueJobs(jobs)
+        _imageJobs.value = null
+        ForgeRepository.showToast(queuedMessage(jobs.size, sources.size - ready.size))
     }
 
     private fun queuedMessage(

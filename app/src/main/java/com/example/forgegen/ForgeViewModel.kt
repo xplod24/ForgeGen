@@ -399,6 +399,10 @@ class ForgeViewModel(
         strength: Float,
     ) = ForgeGalleryManager.queueMoreLikeThis(similar, count, strength)
 
+    fun setImageJobsKind(kind: ImageJobs.Kind) = ForgeGalleryManager.setImageJobsKind(kind)
+
+    fun queueVariance(spec: ImageJobs.VarianceSpec) = ForgeGalleryManager.queueVariance(spec)
+
     fun galleryBreadcrumb(path: String): List<Pair<String, String>> = ForgeGalleryManager.breadcrumb(path)
 
     fun galleryParentFolder(path: String): String? = ForgeGalleryManager.parentFolder(path)
@@ -712,7 +716,34 @@ class ForgeViewModel(
 
     fun recoverLastPrompt() = ForgeGalleryManager.recoverLastPrompt()
 
-    fun changeCheckpoint(modelTitle: String) = networkManager.changeCheckpoint(modelTitle)
+    fun changeCheckpoint(modelTitle: String) {
+        networkManager.changeCheckpoint(modelTitle)
+        // The model's own defaults, only when the user ticked them for it (3.0.0, owner's idea 6).
+        val settings = ModelSettingsRules.of(config.value.modelSettings, modelTitle)
+        val defaults = settings.defaults
+        if (settings.useDefaults && defaults != null) {
+            updateState { ModelSettingsRules.applyDefaults(it, defaults) }
+            showToast("${ModelSettingsRules.key(modelTitle)}: defaults applied")
+        }
+    }
+
+    // Model settings (3.0.0): what each checkpoint is, its modules and its own defaults.
+    val serverModules: StateFlow<List<ServerModule>> = ForgeModelManager.modules
+    val moduleSupport: StateFlow<ModuleSupport> = ForgeModelManager.moduleSupport
+
+    fun updateModelSettings(
+        model: String,
+        transform: (ModelSettings) -> ModelSettings,
+    ) {
+        val current = config.value
+        val key = ModelSettingsRules.key(model)
+        val updated = transform(current.modelSettings[key] ?: ModelSettings())
+        saveConfig(current.copy(modelSettings = current.modelSettings + (key to updated)))
+    }
+
+    /** The main screen's size, steps, CFG, sampler, schedule and clip skip become [model]'s defaults, switched on. */
+    fun saveModelDefaults(model: String) =
+        updateModelSettings(model) { it.copy(defaults = ModelSettingsRules.defaultsOf(appState.value), useDefaults = true) }
 
 
     fun appendLora(loraName: String) = ForgeRepository.appendLora(loraName)

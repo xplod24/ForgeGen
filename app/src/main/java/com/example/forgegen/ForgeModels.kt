@@ -86,6 +86,8 @@ data class AppConfig(
     var galleryTab: String = GalleryTab.GALLERY.name,
     // Tags, wildcards and LoRAs suggested above the keyboard while a prompt is typed (2.4.2).
     var tagSuggestions: Boolean = true,
+    // What each checkpoint is and needs, and its own defaults (3.0.0), under ModelSettingsRules.key of the model.
+    var modelSettings: Map<String, ModelSettings> = emptyMap(),
 )
 
 /** The gallery's tabs: the folders of the server's gallery, the favorites, and every image newest first. */
@@ -373,6 +375,10 @@ data class OverrideSettingsDto(
     // gives the same image only with the same values. Null is not sent.
     @SerializedName("eta_noise_seed_delta") val etaNoiseSeedDelta: Int? = null,
     @SerializedName("randn_source") val randnSource: String? = null,
+    // The model's modules (3.0.0, ModelSettingsRules.applyTo): Forge takes VAE and text encoder file names here for
+    // the job, A1111 a VAE in sd_vae. Null is not sent (the server's own choice stays).
+    @SerializedName("forge_additional_modules") val forgeAdditionalModules: List<String>? = null,
+    @SerializedName("sd_vae") val sdVae: String? = null,
 )
 
 data class Txt2ImgPayloadDto(
@@ -401,6 +407,8 @@ data class Txt2ImgPayloadDto(
     val hr_second_pass_steps: Int = 0,
     // Forge's text encoder/VAE choice for the hires pass; set by forServer() (null is not sent).
     val hr_additional_modules: List<String>? = null,
+    // FLUX's distilled CFG (3.0.0, the model's settings or the image's data); null is not sent.
+    val distilled_cfg_scale: Float? = null,
 )
 
 /**
@@ -445,6 +453,12 @@ data class OptionsResponseDto(
 
 data class NameResponseDto(
     val name: String,
+)
+
+/** One module of Forge's `sd-modules` (VAEs and text encoders) or of A1111's `sd-vae`. */
+data class SdModuleItemDto(
+    @SerializedName("model_name") val modelName: String? = null,
+    val filename: String? = null,
 )
 
 data class SdModelItemDto(

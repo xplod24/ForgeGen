@@ -348,6 +348,7 @@ object ForgeSettingsManager {
             galleryView = GalleryView.of(parsed?.galleryView).name,
             galleryTab = GalleryTab.of(parsed?.galleryTab).name,
             tagSuggestions = parsed?.tagSuggestions ?: true,
+            modelSettings = parsed?.modelSettings.orEmpty(),
         )
     }
 

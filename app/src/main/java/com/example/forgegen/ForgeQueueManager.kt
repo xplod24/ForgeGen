@@ -545,7 +545,7 @@ object ForgeQueueManager {
             val finalPositive = applyWildcards(state.positivePrompt, wildcards)
             val finalNegative = applyWildcards(state.negativePrompt, wildcards)
 
-            val payload =
+            val built =
                 Txt2ImgPayloadDto(
                     prompt = finalPositive,
                     negative_prompt = finalNegative,
@@ -570,6 +570,8 @@ object ForgeQueueManager {
                     save_images = state.saveImages,
                     send_images = true,
                 )
+            // The model's type and modules as the user set them (3.0.0); "Auto" changes nothing.
+            val payload = ForgeModelManager.withModelSettings(built, currentModel)
 
             val item =
                 QueuedGeneration(
@@ -608,13 +610,15 @@ object ForgeQueueManager {
      */
     fun queueJobs(jobs: List<Pair<Txt2ImgPayloadDto, String>>) {
         if (jobs.isEmpty()) return
+        val currentModel = ForgeRepository.selectedModel.value.ifEmpty { null }
         ForgeRepository.repositoryScope.launch(queueingDispatcher) {
             val items =
                 jobs.map { (payload, label) ->
                     QueuedGeneration(
                         id = UUID.randomUUID().toString(),
                         positivePrompt = payload.prompt,
-                        payload = payload,
+                        // The settings of the model each image was made with (3.0.0).
+                        payload = ForgeModelManager.withModelSettings(payload, currentModel),
                         status = GenerationStatus.QUEUED,
                         label = label,
                     )

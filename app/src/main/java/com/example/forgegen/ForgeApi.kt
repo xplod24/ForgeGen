@@ -81,6 +81,14 @@ interface ForgeApi {
     @GET("sdapi/v1/loras")
     suspend fun getLoras(): Response<List<LoraItemDto>>
 
+    /** Forge's VAEs and text encoders (3.0.0, model settings). */
+    @GET("sdapi/v1/sd-modules")
+    suspend fun getSdModules(): Response<List<SdModuleItemDto>>
+
+    /** A1111's VAEs, where the server has no sd-modules. */
+    @GET("sdapi/v1/sd-vae")
+    suspend fun getSdVaes(): Response<List<SdModuleItemDto>>
+
     // --- Custom API & Infinite Image Browsing ---
 
     @GET("customapi/v1/all-models-hashes")
