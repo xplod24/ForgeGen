@@ -670,6 +670,13 @@ class ForgeViewModel(
 
     fun downloadUpdate() = updateManager.downloadUpdate()
 
+    // The downloaded, checked update; the one being installed; the system's confirmation waiting (3.0.0-3).
+    val readyUpdate: StateFlow<SelfUpdate.ReadyUpdate?> = SelfUpdate.readyUpdate
+    val installingUpdate: StateFlow<String?> = SelfUpdate.installing
+    val updateConfirm: StateFlow<android.content.Intent?> = SelfUpdate.pendingConfirm
+
+    fun installUpdate(sendToBackground: () -> Unit) = updateManager.installUpdate(sendToBackground)
+
     // --- REFRESH, VRAM & PNG INFO ACTIONS ---
     fun refreshCheckpoints() {
         networkManager.refreshCheckpoints { success, msg ->

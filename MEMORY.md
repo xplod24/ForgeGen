@@ -178,13 +178,22 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   Protect shows its prompt (sideloaded, debug-signed, debuggable app). Fewer prompts would need the postponed
   release build (own release key, non-debuggable), which is a separate app id and signature: a one-time move with
   Settings > Backup export/import. `GitHubApi.baseUrl` is overridable for tests (G34).
-  "Install Update" (2.3.0-1): `ForgeUpdateManager.downloadUpdate` starts `UpdateDownloadService` (foreground service,
-  type dataSync + FOREGROUND_SERVICE_DATA_SYNC, a 20-min partial wake lock), which runs `SelfUpdate.download` and
-  `install`; the download used to run in the ViewModel's scope and stopped when the screen locked (the phone froze
-  the backgrounded app). Progress: `SelfUpdate.downloadProgress` (`DownloadProgress`: version, done, total,
-  installing), shown in Settings > Updates and in notification `ID_DOWNLOAD_NOTIFICATION` (ProgressStyle +
-  setRequestPromotedOngoing + short critical text when `NowBar.isSupported` and `nowBarProgress`). A failure posts
-  "ForgeGen update failed"; if PackageInstaller cannot be used, a notification opens the system installer. Tests: G35.
+  From the app it is two steps since 3.0.0-3 (owner's bug report: after the download the card offered "Install Update"
+  again and each tap started another install while the app was open, a loop). "Download" =
+  `ForgeUpdateManager.downloadUpdate` -> `UpdateDownloadService` (foreground service, type dataSync +
+  FOREGROUND_SERVICE_DATA_SYNC, a 20-min partial wake lock) runs only `SelfUpdate.download` (SHA-256 checked) and
+  then `SelfUpdate.markReady` (`readyUpdate`; prefs `ready_update` = "<versionCode>:<length>", `refreshReady` on every
+  check finds it again after a restart; `notifyReady` when the app is not on screen). Progress:
+  `SelfUpdate.downloadProgress` (`DownloadProgress`: version, done, total) in Settings > Updates and notification
+  `ID_DOWNLOAD_NOTIFICATION` (ProgressStyle + setRequestPromotedOngoing + short critical text when
+  `NowBar.isSupported` and `nowBarProgress`). "Install" (card "Update Ready", a dialog first while the queue works) =
+  `installUpdate(sendToBackground)`: `installing` is set at once (no button while it is set: the card shows
+  "Installing", and "Confirm Install" when `UpdateStatusReceiver` kept the system's confirmation in
+  `pendingConfirm`), the file's SHA-256 is checked again (damaged: `clearReady`, toast), the app goes to the
+  background (`moveTaskToBack`, the owner's request), then `SelfUpdate.install`. `notifyFailed` clears `installing`
+  (Install can be tapped again, the file stays ready); `onUpdated` clears `readyUpdate`. If PackageInstaller cannot be
+  used, `offerInstallerScreen` posts a notification with the system installer. A failed download posts "ForgeGen update
+  failed". Tests: G35 (5).
 - **Compose animations outside composition (2.0.1):** `Animatable.animateTo` (and anything using `withFrameNanos`) needs
   Compose's frame clock: run it in a `LaunchedEffect` or with `AndroidUiDispatcher.Main`, never in a plain
   `lifecycleScope`/`Dispatchers.Main` coroutine. 2.0.0 did that for the splash's reveal and crashed at every start
@@ -218,7 +227,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: "What's New" once after an update, since 3.0.0 as the floating bar (the notes open only on "Show").
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.
-- **Update downloads (owner's request, 2.3.0-1; replaces the old "block the UI while downloading" rule):** no blocking dialog. "Install Update" starts `UpdateDownloadService` and the app stays open (2.3.0-3: 2.3.0-1 moved it to the background with `moveTaskToBack`, which the owner did not like); its progress is a notification (a Live Update in the Now Bar when supported and "Show Progress in Now Bar" is on) and a card in Settings > Updates.
+- **Update downloads (owner's request, 2.3.0-1; replaces the old "block the UI while downloading" rule):** no blocking dialog. "Download" starts `UpdateDownloadService` and the app stays open (2.3.0-3: 2.3.0-1 moved it to the background with `moveTaskToBack` during the download, which the owner did not like); its progress is a notification (a Live Update in the Now Bar when supported and "Show Progress in Now Bar" is on) and a card in Settings > Updates. Installing is a separate "Install" tap, and that one does send the app to the background (owner's request, 3.0.0-3), so Android can replace it.
 - **Tag Editors:** The active tags UI uses a sleek collapsible design (`AnimatedVisibility`) driven by a horizontal separator to save space while keeping it accessible.
 - **Clean Settings:** Deprecated features (like Image Previews in notifications and Alert Priorities) are completely ripped out of the backend code, not just hidden from the UI.
 

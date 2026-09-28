@@ -1,6 +1,5 @@
 package com.example.forgegen
 
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -10,7 +9,6 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
-import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,11 +20,12 @@ import java.util.Locale
 
 /* ============================================================================
  * UPDATE DOWNLOAD (2.3.0-1)
- * "Install Update" in the settings downloads the release here, in a foreground service: the app itself goes to the
- * background, and a locked screen no longer stops the download (it ran in the screen's own coroutine before and the
- * phone froze it). The progress is a notification (a Live Update in Samsung's Now Bar where the phone offers it and
- * "Show Progress in Now Bar" is on) and a card in Settings > Updates (SelfUpdate.downloadProgress). The downloaded
- * file is checked and installed by SelfUpdate, as the background update does.
+ * "Download" in Settings > Updates downloads the release here, in a foreground service, so a locked screen or the app
+ * in the background does not stop it (it ran in the screen's own coroutine before and the phone froze it). The
+ * progress is a notification (a Live Update in Samsung's Now Bar where the phone offers it and "Show Progress in Now
+ * Bar" is on) and a card in Settings > Updates (SelfUpdate.downloadProgress). Since 3.0.0-3 it only downloads: a file
+ * whose SHA-256 matches the release becomes SelfUpdate.readyUpdate, and "Install" (ForgeUpdateManager.installUpdate)
+ * is a separate tap.
  * ============================================================================ */
 class UpdateDownloadService : Service() {
     companion object {
@@ -42,7 +41,7 @@ class UpdateDownloadService : Service() {
         // A long download must not keep the phone awake forever if something hangs.
         private const val WAKE_LOCK_TIMEOUT_MS = 20 * 60 * 1000L
 
-        /** Downloads and installs [manifest] in the background. */
+        /** Downloads [manifest] in the background and keeps it ready to install. */
         fun start(
             context: Context,
             manifest: UpdateManifest,
@@ -90,12 +89,12 @@ class UpdateDownloadService : Service() {
             return START_NOT_STICKY
         }
         if (job?.isActive == true) return START_NOT_STICKY // a second tap while it downloads
-        job = scope.launch { downloadAndInstall(manifest) }
+        job = scope.launch { download(manifest) }
         return START_NOT_STICKY
     }
 
     private fun startInForeground(versionName: String) {
-        val notification = progressNotification(versionName, 0L, 0L, installing = false)
+        val notification = progressNotification(versionName, 0L, 0L)
         try {
             ServiceCompat.startForeground(this, ID_DOWNLOAD_NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } catch (e: Exception) {
@@ -103,7 +102,7 @@ class UpdateDownloadService : Service() {
         }
     }
 
-    private suspend fun downloadAndInstall(manifest: UpdateManifest) {
+    private suspend fun download(manifest: UpdateManifest) {
         holdWakeLock()
         val name = manifest.versionName
         try {
@@ -117,23 +116,16 @@ class UpdateDownloadService : Service() {
                     // The notification only when the percentage changes: posting it on every chunk would be throttled.
                     if (percent != shownPercent) {
                         shownPercent = percent
-                        ForgeNotifications.post(ID_DOWNLOAD_NOTIFICATION, progressNotification(name, done, total, installing = false))
+                        ForgeNotifications.post(ID_DOWNLOAD_NOTIFICATION, progressNotification(name, done, total))
                     }
                 }
             if (!downloaded) {
                 fail("The download failed or did not match the release. Try again from Settings > Updates.")
                 return
             }
-            SelfUpdate.setDownloadProgress(SelfUpdate.DownloadProgress(name, file.length(), file.length(), installing = true))
-            ForgeNotifications.post(ID_DOWNLOAD_NOTIFICATION, progressNotification(name, file.length(), file.length(), installing = true))
-            try {
-                // Where Android allows it the app is replaced at once (and this process ends); otherwise the system's
-                // confirmation comes through UpdateStatusReceiver.
-                SelfUpdate.install(this, file, name)
-            } catch (e: Exception) {
-                Log.e(TAG, "PackageInstaller session failed, offering the installer screen", e)
-                offerInstallerScreen(file, name)
-            }
+            // Checked: "Install" in Settings > Updates takes it from here. Off screen, a notification says so.
+            SelfUpdate.markReady(this, manifest, file)
+            if (!SelfUpdate.isAppOnScreen()) SelfUpdate.notifyReady(this, name)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -151,20 +143,18 @@ class UpdateDownloadService : Service() {
         versionName: String,
         done: Long,
         total: Long,
-        installing: Boolean,
     ): android.app.Notification {
         val percent = if (total > 0) (done * 100 / total).toInt().coerceIn(0, 100) else 0
-        val unknown = total <= 0 || installing
+        val unknown = total <= 0
         val base =
             ForgeNotifications.builder(ForgeNotifications.CHANNEL_PROGRESS)
                 ?: NotificationCompat.Builder(this, ForgeNotifications.CHANNEL_PROGRESS)
         val builder =
             base
                 .setSmallIcon(R.mipmap.ic_launcher_foreground)
-                .setContentTitle(if (installing) "Installing ForgeGen $versionName" else "Downloading ForgeGen $versionName".trim())
+                .setContentTitle("Downloading ForgeGen $versionName".trim())
                 .setContentText(
                     when {
-                        installing -> "ForgeGen closes to update; a notification says when it is done"
                         total > 0 -> "$percent% · ${megabytes(done)} / ${megabytes(total)} MB"
                         else -> "Starting the download"
                     },
@@ -178,42 +168,20 @@ class UpdateDownloadService : Service() {
                 .setRequestPromotedOngoing(true)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setStyle(NotificationCompat.ProgressStyle().setProgress(percent).setProgressIndeterminate(unknown))
-            if (percent > 0 && !installing) builder.setShortCriticalText("$percent%")
+            if (percent > 0) builder.setShortCriticalText("$percent%")
         } else {
             builder.setProgress(100, percent, unknown)
         }
         return builder.build()
     }
 
-    /** The download failed: a notification that says why (tap: the app, where "Install Update" tries again). */
+    /** The download failed: a notification that says why (tap: the app, where "Download" tries again). */
     private fun fail(message: String) {
         val notification =
             ForgeNotifications
                 .builder(ForgeNotifications.CHANNEL_RESULTS)
                 ?.setContentTitle("ForgeGen update failed")
                 ?.setContentText(message)
-                ?.setAutoCancel(true)
-                ?.build() ?: return
-        ForgeNotifications.post(SelfUpdate.ID_UPDATE_NOTIFICATION, notification)
-    }
-
-    /** PackageInstaller could not be used: the system's installer screen, one tap away in a notification. */
-    private fun offerInstallerScreen(
-        file: java.io.File,
-        versionName: String,
-    ) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        val view =
-            Intent(Intent.ACTION_VIEW)
-                .setDataAndType(uri, "application/vnd.android.package-archive")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val tap = PendingIntent.getActivity(this, 8, view, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification =
-            ForgeNotifications
-                .builder(ForgeNotifications.CHANNEL_RESULTS)
-                ?.setContentTitle("Install ForgeGen $versionName")
-                ?.setContentText("Downloaded. Tap to install it.")
-                ?.setContentIntent(tap)
                 ?.setAutoCancel(true)
                 ?.build() ?: return
         ForgeNotifications.post(SelfUpdate.ID_UPDATE_NOTIFICATION, notification)

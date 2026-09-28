@@ -36,6 +36,10 @@ import java.security.MessageDigest
  *   offers the update there; "Install Update" downloads it in UpdateDownloadService). "Install Updates
  *   Automatically" off: only a notification.
  * - After a silent update UpdatedReceiver says so in a notification (the app itself is not restarted).
+ * - From the app (3.0.0-3, the owner's request) it is two steps: "Download" (UpdateDownloadService) keeps the file once
+ *   its SHA-256 matches the release (readyUpdate), and only then "Install" sends the app to the background and hands
+ *   the file to PackageInstaller (installing until the app is replaced or the system says why not). One tap used to
+ *   do both, and the card offered it again while the install waited, so each tap started another install.
  * ============================================================================ */
 object SelfUpdate {
     private const val TAG = "SelfUpdate"
@@ -51,18 +55,20 @@ object SelfUpdate {
     private const val KEY_INSTALLING = "installing_version"
     private const val KEY_NOTIFIED = "notified_version"
 
+    // "<versionCode>:<file length>" of the downloaded update whose SHA-256 matched the release.
+    private const val KEY_READY = "ready_update"
+
     /** What the background check does with the latest release. */
     enum class Action { NONE, NOTIFY, WAIT, INSTALL }
 
     /**
-     * An update downloaded from the app ("Install Update", UpdateDownloadService): its version, the bytes so far and
-     * in all (0: not known yet), and whether it is being installed. Settings > Updates shows it.
+     * An update downloaded from the app ("Download", UpdateDownloadService): its version and the bytes so far and in
+     * all (0: not known yet). Settings > Updates shows it.
      */
     data class DownloadProgress(
         val versionName: String,
         val done: Long,
         val total: Long,
-        val installing: Boolean = false,
     ) {
         val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
     }
@@ -72,6 +78,63 @@ object SelfUpdate {
 
     fun setDownloadProgress(progress: DownloadProgress?) {
         _downloadProgress.value = progress
+    }
+
+    /** A downloaded update whose file matched the release: "Install" can take it (3.0.0-3). */
+    data class ReadyUpdate(
+        val versionCode: Int,
+        val versionName: String,
+        val size: Long,
+    )
+
+    private val _readyUpdate = MutableStateFlow<ReadyUpdate?>(null)
+    val readyUpdate: StateFlow<ReadyUpdate?> = _readyUpdate.asStateFlow()
+
+    // The version being installed from the app, from "Install" until the app is replaced or the install fails.
+    private val _installing = MutableStateFlow<String?>(null)
+    val installing: StateFlow<String?> = _installing.asStateFlow()
+
+    // The system's confirmation screen, while it waits for the user (the card offers it again).
+    private val _pendingConfirm = MutableStateFlow<Intent?>(null)
+    val pendingConfirm: StateFlow<Intent?> = _pendingConfirm.asStateFlow()
+
+    fun setInstalling(versionName: String?) {
+        _installing.value = versionName
+        if (versionName == null) _pendingConfirm.value = null
+    }
+
+    fun setPendingConfirm(confirm: Intent?) {
+        _pendingConfirm.value = confirm
+    }
+
+    /** The file of [manifest] matched the release: it stays ready for "Install", also after a restart. */
+    fun markReady(
+        context: Context,
+        manifest: UpdateManifest,
+        file: File,
+    ) {
+        prefs(context).edit().putString(KEY_READY, "${manifest.versionCode}:${file.length()}").apply()
+        _readyUpdate.value = ReadyUpdate(manifest.versionCode, manifest.versionName, file.length())
+    }
+
+    fun clearReady(context: Context) {
+        prefs(context).edit().remove(KEY_READY).apply()
+        _readyUpdate.value = null
+    }
+
+    /** Whether [manifest]'s update is already downloaded and checked (its file still there, of the same size). */
+    fun refreshReady(
+        context: Context,
+        manifest: UpdateManifest?,
+    ) {
+        val file = apkFile(context)
+        val saved = prefs(context).getString(KEY_READY, null)
+        _readyUpdate.value =
+            if (manifest != null && file.exists() && saved == "${manifest.versionCode}:${file.length()}") {
+                ReadyUpdate(manifest.versionCode, manifest.versionName, file.length())
+            } else {
+                null
+            }
     }
 
     fun decide(
@@ -259,6 +322,7 @@ object SelfUpdate {
                     Log.w(TAG, "The update could not be downloaded; the next check tries again")
                     return
                 }
+                markReady(context, manifest, file)
                 // The user may have opened the app or started the queue during the download.
                 if (isAppOnScreen() || ForgeQueueManager.isQueueActive.value || ForgeQueueManager.isGenerating.value) return
                 install(context, file, manifest.versionName)
@@ -293,12 +357,36 @@ object SelfUpdate {
         message: String?,
     ) {
         prefs(context).edit().remove(KEY_INSTALLING).apply()
+        // The card offers "Install" again (the downloaded file stays ready).
+        setInstalling(null)
         val text = message ?: "The system did not install the update."
         post(context, "ForgeGen update failed", text, ForgeNotifications.openAppIntent(context))
     }
 
+    /** A downloaded update is ready and the app is not on screen: one tap opens it, where "Install" waits. */
+    fun notifyReady(
+        context: Context,
+        versionName: String,
+    ) = post(context, "ForgeGen $versionName is downloaded", "Tap to open ForgeGen and install it.", ForgeNotifications.openAppIntent(context))
+
+    /** PackageInstaller could not be used: the system's installer screen, one tap away in a notification. */
+    fun offerInstallerScreen(
+        context: Context,
+        file: File,
+        versionName: String,
+    ) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val view =
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val tap = PendingIntent.getActivity(context, 8, view, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        post(context, "Install ForgeGen $versionName", "Downloaded. Tap to install it.", tap)
+    }
+
     /** After the app was replaced: says so if this app installed the update (the new version runs this). */
     fun onUpdated(context: Context) {
+        clearReady(context)
         val installing = prefs(context).getString(KEY_INSTALLING, null) ?: return
         prefs(context).edit().remove(KEY_INSTALLING).apply()
         post(context, "ForgeGen updated to $installing", "Tap to open it and see what's new.", ForgeNotifications.openAppIntent(context))
@@ -366,6 +454,8 @@ class UpdateStatusReceiver : BroadcastReceiver() {
                         }
                     ) ?: return
                 confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // Kept for the card in Settings > Updates, which offers it again ("Confirm Install").
+                SelfUpdate.setPendingConfirm(confirm)
                 // On screen the confirmation opens at once; otherwise a notification waits for the user.
                 if (SelfUpdate.isAppOnScreen()) {
                     try {

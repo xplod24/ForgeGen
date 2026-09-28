@@ -210,6 +210,11 @@ fun SetupScreen(
     val config by viewModel.config.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
     val updateDownload by viewModel.updateDownload.collectAsStateWithLifecycle()
+    val readyUpdate by viewModel.readyUpdate.collectAsStateWithLifecycle()
+    val installingUpdate by viewModel.installingUpdate.collectAsStateWithLifecycle()
+    val updateConfirm by viewModel.updateConfirm.collectAsStateWithLifecycle()
+    val queueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
+    val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
     val tagListStatus by viewModel.tagListStatus.collectAsStateWithLifecycle()
@@ -226,6 +231,8 @@ fun SetupScreen(
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
     // All notes of the offered update, from "Show All" on its card.
     var showAllReleaseNotes by remember { mutableStateOf(false) }
+    // "Install" while the queue works: installing ends the app, so it asks first.
+    var confirmInstallDuringQueue by remember { mutableStateOf(false) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
     var testStatus by remember { mutableStateOf<String?>(null) }
@@ -261,6 +268,9 @@ fun SetupScreen(
 
     val keyguardManager = remember { context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager }
     val isDeviceSecure = remember { keyguardManager.isDeviceSecure }
+
+    // "Install": the app steps aside so Android can replace it (the owner's request, 3.0.0-3).
+    fun installNow() = viewModel.installUpdate { context.findActivity()?.moveTaskToBack(true) }
 
     // Runs [action] after the phone's PIN/biometrics check when the app lock is on or being set up; without a phone
     // lock there is nothing to check against.
@@ -674,7 +684,7 @@ fun SetupScreen(
             if (download != null) {
                 // "Install Update" was tapped: it downloads in the background (UpdateDownloadService), also with the
                 // app closed or the screen locked; the notification (and the Now Bar) shows the same.
-                add(SettingsPage.UPDATES, null, "update downloading installing progress ${download.versionName}") {
+                add(SettingsPage.UPDATES, null, "update downloading progress ${download.versionName}") {
                     Column(
                         modifier =
                             Modifier
@@ -684,13 +694,9 @@ fun SetupScreen(
                                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                                 .padding(16.dp),
                     ) {
-                        Text(
-                            if (download.installing) "Installing ${download.versionName}" else "Downloading ${download.versionName}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                        )
+                        Text("Downloading ${download.versionName}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         Spacer(Modifier.height(10.dp))
-                        if (download.installing || download.total <= 0) {
+                        if (download.total <= 0) {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         } else {
                             LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
@@ -698,7 +704,6 @@ fun SetupScreen(
                         Spacer(Modifier.height(8.dp))
                         val detail =
                             when {
-                                download.installing -> "ForgeGen closes to update; a notification says when it is done."
                                 download.total > 0 ->
                                     "${(download.fraction * 100).toInt()}% · " +
                                         "${"%.1f".format(java.util.Locale.US, download.done / 1048576.0)} / " +
@@ -714,9 +719,11 @@ fun SetupScreen(
                     }
                 }
             }
-            val manifest = updateManifest
-            if (download == null && manifest != null && manifest.versionCode != dismissedUpdateVersion) {
-                add(SettingsPage.UPDATES, null, "update available install new version ${manifest.versionName}") {
+            val installing = installingUpdate
+            if (installing != null) {
+                // "Install" was tapped: the app went to the background and Android replaces it. No button here, so it
+                // cannot be started twice (3.0.0-3).
+                add(SettingsPage.UPDATES, null, "update installing $installing") {
                     Column(
                         modifier =
                             Modifier
@@ -726,7 +733,60 @@ fun SetupScreen(
                                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
                                 .padding(16.dp),
                     ) {
-                        Text("Update Available: ${manifest.versionName}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("Installing $installing", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Spacer(Modifier.height(10.dp))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(8.dp))
+                        val confirm = updateConfirm
+                        Text(
+                            if (confirm != null) {
+                                "Android wants you to confirm the install this time."
+                            } else {
+                                "Android replaces ForgeGen now; a notification says when it is done."
+                            },
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        )
+                        if (confirm != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                Button(onClick = {
+                                    try {
+                                        context.startActivity(confirm)
+                                    } catch (e: Exception) {
+                                        viewModel.showToast("Cannot open the confirmation: ${e.message}")
+                                    }
+                                }) { Text("Confirm Install") }
+                            }
+                        }
+                    }
+                }
+            }
+            val manifest = updateManifest
+            if (download == null && installing == null && manifest != null && manifest.versionCode != dismissedUpdateVersion) {
+                val ready = readyUpdate?.takeIf { it.versionCode == manifest.versionCode }
+                add(SettingsPage.UPDATES, null, "update available download install new version ${manifest.versionName}") {
+                    Column(
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
+                                .padding(16.dp),
+                    ) {
+                        Text(
+                            if (ready != null) "Update Ready: ${manifest.versionName}" else "Update Available: ${manifest.versionName}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                        )
+                        if (ready != null) {
+                            Text(
+                                "Downloaded and checked · ${"%.1f".format(java.util.Locale.US, ready.size / 1048576.0)} MB",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            )
+                        }
                         Spacer(Modifier.height(4.dp))
                         val changelogText = manifest.changelog ?: emptyList()
                         if (changelogText.isNotEmpty()) {
@@ -749,11 +809,15 @@ fun SetupScreen(
                                 Text("Dismiss")
                             }
                             Spacer(Modifier.width(8.dp))
-                            // The download runs in UpdateDownloadService with its progress here, in the notifications
-                            // and the Now Bar; the app stays open (2.3.0-3: 2.3.0-1 sent it to the background, which the
-                            // owner did not like).
-                            Button(onClick = { viewModel.downloadUpdate() }) {
-                                Text("Install Update")
+                            // Two steps (3.0.0-3): "Download" runs in UpdateDownloadService with its progress here, in the
+                            // notifications and the Now Bar, and the app stays open; once the file matches the release,
+                            // "Install" sends the app to the background and Android replaces it.
+                            if (ready != null) {
+                                Button(onClick = {
+                                    if (queueActive || generating) confirmInstallDuringQueue = true else installNow()
+                                }) { Text("Install") }
+                            } else {
+                                Button(onClick = { viewModel.downloadUpdate() }) { Text("Download") }
                             }
                         }
                     }
@@ -875,9 +939,10 @@ fun SetupScreen(
                 ).joinToString(" · "),
             SettingsPage.UPDATES to
                 (
-                    updateDownload?.let { d ->
-                        if (d.installing) "Installing ${d.versionName}" else "Downloading ${d.versionName} · ${(d.fraction * 100).toInt()}%"
-                    } ?: ("${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only")
+                    installingUpdate?.let { "Installing $it" }
+                        ?: updateDownload?.let { d -> "Downloading ${d.versionName} · ${(d.fraction * 100).toInt()}%" }
+                        ?: readyUpdate?.takeIf { it.versionCode == updateManifest?.versionCode }?.let { "${it.versionName} ready to install" }
+                        ?: ("${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only")
                 ),
             SettingsPage.DATA to "Export, import, logs, wipe",
             SettingsPage.DEBUG to "Tools for testing the app",
@@ -1084,6 +1149,21 @@ fun SetupScreen(
         }
 
         // The download progress dialog is shown globally by MainActivity.
+
+        if (confirmInstallDuringQueue) {
+            AlertDialog(
+                onDismissRequest = { confirmInstallDuringQueue = false },
+                title = { Text("Install Now?") },
+                text = { Text("Installing closes ForgeGen, so the queue stops. Its jobs are kept and wait for you.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmInstallDuringQueue = false
+                        installNow()
+                    }) { Text("Install") }
+                },
+                dismissButton = { TextButton(onClick = { confirmInstallDuringQueue = false }) { Text("Cancel") } },
+            )
+        }
 
         val notesOf = updateManifest
         if (showAllReleaseNotes && notesOf != null) {

@@ -9,12 +9,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /* ============================================================================
  * UPDATE MANAGER (OTA)
  * Checks the latest GitHub release of the app when it starts (at most every 15 minutes, or on "Check for Updates").
- * "Install Update" hands the release to UpdateDownloadService, which downloads it in the background and installs it
- * through SelfUpdate (PackageInstaller: on Android 12+ without the system's confirmation where it allows that).
+ * Two steps since 3.0.0-3: "Download" hands the release to UpdateDownloadService (background download, SHA-256 checked,
+ * then SelfUpdate.readyUpdate); "Install" sends the app to the background and installs the checked file through
+ * SelfUpdate (PackageInstaller: on Android 12+ without the system's confirmation where it allows that).
  * The background check without the app open is SelfUpdate's.
  * A release is an update when its tag "v<major>.<minor>.<patch>[-<micro>]" maps to a higher versionCode than the
  * installed build.
@@ -67,6 +69,10 @@ class ForgeUpdateManager(
 
                     // The debug mode can offer the latest release even when it is not newer (to reinstall it).
                     if (manifest != null && (manifest.versionCode > currentVersionCode || offerAnyRelease)) {
+                        // Downloaded before (also before a restart)? Then "Install" is offered at once. A failure
+                        // here never hides the update: it is offered for download then.
+                        runCatching { SelfUpdate.refreshReady(application, manifest) }
+                            .onFailure { Log.w(TAG, "Could not look for a downloaded update", it) }
                         _updateManifest.value = manifest
                         if (manual) showToast("Update available: ${manifest.versionName}")
                     } else if (manual) {
@@ -75,7 +81,11 @@ class ForgeUpdateManager(
                     }
 
                     if (!manual) {
-                        application.getSharedPreferences("updates", Context.MODE_PRIVATE).edit().putLong(LAST_CHECK_KEY, now).apply()
+                        application
+                            .getSharedPreferences("updates", Context.MODE_PRIVATE)
+                            .edit()
+                            .putLong(LAST_CHECK_KEY, now)
+                            .apply()
                     }
                 } else {
                     Log.e(TAG, "NETWORK ERROR (OTA): HTTP status ${response.code()}")
@@ -97,17 +107,53 @@ class ForgeUpdateManager(
     }
 
     /**
-     * "Install Update": the download and the install run in UpdateDownloadService, a foreground service, so the
-     * app can go to the background and a locked screen does not stop it (2.3.0-1).
+     * "Download": UpdateDownloadService, a foreground service, downloads the release so the app can go to the
+     * background and a locked screen does not stop it (2.3.0-1). Nothing while it downloads, installs or is ready.
      */
     fun downloadUpdate() {
         val manifest = _updateManifest.value ?: return
-        if (SelfUpdate.downloadProgress.value != null) return
+        if (SelfUpdate.downloadProgress.value != null || SelfUpdate.installing.value != null) return
+        if (SelfUpdate.readyUpdate.value?.versionCode == manifest.versionCode) return
         try {
             UpdateDownloadService.start(application, manifest)
         } catch (e: Exception) {
             Log.e(TAG, "Could not start the update download", e)
             showToast("Download error: ${e.message}")
+        }
+    }
+
+    /**
+     * "Install" (3.0.0-3): the downloaded file, checked against the release once more, goes to PackageInstaller after
+     * [sendToBackground] moved the app away, so the system can replace it. Once only: until the app is replaced, or
+     * the system says why not (UpdateStatusReceiver), the card shows "Installing" instead of the button.
+     */
+    fun installUpdate(sendToBackground: () -> Unit) {
+        val manifest = _updateManifest.value ?: return
+        if (SelfUpdate.readyUpdate.value?.versionCode != manifest.versionCode) return
+        if (SelfUpdate.installing.value != null || SelfUpdate.downloadProgress.value != null) return
+        SelfUpdate.setInstalling(manifest.versionName)
+        scope.launch(Dispatchers.IO) {
+            val file = SelfUpdate.apkFile(application)
+            val intact =
+                file.exists() &&
+                    (
+                        manifest.sha256 == null ||
+                            runCatching { SelfUpdate.sha256Of(file) }.getOrNull().equals(manifest.sha256, ignoreCase = true)
+                    )
+            if (!intact) {
+                SelfUpdate.clearReady(application)
+                SelfUpdate.setInstalling(null)
+                showToast("The downloaded update is damaged, download it again")
+                return@launch
+            }
+            withContext(Dispatchers.Main) { sendToBackground() }
+            try {
+                SelfUpdate.install(application, file, manifest.versionName)
+            } catch (e: Exception) {
+                Log.e(TAG, "PackageInstaller session failed, offering the installer screen", e)
+                SelfUpdate.setInstalling(null)
+                SelfUpdate.offerInstallerScreen(application, file, manifest.versionName)
+            }
         }
     }
 }

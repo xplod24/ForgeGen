@@ -1,3 +1,7 @@
+## 3.0.0-3
+- **Fixed the update loop:** after the download the "Install Update" button came back, and each tap started the install again while ForgeGen was still open, so it never finished. Updating is now two steps in Settings > Updates: **Download** fetches the update and checks it against the release, then the card shows "Update Ready" with **Install**. Install sends ForgeGen to the background so Android can replace it, and while it installs there is no button to tap again. If Android wants a confirmation, "Confirm Install" opens it; if the install fails, Install can be tapped again without downloading anew.
+- A downloaded update stays ready after the app is closed. When the queue is working, Install asks first, because installing stops the queue (its jobs are kept).
+
 ## 3.0.0-2
 - **Update notes read properly:** the "Update Available" card in Settings > Updates now shows the release notes like the What's New notes, with **bold** text and proper list items instead of stray `**` marks. "Show All" opens every note of the update.
 
