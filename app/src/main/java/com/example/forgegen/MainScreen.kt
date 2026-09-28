@@ -68,6 +68,10 @@ fun MainScreen(
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val serverMemory by viewModel.serverMemory.collectAsStateWithLifecycle()
     val unloadingModel by viewModel.unloadingModel.collectAsStateWithLifecycle()
+    // Restart Forge (3.3.0): the top bar counts the time while Forge restarts.
+    val restartingSince by viewModel.restartingSince.collectAsStateWithLifecycle()
+    val serverInfo by viewModel.serverInfo.collectAsStateWithLifecycle()
+    var confirmRestart by remember { mutableStateOf(false) }
 
     val isServerBusy by viewModel.isServerBusy.collectAsStateWithLifecycle()
     val generationQueue by viewModel.generationQueue.collectAsStateWithLifecycle()
@@ -219,6 +223,7 @@ fun MainScreen(
                             onMemoryClick = { showMemorySheet = true },
                             onGalleryClick = onGalleryClick,
                             onSettingsClick = onSettingsClick,
+                            restartingSince = restartingSince,
                         )
                     }
                 },
@@ -372,7 +377,18 @@ fun MainScreen(
                 busy = isGenerating || isServerBusy || progress > 0f,
                 onUnload = { viewModel.unloadCheckpoint() },
                 onDismiss = { showMemorySheet = false },
+                canRestart = serverInfo?.canRestart,
+                restarting = restartingSince > 0,
+                onRestart = { confirmRestart = true },
             )
+            // Whether Forge can be restarted from here (/sdapi/v1/cmd-flags), read once per server.
+            LaunchedEffect(Unit) { viewModel.loadServerInfo() }
+        }
+        if (confirmRestart) {
+            RestartForgeDialog(viewModel, generating = isGenerating, onDismiss = {
+                confirmRestart = false
+                showMemorySheet = false
+            })
         }
     }
 }

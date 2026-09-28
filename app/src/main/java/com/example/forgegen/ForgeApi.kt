@@ -43,6 +43,37 @@ interface ForgeApi {
     @POST("sdapi/v1/unload-checkpoint")
     suspend fun unloadCheckpoint(): Response<Unit>
 
+    /** Skips the image being made; the job goes on with its next one (3.3.0). */
+    @POST("sdapi/v1/skip")
+    suspend fun skipImage(): Response<ResponseBody>
+
+    /**
+     * One task's state by the id the app gave it (force_task_id, 3.3.0). Part of the web UI: a server started with
+     * --nowebui answers 404, one with a web UI login 401.
+     */
+    @POST("internal/progress")
+    suspend fun getTaskProgress(
+        @Body body: TaskProgressRequestDto,
+    ): Response<TaskProgressDto>
+
+    @GET("internal/pending-tasks")
+    suspend fun getPendingTasks(): Response<PendingTasksDto>
+
+    /** Forge's system report (versions, GPU, extensions, settings; slow: the server lists its Python packages). */
+    @GET("internal/sysinfo")
+    suspend fun getSysinfo(): Response<ResponseBody>
+
+    @GET("sdapi/v1/extensions")
+    suspend fun getExtensions(): Response<List<ServerExtensionDto>>
+
+    /** How Forge was started; "api_server_stop" says whether it can be restarted from here. */
+    @GET("sdapi/v1/cmd-flags")
+    suspend fun getCmdFlags(): Response<Map<String, Any?>>
+
+    /** Only with --api-server-stop (else 404); 501 when Forge was not started by webui.bat/webui.sh. */
+    @POST("sdapi/v1/server-restart")
+    suspend fun restartServer(): Response<ResponseBody>
+
     @GET("sdapi/v1/progress")
     suspend fun getProgress(
         @Query("skip_current_image") skipImage: Boolean,

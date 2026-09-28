@@ -638,6 +638,27 @@ class ForgeViewModel(
 
     fun interruptGeneration() = ForgeQueueManager.interruptGeneration()
 
+    // --- The server's queue, the server page and restarting Forge (3.3.0) ---
+
+    /** Jobs the server does before the running one (from its web UI or another app); 0 when it is doing ours. */
+    val serverJobsAhead: StateFlow<Int> = ForgeQueueManager.serverJobsAhead
+    val restartingSince: StateFlow<Long> = ForgeRepository.restartingSince
+    val serverInfo: StateFlow<ServerInfo?> = ForgeRepository.serverInfo
+
+    fun skipImage() = ForgeQueueManager.skipImage()
+
+    fun loadServerInfo(again: Boolean = false) = ForgeRepository.loadServerInfo(again)
+
+    /** Null when Forge is restarting; else why it cannot (shown to the user). */
+    suspend fun restartServer(): String? = ForgeRepository.restartServer()
+
+    /** A share sheet for the server's report (for a bug report); null while there is none. */
+    fun serverReportIntent(): android.content.Intent? =
+        serverInfo.value?.report?.let { text ->
+            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd-HH-mm", java.util.Locale.US).format(java.util.Date())
+            DeviceImages.shareTextIntent(getApplication(), "sysinfo-$stamp.json", text)
+        }
+
     fun queueGeneration() = ForgeQueueManager.queueGeneration()
 
     fun updateQueueItem(

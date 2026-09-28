@@ -50,6 +50,18 @@ object ForgeQueueManager {
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
 
+    // The id the running job was sent with (3.3.0), for asking the server about it; null while none runs.
+    @Volatile var runningTaskId: String? = null
+        private set
+
+    /** Jobs the server does before the running one (from its web UI or another app); 0 when it is doing ours. */
+    private val _serverJobsAhead = MutableStateFlow(0)
+    val serverJobsAhead: StateFlow<Int> = _serverJobsAhead.asStateFlow()
+
+    fun setServerJobsAhead(ahead: Int) {
+        _serverJobsAhead.value = ahead
+    }
+
     private val _progress = MutableStateFlow(0f)
     val progress: StateFlow<Float> = _progress.asStateFlow()
 
@@ -666,6 +678,7 @@ object ForgeQueueManager {
         _statusText.value = "Preparing $initialBatchInfo\"$previewText...\""
 
         startGenerationService()
+        runningTaskId = ServerTasks.idFor(job.id)
 
         var connectionLost = false
         val startedAt = System.currentTimeMillis()
@@ -766,6 +779,8 @@ object ForgeQueueManager {
                 finishJob(job, succeeded, errorReason, isOom, setAsideReason)
             }
             saveQueueState()
+            runningTaskId = null
+            _serverJobsAhead.value = 0
             _isGenerating.value = false
             _progress.value = if (connectionLost) 0f else 1f
             _currentEta.value = 0.0
@@ -813,7 +828,7 @@ object ForgeQueueManager {
                 async {
                     try {
                         val api = ForgeRepository.generationApi ?: throw java.io.IOException("Not connected to the server")
-                        val response = api.generateImage(job.payload.forServer())
+                        val response = api.generateImage(job.payload.forServer().copy(force_task_id = runningTaskId))
                         answered.set(true)
                         if (response.isSuccessful) {
                             Answer.Images(response.body()?.use { readImages(it, saveToDevice) }.orEmpty())
@@ -1288,6 +1303,26 @@ object ForgeQueueManager {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to interrupt", e)
             }
+        }
+    }
+
+    /** Skips the image being made (3.3.0): the job goes on with its next image and ends with the others. */
+    fun skipImage() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            val message =
+                try {
+                    val response = ForgeRepository.forgeApi?.skipImage()
+                    when {
+                        response == null -> "Not connected to the server"
+                        response.isSuccessful -> "Skipping this image"
+                        else -> "The server did not skip the image (HTTP ${response.code()})"
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    "The server did not skip the image: ${e.message ?: e.javaClass.simpleName}"
+                }
+            ForgeRepository.showToast(message)
         }
     }
 

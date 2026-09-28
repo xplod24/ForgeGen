@@ -105,7 +105,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   on in the settings** (owner's decision). 3) 3.2.0 Feature (done): gallery via IIB: delete with a ~6 s Undo before the
   request (only where the server allows writing: IIB answers 403 without write permission), move/copy/mkdirs, ZIP,
   folder covers (`batch_top_4_media_info`), favorites gone from the server (`check_path_exists`), Random and
-  statistics from the app's own index (never IIB's `/db/*`, whose index build blocks Forge). 4) 3.3.0 Feature: Skip
+  statistics from the app's own index (never IIB's `/db/*`, whose index build blocks Forge). 4) 3.3.0 Feature (done): Skip
   Image (`/sdapi/v1/skip`), own task id (`force_task_id`) + `/internal/progress` and `/internal/pending-tasks` (fall
   back to `/sdapi/v1/progress` on 401/404), server page (`/internal/sysinfo`, `/sdapi/v1/extensions`, `cmd-flags`),
   Restart Forge (`server-restart`, only with `--api-server-stop`; 501 when not started by webui.bat/webui.sh).
@@ -137,6 +137,25 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `AppConfig.serverStyles` is **false by default** (owner's decision), switch in Settings > Appearance; "Paste into
   Prompt" merges them like the web UI (`{prompt}` or ", " after) and clears the choice; taking a prompt from an image
   clears it too. Tests: `LoraMetadataTest` (+ PromptEdits/PromptStyles/EmbeddingSuggestions), harness G42.
+- **3.3.0 (Feature): the server's queue, Skip Image, server page, Restart Forge.** Every job is sent with
+  `force_task_id` = `ServerTasks.idFor(job.id)` ("task(forgegen-<12 alnum>)", only at send time, never saved in the
+  queue; `ForgeQueueManager.runningTaskId`). While a job runs, the ping loop (still `/sdapi/v1/progress` for
+  connection, busy, preview and job counts) also POSTs `/internal/progress` {id_task}: `queued` -> jobs ahead from
+  `/internal/pending-tasks` (index of ours + 1 for the running one; else "In queue: i/n" -> i), `serverJobsAhead` set,
+  progress 0 and no preview (the other job's), status "Waiting for the server: N other jobs go first"; `active` or
+  `completed` -> not asked again for that task. 401/403/404/405/422 (no web UI with --nowebui, or its login) ->
+  `taskProgressSupported` false until the API client is rebuilt. UI: amber note in the queue, strip state, the generate
+  bar says "Waiting for the server...". Skip: `POST /sdapi/v1/skip` (queue's running card when n_iter > 1, and ⋮ of the
+  generate bar). Server page (SettingsPage.SERVER groups "Server Info", "Extensions · N", "Control"):
+  `ForgeRepository.loadServerInfo` (once per server; cmd-flags + extensions first, then `/internal/sysinfo`, slow: pip
+  freeze) -> `ServerInfo` via `ServerInfoParser` (pure; "Version", "Platform", "Python", "Torch env info"
+  os/torch_version/nvidia_gpu_models; extension purposes: IIB, tagcomplete, prompt-all-in-one); Share Server Report =
+  `DeviceImages.shareTextIntent`. Restart: `POST /sdapi/v1/server-restart` (404: needs --api-server-stop, 501: not
+  started by webui.bat/sh, no answer/IOException: restarting since Forge os._exit()s); `restartingSince` extends the
+  search window to `restartWaitMs` (3 min) via `startSearch`, `followRestart` ends it when Forge answers after it was
+  gone (or after 20 s if it never went). `cmd-flags.api_server_stop` greys the button (`RestartForgeButton`,
+  `RestartForgeDialog` in ui/components/ServerPanels.kt); `ConnectionStatus(restartingSince)` shows "Restarting
+  Forge... m:ss". Tests: `ServerControlTest`, harness G44 (7).
 - **3.2.0 (Feature): changing the gallery's files, covers, favorites gone, Random, statistics.** IIB endpoints (all
   POST with `ForgeApi` `@Url`): `delete_files` {file_paths}, `move_files`/`copy_files` {file_paths, dest,
   create_dest_folder, continue_on_error=true} -> {errors: ["Error moving file <path> to ..."]}, `mkdirs`

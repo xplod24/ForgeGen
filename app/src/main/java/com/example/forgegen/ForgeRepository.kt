@@ -8,6 +8,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -173,6 +174,8 @@ object ForgeRepository {
                     .addConverterFactory(GsonConverterFactory.create(ForgeSettingsManager.gson))
                     .build()
             forgeApi = retrofitForge.create(ForgeApi::class.java)
+            taskProgressSupported = true // another server may have its web UI
+            _serverInfo.value = null
             generationApi =
                 retrofitForge
                     .newBuilder()
@@ -323,9 +326,179 @@ object ForgeRepository {
     }
 
     private fun startSearch() {
-        _searchEndsAt.value = System.currentTimeMillis() + searchWindowMs
+        // While Forge restarts (3.3.0) the app waits for it longer than the minute given to a lost connection.
+        val restartEnds = _restartingSince.value.takeIf { it > 0 }?.plus(restartWaitMs) ?: 0L
+        _searchEndsAt.value = maxOf(System.currentTimeMillis() + searchWindowMs, restartEnds)
         _connection.value = ServerConnection.SEARCHING
     }
+
+    // --- The server's queue and restarting Forge (3.3.0) ---
+
+    // Whether the server answers /internal/progress: not without its web UI (--nowebui, 404) or behind its login (401).
+    @Volatile private var taskProgressSupported = true
+
+    // The task the server was seen doing (or done with): it is not asked about again.
+    @Volatile private var taskSeenStarted: String? = null
+
+    private val taskProgressUnsupported = setOf(401, 403, 404, 405, 422)
+
+    /**
+     * How many jobs the server does before the running job (from its web UI or another app); 0 when it is doing ours,
+     * when ours has not arrived yet, or when the server cannot tell.
+     */
+    private suspend fun jobsAheadOfOurs(api: ForgeApi): Int {
+        val taskId = ForgeQueueManager.runningTaskId ?: return 0
+        if (!taskProgressSupported || taskSeenStarted == taskId) return 0
+        val state =
+            try {
+                api.getTaskProgress(TaskProgressRequestDto(taskId))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return 0
+            }
+        if (!state.isSuccessful) {
+            if (state.code() in taskProgressUnsupported) taskProgressSupported = false
+            return 0
+        }
+        val task = state.body() ?: return 0
+        if (task.active || task.completed) {
+            taskSeenStarted = taskId
+            return 0
+        }
+        if (!task.queued) return 0
+        val pending =
+            try {
+                api
+                    .getPendingTasks()
+                    .takeIf { it.isSuccessful }
+                    ?.body()
+                    ?.tasks
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        return pending?.let { ServerTasks.jobsAhead(taskId, it) } ?: ServerTasks.jobsAhead(task.textinfo) ?: 1
+    }
+
+    private val _restartingSince = MutableStateFlow(0L)
+
+    /** When Restart Forge was asked for (ms since 1970); 0 while Forge is not restarting. */
+    val restartingSince: StateFlow<Long> = _restartingSince.asStateFlow()
+
+    // Forge was seen gone after the restart was asked for: the next answer is the restarted server.
+    @Volatile private var restartOutageSeen = false
+
+    /** How long the app waits for a restarting Forge before it is given up like any lost server. */
+    @Volatile internal var restartWaitMs = 180_000L
+
+    const val RESTART_NEEDS_FLAG = "Forge has to be started with --api-server-stop to be restarted from the phone."
+    const val RESTART_NOT_POSSIBLE =
+        "Forge was not started with webui.bat or webui.sh, so it cannot start itself again. Restart it on the PC."
+
+    /** Restarts Forge: null when it is restarting (the app waits for it), else why it cannot. */
+    suspend fun restartServer(): String? {
+        val api = forgeApi ?: return "Not connected to the server."
+        val response =
+            try {
+                api.restartServer()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.io.IOException) {
+                null // Forge quits at once, mostly before it answers
+            }
+        val code = response?.code()
+        when {
+            code == 404 || code == 405 -> return RESTART_NEEDS_FLAG
+            code == 501 -> return RESTART_NOT_POSSIBLE
+            code != null && code >= 400 -> return "The server refused to restart (HTTP $code)."
+        }
+        restartOutageSeen = false
+        _restartingSince.value = System.currentTimeMillis()
+        _serverInfo.value = null // read again once it is back
+        pingNow()
+        return null
+    }
+
+    /** After each ping: the restart is over when Forge answers again after it was gone (or it never went away). */
+    private fun followRestart(connected: Boolean) {
+        val since = _restartingSince.value
+        if (since == 0L) return
+        val waited = System.currentTimeMillis() - since
+        when {
+            !connected -> {
+                restartOutageSeen = true
+                if (waited > restartWaitMs) {
+                    _restartingSince.value = 0L
+                    showToast("Forge did not come back within ${restartWaitMs / 60_000} minutes")
+                }
+            }
+            restartOutageSeen -> {
+                _restartingSince.value = 0L
+                showToast("Forge is back")
+            }
+            waited > RESTART_NOT_GONE_MS -> _restartingSince.value = 0L // it never went away
+        }
+    }
+
+    private const val RESTART_NOT_GONE_MS = 20_000L
+
+    private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
+
+    /** What the server page shows; null until it is read (3.3.0). */
+    val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
+
+    private var serverInfoJob: Job? = null
+
+    /**
+     * Reads what the server page shows, once per server ([again]: anew): how it was started and its extensions
+     * first, then its report, which takes the server a few seconds (it lists its Python packages for it).
+     */
+    fun loadServerInfo(again: Boolean = false) {
+        if (!again && (_serverInfo.value != null || serverInfoJob?.isActive == true)) return
+        val api = forgeApi ?: return
+        serverInfoJob?.cancel()
+        serverInfoJob =
+            repositoryScope.launch(Dispatchers.IO) {
+                var info = ServerInfo()
+                _serverInfo.value = info
+                val flags = answer { api.getCmdFlags() }
+                val extensions = answer { api.getExtensions() }
+                info =
+                    info.copy(
+                        canRestart = flags?.body()?.let { ServerInfoParser.canRestart(it) },
+                        extensions = extensions?.takeIf { it.isSuccessful }?.body()?.let { ServerInfoParser.extensions(it) },
+                    )
+                _serverInfo.value = info
+                val report = answer { api.getSysinfo() }
+                info =
+                    when {
+                        report == null -> info.copy(reportProblem = "The server did not answer.")
+                        report.isSuccessful -> {
+                            val text = report.body()?.string().orEmpty()
+                            val read = ServerInfoParser.fromReport(text)
+                            info.copy(version = read.version, system = read.system, gpu = read.gpu, report = text)
+                        }
+                        report.code() == 404 ->
+                            info.copy(reportProblem = "Forge runs without its web UI (--nowebui), which gives the report.")
+                        report.code() == 401 || report.code() == 403 ->
+                            info.copy(reportProblem = "Forge's web UI asks for a login, so its report cannot be read.")
+                        else -> info.copy(reportProblem = "The report could not be read (HTTP ${report.code()}).")
+                    }
+                _serverInfo.value = info
+            }
+    }
+
+    /** [call]'s answer, or null when the server could not be reached. */
+    private suspend fun <T> answer(call: suspend () -> retrofit2.Response<T>): retrofit2.Response<T>? =
+        try {
+            call()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
 
     /**
      * Jobs are waiting or running: the queue needs the server, so it is never given up. Not while it only waits for
@@ -410,7 +583,16 @@ object ForgeRepository {
                             val currentImageStr = progressData.currentImage ?: ""
                             val busy = progressVal > 0.001f || jobCount > 0
                             _isServerBusy.value = busy
-                            ForgeQueueManager.updateExternalProgress(progressVal, etaVal, currentImageStr.ifEmpty { null })
+                            // The running job waits while the server does others first (3.3.0): their progress and
+                            // preview are not the job's.
+                            val ahead = if (ForgeQueueManager.isGenerating.value) forgeApi?.let { jobsAheadOfOurs(it) } ?: 0 else 0
+                            ForgeQueueManager.setServerJobsAhead(ahead)
+                            if (ahead > 0) {
+                                ForgeQueueManager.updateExternalProgress(0f, 0.0, null)
+                                ForgeQueueManager.setLivePreviewImage(null)
+                            } else {
+                                ForgeQueueManager.updateExternalProgress(progressVal, etaVal, currentImageStr.ifEmpty { null })
+                            }
                             if (currentImageStr.isEmpty() && !ForgeQueueManager.isGenerating.value) {
                                 ForgeQueueManager.setLivePreviewImage(null)
                             }
@@ -420,7 +602,9 @@ object ForgeRepository {
                                 _currentJobCount.value = stateObj.jobCount
                             }
 
-                            if (busy) {
+                            if (ahead > 0) {
+                                ForgeQueueManager.updateStatusText("Waiting for the server: ${ServerTasks.aheadText(ahead)}")
+                            } else if (busy) {
                                 val jCount = progressData.state?.jobCount ?: 0
                                 val jNo = (progressData.state?.jobNo ?: 0) + 1
                                 val batchInfo = if (jCount > 1) "(Batch $jNo of $jCount) " else ""
@@ -448,6 +632,7 @@ object ForgeRepository {
                     connectionFailed(++failCount)
                 }
                 pingRounds.update { it + 1 }
+                followRestart(_isConnected.value)
 
                 val delayMs =
                     pingDelay(

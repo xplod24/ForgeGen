@@ -471,6 +471,8 @@ data class Txt2ImgPayloadDto(
     val distilled_cfg_scale: Float? = null,
     // The server's styles the server adds to the prompts (3.1.0); null is not sent.
     val styles: List<String>? = null,
+    // The id the server's queue knows the job by ("task(forgegen-...)", 3.3.0); set when it is sent, null is not sent.
+    val force_task_id: String? = null,
 )
 
 /**
@@ -494,6 +496,35 @@ data class ProgressResponseDto(
     @SerializedName("eta_relative") val etaRelative: Double = 0.0,
     val state: ProgressStateDto? = null,
     @SerializedName("current_image") val currentImage: String? = null,
+)
+
+/** /internal/progress (3.3.0): one task's state, asked for by the id the app gave it. */
+data class TaskProgressRequestDto(
+    @SerializedName("id_task") val idTask: String,
+    @SerializedName("id_live_preview") val idLivePreview: Int = -1,
+    @SerializedName("live_preview") val livePreview: Boolean = false,
+)
+
+data class TaskProgressDto(
+    val active: Boolean = false,
+    val queued: Boolean = false,
+    val completed: Boolean = false,
+    val textinfo: String? = null,
+)
+
+/** /internal/pending-tasks: the ids of the tasks waiting on the server (the running one is not among them). */
+data class PendingTasksDto(
+    val size: Int = 0,
+    val tasks: List<String> = emptyList(),
+)
+
+/** /sdapi/v1/extensions (3.3.0). */
+data class ServerExtensionDto(
+    val name: String? = null,
+    val remote: String? = null,
+    val branch: String? = null,
+    val version: String? = null,
+    val enabled: Boolean = true,
 )
 
 data class OptionsPayloadDto(

@@ -2,6 +2,8 @@ package com.example.forgegen
 
 import android.app.KeyguardManager
 import com.example.forgegen.ui.components.MarkdownText
+import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
+import com.example.forgegen.ui.components.RestartForgeDialog
 import com.example.forgegen.ui.components.WhatsNewDialog
 import android.content.Context
 import android.content.Intent
@@ -218,6 +220,12 @@ fun SetupScreen(
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
     val tagListStatus by viewModel.tagListStatus.collectAsStateWithLifecycle()
+    // The server page (3.3.0): what Forge tells about itself, and restarting it.
+    val serverInfo by viewModel.serverInfo.collectAsStateWithLifecycle()
+    val restartingSince by viewModel.restartingSince.collectAsStateWithLifecycle()
+    val serverMemory by viewModel.serverMemory.collectAsStateWithLifecycle()
+    var confirmRestart by remember { mutableStateOf(false) }
+    var showAllExtensions by remember { mutableStateOf(false) }
 
     // --- DIALOG VISIBILITY STATES ---
     var showUrlDialog by remember { mutableStateOf(false) }
@@ -449,6 +457,83 @@ fun SetupScreen(
                     title = "Diagnostics",
                     subtitle = "Asks 7 of the server's endpoints how fast they answer",
                 ) { runDiagnostics() }
+            }
+
+            // What Forge tells about itself (3.3.0, board 2C): read once per server when the page shows.
+            val info = serverInfo
+            add(SettingsPage.SERVER, "Server Info", "forge version server info commit ${info?.version.orEmpty()}") {
+                LaunchedEffect(connection) { if (connection == ServerConnection.CONNECTED) viewModel.loadServerInfo() }
+                TextPreference(
+                    title = "Forge",
+                    subtitle =
+                        when {
+                            info?.version != null -> "Version ${info.version}"
+                            info?.reportProblem != null -> info.reportProblem
+                            connection != ServerConnection.CONNECTED -> "Shown when the app is connected"
+                            else -> "Reading the server's report..."
+                        },
+                    trailing = {
+                        Icon(Icons.Default.Refresh, contentDescription = "Read Again", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                ) { viewModel.loadServerInfo(again = true) }
+            }
+            if (info?.gpu != null || info?.system != null) {
+                add(SettingsPage.SERVER, "Server Info", "gpu graphics card vram cuda ${info.gpu.orEmpty()}") {
+                    val vram = serverMemory?.takeIf { it.hasVram }?.let { " · ${"%.0f".format(it.vramTotal)} GB" }.orEmpty()
+                    TextPreference(title = "GPU", subtitle = (info.gpu ?: "Not reported") + vram, trailing = null) {}
+                }
+                add(SettingsPage.SERVER, "Server Info", "system windows linux python torch ${info.system.orEmpty()}") {
+                    TextPreference(title = "System", subtitle = info.system ?: "Not reported", trailing = null) {}
+                }
+            }
+            if (info?.report != null) {
+                add(SettingsPage.SERVER, "Server Info", "share server report sysinfo bug report file") {
+                    TextPreference(
+                        title = "Share Server Report",
+                        subtitle = "The server's details as a file, for a bug report (its settings and folders included)",
+                        trailing = {
+                            Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        },
+                    ) { viewModel.serverReportIntent()?.let { context.startActivity(it) } }
+                }
+            }
+            info?.extensions?.let { extensions ->
+                val group = "Extensions · ${extensions.size}"
+                val used = extensions.filter { it.purpose != null }
+                val others = extensions.filter { it.purpose == null }
+                used.forEach { extension ->
+                    add(SettingsPage.SERVER, group, "extension ${extension.name} ${extension.purpose}") {
+                        ExtensionRow(extension)
+                    }
+                }
+                if (others.isNotEmpty()) {
+                    if (showAllExtensions) {
+                        others.forEach { extension ->
+                            add(SettingsPage.SERVER, group, "extension ${extension.name}") { ExtensionRow(extension) }
+                        }
+                    } else {
+                        add(SettingsPage.SERVER, group, "extensions more list") {
+                            TextPreference(
+                                title = "${others.size} More",
+                                subtitle = others.take(3).joinToString(", ") { it.name } + "...",
+                            ) { showAllExtensions = true }
+                        }
+                    }
+                }
+            }
+            add(SettingsPage.SERVER, "Control", "restart forge server reboot api-server-stop") {
+                val restarting = restartingSince > 0
+                TextPreference(
+                    title = if (restarting) "Forge Is Restarting" else "Restart Forge",
+                    subtitle =
+                        when {
+                            restarting -> "The app waits for it and goes on when it is back"
+                            info?.canRestart == false -> RESTART_NEEDS_FLAG_HINT
+                            else -> "The queue waits and goes on when it is back"
+                        },
+                    enabled = !restarting && info?.canRestart != false && connection == ServerConnection.CONNECTED,
+                    titleColor = MaterialTheme.colorScheme.error,
+                ) { confirmRestart = true }
             }
 
             // --- APPEARANCE ---
@@ -1275,6 +1360,10 @@ fun SetupScreen(
         }
 
 
+        if (confirmRestart) {
+            RestartForgeDialog(viewModel, generating = generating, onDismiss = { confirmRestart = false })
+        }
+
         if (showTimeoutDialog) {
             var tempTimeout by remember { mutableStateOf(config.timeout.toString()) }
             AlertDialog(
@@ -1751,5 +1840,31 @@ private fun tagListText(status: ForgeTagManager.Status): String {
             (status.message ?: "The server has no tagcomplete extension") +
                 if (status.count > 0) ". Using the saved $saved" else ". Wildcards and LoRAs are still suggested"
         ForgeTagManager.Source.FAILED -> (status.message ?: "The tag list could not be loaded") + ". Tap to try again"
+    }
+}
+
+/** An extension of the server: the ones the app uses with a tick and what for, the others with their version. */
+@Composable
+private fun ExtensionRow(extension: ServerExtension) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (extension.purpose != null) {
+            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CONNECTED_GREEN, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
+        }
+        Column(modifier = Modifier.weight(1f).alpha(if (extension.enabled) 1f else 0.5f)) {
+            Text(extension.name, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val detail =
+                listOfNotNull(
+                    extension.purpose,
+                    extension.version.takeIf { it.isNotBlank() && extension.purpose == null },
+                    "off".takeIf { !extension.enabled },
+                ).joinToString(" · ")
+            if (detail.isNotEmpty()) {
+                Text(detail, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f), maxLines = 1)
+            }
+        }
     }
 }

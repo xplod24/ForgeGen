@@ -111,6 +111,8 @@ fun MainTopBar(
     onGalleryClick: () -> Unit,
     onSettingsClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // When Restart Forge was asked for (3.3.0); 0 while Forge is not restarting.
+    restartingSince: Long = 0L,
 ) {
     Box(modifier = modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Surface(
@@ -130,7 +132,7 @@ fun MainTopBar(
                             .padding(start = 12.dp, end = 4.dp),
                 ) {
                     Text("ForgeGen", fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                    ConnectionStatus(connection, pingMs, searchEndsAt)
+                    ConnectionStatus(connection, pingMs, searchEndsAt, restartingSince)
                 }
                 // Only what the server reported, and only while connected (connectionFailed forgets it).
                 if (memory != null && connection == ServerConnection.CONNECTED) {
@@ -230,6 +232,10 @@ fun ServerMemorySheet(
     busy: Boolean,
     onUnload: () -> Unit,
     onDismiss: () -> Unit,
+    // Restart Forge (3.3.0): whether Forge can be restarted from here (null: not known yet) and whether it is.
+    canRestart: Boolean? = null,
+    restarting: Boolean = false,
+    onRestart: (() -> Unit)? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -282,6 +288,12 @@ fun ServerMemorySheet(
                 lineHeight = 16.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (onRestart != null) {
+                RestartForgeButton(canRestart = canRestart, restarting = restarting, onClick = onRestart)
+                if (canRestart == false) {
+                    Text(RESTART_NEEDS_FLAG_HINT, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }

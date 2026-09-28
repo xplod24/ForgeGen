@@ -74,8 +74,17 @@ fun ConnectionStatus(
     connection: ServerConnection,
     pingMs: Long,
     searchEndsAt: Long,
+    // When Restart Forge was asked for (3.3.0); 0 when Forge is not restarting.
+    restartingSince: Long = 0L,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        if (restartingSince > 0 && connection != ServerConnection.CONNECTED) {
+            val seconds = rememberSecondsSince(restartingSince)
+            CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("Restarting Forge... ${seconds / 60}:${"%02d".format(seconds % 60)}", fontSize = 12.sp)
+            return@Row
+        }
         when (connection) {
             ServerConnection.CONNECTED -> {
                 Icon(Icons.Default.Wifi, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))

@@ -1,3 +1,12 @@
+## 3.3.0
+**Feature** · the queue knows when the server does other jobs first, Skip Image, a server page and Restart Forge
+
+### New
+- **Other jobs on the server first:** each job now goes to the server with an id of its own, so the app can ask Forge about it. When Forge does jobs from its web UI (or from another app) before yours, the queue and the strip above the generate bar say how many go first. Their progress no longer shows as your job's. This needs Forge's web UI (not `--nowebui`) without a login; otherwise the progress works as before.
+- **Skip Image:** in a job of more than one image, Skip Image drops the image being made and the job goes on with the next one. It is on the running job in the queue and in the ⋮ menu of the main screen.
+- **Server page:** Settings > Server now also shows Forge's version, GPU and system, and its extensions (the ones the app uses first: the gallery, tag suggestions, Restore Last). Share Server Report sends Forge's own report as a file, for example for a bug report.
+- **Restart Forge:** in Settings > Server and in the Server Memory panel. The top bar counts the time while Forge restarts, the app waits for it up to 3 minutes, and the queue goes on when it is back. Forge must be started with `--api-server-stop` and by webui.bat or webui.sh; otherwise the button is greyed out or the app says why.
+
 ## 3.2.0
 **Feature** · the gallery can delete, move and copy images on the server, folders show their newest images, and statistics
 

@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
@@ -89,6 +91,7 @@ import com.example.forgegen.ModelSettingsRules
 import com.example.forgegen.QueueSchedule
 import com.example.forgegen.QueuedGeneration
 import com.example.forgegen.RowIcon
+import com.example.forgegen.ServerTasks
 import com.example.forgegen.Txt2ImgPayloadDto
 import com.example.forgegen.ui.components.FloatingTopBar
 import com.example.forgegen.ui.components.QueueStartTimeDialog
@@ -120,6 +123,8 @@ fun QueueScreen(
     val isGenerating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
+    // The server does other jobs before the running one (3.3.0, from its web UI or another app).
+    val serverJobsAhead by viewModel.serverJobsAhead.collectAsStateWithLifecycle()
     val ends by viewModel.queueJobEnds.collectAsStateWithLifecycle()
     val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
     val waitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
@@ -250,6 +255,9 @@ fun QueueScreen(
                             onStartNow = { viewModel.startScheduledQueueNow() },
                         )
                     }
+                    if (serverJobsAhead > 0) {
+                        item(key = "server-first") { ServerJobsFirstNote(serverJobsAhead) }
+                    }
                     // The key keeps per-job state (e.g. "open") with its job when jobs are moved or removed.
                     items(waiting, key = { it.value.id }) { (index, item) ->
                         val position = waiting.indexOfFirst { it.value.id == item.id }
@@ -280,12 +288,14 @@ fun QueueScreen(
                                 item = item,
                                 running = running,
                                 progressLine =
-                                    if (running) {
-                                        runningLine(progress, currentEta, at(ends.getOrNull(index)))
-                                    } else {
-                                        null
+                                    when {
+                                        running && serverJobsAhead > 0 -> "Waiting: ${ServerTasks.aheadText(serverJobsAhead)}"
+                                        running -> runningLine(progress, currentEta, at(ends.getOrNull(index)))
+                                        else -> null
                                     },
                                 progress = if (running) progress else null,
+                                // A job of more than one image can go on with its next one (3.3.0).
+                                onSkip = if (running && serverJobsAhead == 0 && item.payload.n_iter > 1) viewModel::skipImage else null,
                                 onDuplicate = { newSeed -> viewModel.duplicateJob(item.id, newSeed) },
                                 onEdit = { edit(item) },
                                 onRemove = { offerUndo("Job removed", viewModel.removeFromQueue(item.id)) },
@@ -420,6 +430,28 @@ private fun settingsLine(p: Txt2ImgPayloadDto): String {
         if (images > 1) add("$images images")
         if (p.enable_hr) add("hires ×${ModelSettingsRules.formatCfg(p.hr_scale)}")
     }.joinToString(" · ")
+}
+
+/** The server does [ahead] other jobs first (board 2B): its web UI's or another app's; the running job waits. */
+@Composable
+private fun ServerJobsFirstNote(ahead: Int) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xFFFFA726).copy(alpha = 0.14f),
+        contentColor = Color(0xFFFFD9A8),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Icon(Icons.Default.HourglassTop, contentDescription = null, tint = Color(0xFFFFA726), modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "The server does ${if (ahead == 1) "1 other job" else "$ahead other jobs"} first, from its web UI or another " +
+                    "app. Yours starts after them.",
+                fontSize = 13.sp,
+                lineHeight = 17.sp,
+            )
+        }
+    }
 }
 
 /** "45% · 12 s left · done 14:04". */
@@ -585,6 +617,7 @@ private fun JobCard(
     onEdit: () -> Unit,
     onRemove: () -> Unit,
     dragHandle: Modifier?,
+    onSkip: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Surface(
@@ -615,12 +648,25 @@ private fun JobCard(
                     drawStopIndicator = {},
                     gapSize = 0.dp,
                 )
-                Text(
-                    progressLine,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
-                    modifier = Modifier.padding(top = 4.dp),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp, end = 6.dp)) {
+                    Text(
+                        progressLine,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (onSkip != null) {
+                        FilledTonalButton(
+                            onClick = onSkip,
+                            contentPadding = PaddingValues(horizontal = 12.dp),
+                            modifier = Modifier.height(34.dp),
+                        ) {
+                            Icon(Icons.Default.SkipNext, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Skip Image", fontSize = 13.sp)
+                        }
+                    }
+                }
             }
             AnimatedVisibility(visible = open, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
                 JobDetails(item, canChange = !running, onDuplicate = onDuplicate, onEdit = onEdit, onRemove = onRemove)

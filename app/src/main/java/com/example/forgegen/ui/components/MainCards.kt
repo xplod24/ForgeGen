@@ -50,6 +50,8 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Layers
@@ -1315,6 +1317,10 @@ fun GenerateBar(
 ) {
     var menu by remember { mutableStateOf(false) }
     val barShape = RoundedCornerShape(16.dp)
+    // 3.3.0: the server does other jobs before the running one; the running job's images (Skip Image).
+    val serverJobsAhead by viewModel.serverJobsAhead.collectAsStateWithLifecycle()
+    val queue by viewModel.generationQueue.collectAsStateWithLifecycle()
+    val runningImages = queue.firstOrNull { it.status == GenerationStatus.GENERATING }?.payload?.n_iter ?: 0
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -1379,12 +1385,16 @@ fun GenerateBar(
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        if (isActivelyGenerating) "Add to Queue · ${(progress * 100).toInt()}%" else "Add to Queue",
+                        when {
+                            isActivelyGenerating && serverJobsAhead > 0 -> "Waiting for the server..."
+                            isActivelyGenerating -> "Add to Queue · ${(progress * 100).toInt()}%"
+                            else -> "Add to Queue"
+                        },
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onPrimary,
                     )
-                    if (isActivelyGenerating) {
+                    if (isActivelyGenerating && serverJobsAhead == 0) {
                         Text(
                             "ETA ${String.format(Locale.US, "%.1f", currentEta)} s",
                             fontSize = 11.sp,
@@ -1398,6 +1408,18 @@ fun GenerateBar(
                     Icon(Icons.Default.MoreVert, contentDescription = null)
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    // Only while a job of more than one image runs: the job goes on with its next image (3.3.0).
+                    if (isActivelyGenerating && runningImages > 1) {
+                        DropdownMenuItem(
+                            text = { Text("Skip Image") },
+                            leadingIcon = { Icon(Icons.Default.SkipNext, contentDescription = null) },
+                            onClick = {
+                                menu = false
+                                viewModel.skipImage()
+                            },
+                        )
+                        HorizontalDivider()
+                    }
                     DropdownMenuItem(
                         text = { Text("Presets") },
                         leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) },
@@ -1499,6 +1521,7 @@ fun QueueStatusStrip(
     val pauseReason by viewModel.queuePauseReason.collectAsStateWithLifecycle()
     val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
     val waitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
+    val serverJobsAhead by viewModel.serverJobsAhead.collectAsStateWithLifecycle()
     val waiting = queue.count { it.status != GenerationStatus.FAILED }
     val failed = queue.size - waiting
     // Every pause with jobs left needs a Resume button, not only the out-of-memory one.
@@ -1530,6 +1553,15 @@ fun QueueStatusStrip(
                     "$failed ${if (failed == 1) "job" else "jobs"} set aside",
                     "The queue shows why",
                     listOf("Remove" to { viewModel.removeFailedJobs() }, "Retry" to { viewModel.retryFailed() }),
+                )
+            // The server does other jobs (its web UI's, another app's) before the running one (3.3.0).
+            serverJobsAhead > 0 ->
+                StripState(
+                    Icons.Default.HourglassTop,
+                    Color(0xFFFFA726),
+                    ServerTasks.aheadText(serverJobsAhead).replaceFirstChar { it.uppercase() },
+                    "The server does them first (web UI or another app), then yours",
+                    emptyList(),
                 )
             scheduledStart != null && waitingForSchedule && waiting > 0 ->
                 StripState(

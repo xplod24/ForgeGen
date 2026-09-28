@@ -191,6 +191,25 @@ object DeviceImages {
         return file
     }
 
+    /** A share sheet for a text file (the server's report, 3.3.0), written to the cache like shared images. */
+    fun shareTextIntent(
+        context: Context,
+        name: String,
+        text: String,
+        mimeType: String = "application/json",
+    ): Intent {
+        val file = File(File(context.cacheDir, SHARED_DIR).apply { mkdirs() }, name)
+        file.writeText(text)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val send =
+            Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        return Intent.createChooser(send, "Share Server Report")
+    }
+
     /** One share sheet for several copies made by [sharedCopy]. */
     fun shareManyIntent(
         context: Context,
