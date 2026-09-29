@@ -216,9 +216,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   Settings > Backup & Data > Storage (size dialog, used bytes, Clear Image Cache). **Build:** `isDebuggable = false`
   for the debug variant when `-Pforgegen.publish` is given (release.yml and ci.yml pass it; local builds stay
   debuggable): the APK carries `assets/dexopt/baseline.prof` and is ~52 MB instead of ~71 MB. R8 was tried in the
-  scratchpad (5.9 MB, builds clean with `-keep class com.example.forgegen.** { <fields>; <init>(...); }` +
-  `-keepattributes Signature, *Annotation*, InnerClasses, EnclosingMethod` + TypeToken) but is a separate release the
-  owner checks on the phone first (reflection problems show only at run time). Tests: `FeatureSwitchesTest`,
+  scratchpad and came as its own release, 3.4.1 (see "Release build type" in section 4). Tests: `FeatureSwitchesTest`,
   `ResourcePreviewsSavedTest`, the config test, harness G45 (9).
 - **Main screen top bar (3.0.0-4, micro-patch "Bugfix"; the owner picked B of three mockups, same artifact):**
   `MainTopBar` (TopBars.kt) is the same pill, 4 dp above and below so it stays 64 dp (`TypingLayout.TOP_BAR_DP`):
@@ -376,9 +374,16 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 
 ## 4. Current Outstanding Tasks
 - **Release build type:** since 3.4.0 (owner's "Tak") the published APK is the debug variant built with
-  `-Pforgegen.publish`: not debuggable, same `.debug` app id, key and `app-debug.apk` name. Still without R8: the next
-  step, agreed as a separate release after the owner confirms 3.4.0 on the phone (keep rules in the 3.4.0 note; 5.9 MB
-  in the trial). Don't switch to the release build type or a new key without the owner.
+  `-Pforgegen.publish`: not debuggable, same `.debug` app id, key and `app-debug.apk` name. Since 3.4.1 (patch
+  "Polish", after the owner confirmed 3.4.0 ran smoothly) R8 shrinks it too (`isMinifyEnabled`/`isShrinkResources`
+  only with the property; ~6.5 MB): `proguard-rules.pro` has `-dontobfuscate` + `SourceFile,LineNumberTable` (crash
+  logs, OOM reports and the debug log keep real names) and keeps every class of `com.example.forgegen` with its
+  fields and constructors (Gson reads them by name; R8 drops fields it sees written but never read, and the no-arg
+  constructor gives an older save the defaults of new fields), `Signature`/annotations and TypeToken subclasses.
+  No emulator here: 3.4.1 was checked by comparing the classes before and after R8 (all 830 classes, 3514 fields and
+  every constructor kept; the TypeToken and Retrofit generic signatures intact). Any new class read by reflection
+  outside `com.example.forgegen` needs its own keep rule. Don't switch to the release build type or a new key without
+  the owner.
 - **Now Bar: the owner confirmed at 2.0.3 that it works on their Samsung and looks great;** the "(Work in Progress)" label was removed in 2.3.0. Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.

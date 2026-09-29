@@ -1,3 +1,9 @@
+## 3.4.1
+**Polish** · the app is about 6.5 MB instead of 52 MB
+
+### Changed
+- **A much smaller app:** the APK on GitHub is now shrunk and its code optimized when it is built. It is about 6.5 MB instead of 52 MB, so an update downloads in seconds. It works as before and updates the installed app as usual.
+
 ## 3.4.0
 **Feature** · switch features off in the new Settings > Features, a faster app that asks the server less, and a choice of image cache size
 

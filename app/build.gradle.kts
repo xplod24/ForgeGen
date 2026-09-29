@@ -106,8 +106,13 @@ android {
             // The APK published on GitHub is built with -Pforgegen.publish (release.yml, and ci.yml to check it) and is
             // not debuggable (3.4.0): Android then compiles it ahead and uses Compose's startup profiles; Compose ran
             // much slower in the debuggable app. Same package, key and file name, so it updates the installed app.
-            // Builds from Android Studio stay debuggable.
-            isDebuggable = !providers.gradleProperty("forgegen.publish").isPresent
+            // Since 3.4.1 R8 also shrinks and optimizes it (about 6 MB instead of 52; rules in proguard-rules.pro).
+            // Builds from Android Studio stay debuggable and unshrunk.
+            val publish = providers.gradleProperty("forgegen.publish").isPresent
+            isDebuggable = !publish
+            isMinifyEnabled = publish
+            isShrinkResources = publish
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
             resValue("string", "app_name", "ForgeGen")
