@@ -23,7 +23,8 @@ class ForgeApp :
         ImageLoader
             .Builder(this)
             // Built on the first image request, from the app's one HTTP client (before the settings are loaded it
-            // has no gallery cookie and no timeouts). Thumbnails and previews are kept for 30 days.
+            // has no gallery cookie and no timeouts). Thumbnails and previews are kept for 30 days, in a cache of the
+            // size chosen in the settings (ImageCache, 3.4.0).
             .okHttpClient {
                 ForgeSettingsManager.client
                     .newBuilder()
@@ -37,8 +38,8 @@ class ForgeApp :
             }.diskCache {
                 DiskCache
                     .Builder()
-                    .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes((2.5 * 1024 * 1024 * 1024).toLong())
+                    .directory(ImageCache.directory(this))
+                    .maxSizeBytes(ImageCache.savedSizeMb(this).also { ImageCache.builtWithMb = it } * 1024L * 1024L)
                     .build()
             }.build()
 }

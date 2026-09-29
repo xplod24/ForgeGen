@@ -391,6 +391,14 @@ class ForgeViewModel(
     val isServerBusy: StateFlow<Boolean> = ForgeRepository.isServerBusy
     val serverMemory: StateFlow<ServerMemory?> = ForgeRepository.serverMemory
 
+    /** Reads the server's RAM and VRAM now (the Server Memory panel; the ping reads it only while the meters show). */
+    fun readServerMemory() {
+        viewModelScope.launch(Dispatchers.IO) { ForgeRepository.refreshServerMemory() }
+    }
+
+    /** Whether the main screen's live preview can be seen now: the server sends it only then (3.4.0). */
+    fun setPreviewShown(shown: Boolean) = ForgeQueueManager.setPreviewShown(shown)
+
     // --- DELEGATION OF STATE FROM FORGE NETWORK MANAGER ---
     val selectedModel: StateFlow<String> = networkManager.selectedModel
     val samplers: StateFlow<List<String>> = networkManager.samplers
@@ -517,6 +525,7 @@ class ForgeViewModel(
     val galleryIndexError: StateFlow<String?> = ForgeGalleryManager.indexError
     val galleryExtension: StateFlow<ForgeGalleryManager.ExtensionStatus> = ForgeGalleryManager.extension
     val galleryIndexedImageCount: StateFlow<Int> = ForgeGalleryManager.indexedImageCount
+    val galleryIndexLoaded: StateFlow<Boolean> = ForgeGalleryManager.indexLoaded
     val favoritePaths: StateFlow<Set<String>> = ForgeGalleryManager.favoritePaths
     val isRestoringPrompt: StateFlow<IndicatorState> = ForgeGalleryManager.isRestoringPrompt
 
@@ -804,6 +813,9 @@ class ForgeViewModel(
     fun getGalleryThumbnailUrl(item: GalleryItem): String = ForgeGalleryManager.getGalleryThumbnailUrl(item)
 
     fun autoSyncGallery() = ForgeGalleryManager.autoSyncGallery()
+
+    /** The gallery screen shows (3.4.0): new images are indexed at once only then. */
+    fun setGalleryVisible(visible: Boolean) = ForgeGalleryManager.setGalleryVisible(visible)
 
     fun setAutoSaveMode(mode: String) = ForgeGalleryManager.setAutoSaveMode(mode)
 

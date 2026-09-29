@@ -146,6 +146,7 @@ fun GalleryScreen(
     val isIndexing by viewModel.isGalleryIndexing.collectAsStateWithLifecycle()
     val indexError by viewModel.galleryIndexError.collectAsStateWithLifecycle()
     val indexedImageCount by viewModel.galleryIndexedImageCount.collectAsStateWithLifecycle()
+    val indexLoaded by viewModel.galleryIndexLoaded.collectAsStateWithLifecycle()
     val gallerySyncProgress by viewModel.gallerySyncProgress.collectAsStateWithLifecycle()
 
     // Subscription to the list of favorite paths
@@ -167,6 +168,11 @@ fun GalleryScreen(
 
     // The index behind search and "All Images" keeps itself up to date: an update when the gallery opens.
     LaunchedEffect(Unit) { viewModel.autoSyncGallery() }
+    // New images are indexed at once only while the gallery shows (3.4.0).
+    DisposableEffect(Unit) {
+        viewModel.setGalleryVisible(true)
+        onDispose { viewModel.setGalleryVisible(false) }
+    }
 
     // The extension was found while the gallery was open (e.g. the server came back): show its top folder.
     LaunchedEffect(extension.state) {
@@ -310,8 +316,9 @@ fun GalleryScreen(
                                 selected = emptySet()
                             },
                             // Each image made again with hires fix, one queue job each (2.4.0); the dialog's second
-                            // tab makes them again with their seeds, varied ("Variance on Seed", 3.0.0).
-                            onUpscale = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) },
+                            // tab makes them again with their seeds, varied ("Variance on Seed", 3.0.0). Not with
+                            // Settings > Features > Image Jobs off (3.4.0).
+                            onUpscale = { viewModel.requestImageJobs(ImageJobs.Kind.UPSCALE, selectedItems()) }.takeIf { config.imageJobs },
                             onMove = { transfer = selectedItems() to ForgeGalleryManager.Transfer.MOVE },
                             onCopy = { transfer = selectedItems() to ForgeGalleryManager.Transfer.COPY },
                             onDelete = {
@@ -408,7 +415,7 @@ fun GalleryScreen(
                             } else if (isSearch) {
                                 PathBar(crumbs = emptyList(), searchFound = itemsOf(pageTab).size, onOpen = {})
                             }
-                            if (pageTab == GalleryTab.FAVORITES && !isSearch) {
+                            if (pageTab == GalleryTab.FAVORITES && !isSearch && config.favoritesCheck) {
                                 val missing = missingFavorites.count { it in favoritePaths }
                                 if (missing > 0) {
                                     MissingFavoritesNote(
@@ -444,6 +451,8 @@ fun GalleryScreen(
                                 when {
                                     // The top folder is on its way (the extension was just found): placeholders.
                                     folderPending && (isLoading || (currentPath.isEmpty() && error == null)) -> LoadingPlaceholders(view)
+                                    // The index is still being read after the start (3.4.0).
+                                    pageTab == GalleryTab.ALL_IMAGES && !indexLoaded && items.isEmpty() -> LoadingPlaceholders(view)
                                     folderPending && error != null ->
                                         Column(modifier = Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                             Icon(Icons.Default.ErrorOutline, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.error)
@@ -466,7 +475,7 @@ fun GalleryScreen(
                                                     GalleryTab.ALL_IMAGES -> allState
                                                 },
                                             favoritePaths = favoritePaths,
-                                            folderCovers = folderCovers,
+                                            folderCovers = if (config.folderCovers) folderCovers else emptyMap(),
                                             folderCounts = folderCounts,
                                             inFavorites = pageTab == GalleryTab.FAVORITES,
                                             selected = selected,
@@ -1713,22 +1722,24 @@ fun FullscreenGalleryViewer(
                 )
             }
 
-            // The image made again: more like it, or larger (2.4.0).
-            Row(
-                modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                listOf(
-                    Triple(ImageJobs.Kind.MORE_LIKE_THIS, Icons.Default.AutoAwesome, "More Like This"),
-                    Triple(ImageJobs.Kind.UPSCALE, Icons.Default.OpenInFull, "Upscale"),
-                ).forEach { (kind, icon, label) ->
-                    TextButton(
-                        onClick = { currentItem?.let { viewModel.requestImageJobs(kind, listOf(it)) } },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(label, color = Color.White)
+            // The image made again: more like it, or larger (2.4.0); not with Settings > Features > Image Jobs off.
+            if (config.imageJobs) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(Color(0x88000000)).padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        Triple(ImageJobs.Kind.MORE_LIKE_THIS, Icons.Default.AutoAwesome, "More Like This"),
+                        Triple(ImageJobs.Kind.UPSCALE, Icons.Default.OpenInFull, "Upscale"),
+                    ).forEach { (kind, icon, label) ->
+                        TextButton(
+                            onClick = { currentItem?.let { viewModel.requestImageJobs(kind, listOf(it)) } },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(label, color = Color.White)
+                        }
                     }
                 }
             }

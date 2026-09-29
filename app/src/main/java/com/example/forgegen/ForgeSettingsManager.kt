@@ -155,6 +155,7 @@ object ForgeSettingsManager {
 
         _config.value = loadedConfig
         cacheThemeMode(loadedConfig.themeMode)
+        ImageCache.saveSizeMb(app, loadedConfig.imageCacheMb) // the image loader reads it before the database
         SelfUpdate.setAutoInstall(app, loadedConfig.autoInstallUpdates)
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
@@ -346,6 +347,17 @@ object ForgeSettingsManager {
             galleryView = GalleryView.of(parsed?.galleryView).name,
             galleryTab = GalleryTab.of(parsed?.galleryTab).name,
             tagSuggestions = parsed?.tagSuggestions ?: true,
+            serverStyles = parsed?.serverStyles ?: false,
+            embeddings = parsed?.embeddings ?: true,
+            loraDetails = parsed?.loraDetails ?: true,
+            resourcePictures = parsed?.resourcePictures ?: true,
+            livePreview = parsed?.livePreview ?: true,
+            memoryMeters = parsed?.memoryMeters ?: true,
+            folderCovers = parsed?.folderCovers ?: true,
+            favoritesCheck = parsed?.favoritesCheck ?: true,
+            imageJobs = parsed?.imageJobs ?: true,
+            serverQueue = parsed?.serverQueue ?: true,
+            imageCacheMb = ImageCache.sizeOf(parsed?.imageCacheMb),
             modelSettings = parsed?.modelSettings.orEmpty(),
         )
     }
@@ -376,6 +388,7 @@ object ForgeSettingsManager {
 
         _config.value = updatedConfig
         cacheThemeMode(updatedConfig.themeMode)
+        if (::application.isInitialized) ImageCache.saveSizeMb(application, updatedConfig.imageCacheMb)
         // The background update check reads it without the database.
         if (::application.isInitialized) SelfUpdate.setAutoInstall(application, updatedConfig.autoInstallUpdates)
 

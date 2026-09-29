@@ -103,6 +103,11 @@ android {
             resValue("string", "app_name", "ForgeGen")
         }
         debug {
+            // The APK published on GitHub is built with -Pforgegen.publish (release.yml, and ci.yml to check it) and is
+            // not debuggable (3.4.0): Android then compiles it ahead and uses Compose's startup profiles; Compose ran
+            // much slower in the debuggable app. Same package, key and file name, so it updates the installed app.
+            // Builds from Android Studio stay debuggable.
+            isDebuggable = !providers.gradleProperty("forgegen.publish").isPresent
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
             resValue("string", "app_name", "ForgeGen")

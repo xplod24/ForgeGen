@@ -1,3 +1,26 @@
+## 3.4.0
+**Feature** · switch features off in the new Settings > Features, a faster app that asks the server less, and a choice of image cache size
+
+### New
+- **Settings > Features:** one page with a switch for each feature: Tag Suggestions (with the tag list), Server Styles, Embeddings, LoRA Details, Model and LoRA Pictures, Live Preview, Memory Meters, Folder Covers, Check Favorites, Image Jobs and Other Jobs on the Server. A feature switched off leaves the screen and the app stops asking the server for its data. For example, LoRA Details off skips the LoRAs' training data, which is megabytes with many LoRAs. Switched on again, its data loads at once. Everything is on as before, except Server Styles, which stays off until you turn it on.
+- **Memory Meters off:** the top bar shows a memory icon instead. It opens the Server Memory panel (Unload Model, Restart Forge), which reads the server's memory when it opens.
+- **Image cache size:** Settings > Backup & Data > Image Cache keeps up to 512 MB, 1 GB or 2.5 GB (as before) of thumbnails and images on the phone and shows how much it holds now. Clear Image Cache frees the space. A new size applies after the app restarts.
+
+### Changed
+- **Faster app:** the APK on GitHub is no longer built in debug mode. Android can now compile it ahead and use its startup profile, so scrolling, typing and starting are smoother. It is also smaller (about 52 MB instead of 71 MB). It is still the same app and updates as before.
+- **Typing a prompt** no longer redraws the rest of the main screen with every character.
+- **Live preview:** it is downloaded only while the main screen shows it, not in the gallery, the queue or the settings.
+- **In the background** the app asks the server for the progress every 2 seconds instead of every second. It reads the server's memory only while the meters can be seen.
+- **Short Wi-Fi drops:** the LoRAs' training data is downloaded again only when the LoRAs changed.
+- **Model and LoRA pictures:** which ones have no picture is remembered across starts, so the LoRA list does not ask the server again for each of them.
+- **Gallery index:** it follows new images at once only while the gallery is open or all new images are saved to the phone. The gallery catches up when you open it, so a long queue no longer lists the gallery on the server after every batch.
+- **Start:** the app no longer waits for the gallery index (All Images shows placeholders until it is read). An index update that finds nothing new no longer reads the whole index again. Folder counts and the search lists are worked out only while the gallery is open.
+- Tag Suggestions and Server Styles moved from Settings > Appearance to Settings > Features.
+
+### Fixed
+- Server Styles no longer turns itself off each time the app starts.
+- A paused queue could, rarely, still send one job at the moment its jobs came back with Undo.
+
 ## 3.3.0
 **Feature** · the queue knows when the server does other jobs first, Skip Image, a server page and Restart Forge
 

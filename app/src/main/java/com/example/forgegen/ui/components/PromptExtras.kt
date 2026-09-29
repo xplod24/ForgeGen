@@ -136,9 +136,11 @@ fun LoraPickerSheet(
     onAddEmbedding: (name: String, negative: Boolean) -> Unit,
     onRefreshEmbeddings: () -> Unit,
     onDismiss: () -> Unit,
-    startOnEmbeddings: Boolean = false,
+    // Settings > Features > Embeddings (3.4.0): off, the sheet has only the LoRAs.
+    showEmbeddings: Boolean = true,
 ) {
-    var embeddingsTab by rememberSaveable { mutableStateOf(startOnEmbeddings) }
+    var chosenEmbeddings by rememberSaveable { mutableStateOf(false) }
+    val embeddingsTab = chosenEmbeddings && showEmbeddings
     var query by rememberSaveable { mutableStateOf("") }
     val known = modelType != ModelType.AUTO
     var filter by rememberSaveable { mutableStateOf(if (known) LoraFilter.FITS else LoraFilter.ALL) }
@@ -162,17 +164,19 @@ fun LoraPickerSheet(
                     Icon(Icons.Default.Refresh, contentDescription = if (embeddingsTab) "Refresh Embeddings" else "Refresh LoRA List")
                 }
             }
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                SegmentedButton(
-                    selected = !embeddingsTab,
-                    onClick = { embeddingsTab = false },
-                    shape = SegmentedButtonDefaults.itemShape(0, 2),
-                ) { Text("LoRA · ${loras.size}") }
-                SegmentedButton(
-                    selected = embeddingsTab,
-                    onClick = { embeddingsTab = true },
-                    shape = SegmentedButtonDefaults.itemShape(1, 2),
-                ) { Text("Embeddings · ${embeddings.all.size}") }
+            if (showEmbeddings) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                    SegmentedButton(
+                        selected = !embeddingsTab,
+                        onClick = { chosenEmbeddings = false },
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                    ) { Text("LoRA · ${loras.size}") }
+                    SegmentedButton(
+                        selected = embeddingsTab,
+                        onClick = { chosenEmbeddings = true },
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                    ) { Text("Embeddings · ${embeddings.all.size}") }
+                }
             }
             OutlinedTextField(
                 value = query,
@@ -205,9 +209,11 @@ private fun LoraRows(
 ) {
     val text = query.trim()
     val searched = remember(loras, text) { if (text.isEmpty()) loras else loras.filter { it.title.contains(text, ignoreCase = true) } }
-    val fitsOf: (ApiResource) -> Boolean? = { info.of(it.name, it.path)?.fits(modelType) }
-    val fitting = searched.filter { fitsOf(it) != false }
-    val misfits = searched.filter { fitsOf(it) == false }
+    // Split once per change of the list, not on every drawing of the sheet (3.4.0).
+    val (fitting, misfits) =
+        remember(searched, info, modelType) {
+            searched.partition { info.of(it.name, it.path)?.fits(modelType) != false }
+        }
     val inUse = searched.filter(isActive)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 4.dp)) {
         if (modelType != ModelType.AUTO) {
@@ -232,7 +238,8 @@ private fun LoraRows(
                 LoraFilter.IN_USE -> inUse
             }
         items(main, key = { "l:" + it.path.ifEmpty { it.name } }) { lora ->
-            LoraRow(lora, info.of(lora.name, lora.path), fitsOf(lora), isActive(lora), previewCandidates, onPick)
+            val loraInfo = info.of(lora.name, lora.path)
+            LoraRow(lora, loraInfo, loraInfo?.fits(modelType), isActive(lora), previewCandidates, onPick)
         }
         // Those made for another model stay pickable, below and dimmed.
         if (filter == LoraFilter.FITS && misfits.isNotEmpty()) {

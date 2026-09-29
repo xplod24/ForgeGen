@@ -26,6 +26,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -136,6 +137,9 @@ fun ResourcePickerSheet(
     }
 }
 
+/** Settings > Features > Model and LoRA Pictures (3.4.0): off, [ResourcePreview] shows its placeholder and asks nothing. */
+val LocalResourcePictures = compositionLocalOf { true }
+
 /**
  * A model's or LoRA's picture (3.0.1): tries [candidates] in turn until the server has one, and remembers the answer
  * (ResourcePreviews); [placeholder] shows while none is loaded. Only a missing file (an HTTP error) moves on: with no
@@ -147,6 +151,10 @@ fun ResourcePreview(
     modifier: Modifier = Modifier,
     placeholder: @Composable () -> Unit = {},
 ) {
+    if (!LocalResourcePictures.current) {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) { placeholder() }
+        return
+    }
     val context = LocalContext.current
     var index by remember(candidates) { mutableIntStateOf(ResourcePreviews.startIndex(candidates)) }
     var loaded by remember(candidates) { mutableStateOf(false) }

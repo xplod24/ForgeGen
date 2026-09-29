@@ -21,13 +21,16 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.job
@@ -196,9 +199,6 @@ object ForgeGalleryManager {
     // The index in memory without the prompts (most of its size); a prompt search asks the database.
     private val indexedImages = MutableStateFlow<List<IndexedImage>>(emptyList())
 
-    private val _indexedImageCount = MutableStateFlow(0)
-    val indexedImageCount: StateFlow<Int> = _indexedImageCount.asStateFlow()
-
     internal val _isRestoringPrompt = MutableStateFlow(IndicatorState.IDLE)
     val isRestoringPrompt: StateFlow<IndicatorState> = _isRestoringPrompt.asStateFlow()
 
@@ -247,10 +247,6 @@ object ForgeGalleryManager {
 
     @Volatile private var coversSupported = true
 
-    /** How many indexed images each folder holds, its subfolders included (keys: [GalleryPaths.key]). */
-    private val _folderImageCounts = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val folderImageCounts: StateFlow<Map<String, Int>> = _folderImageCounts.asStateFlow()
-
     /** Favorites whose files are no longer on the server, as the last check found them. */
     private val _missingFavorites = MutableStateFlow<Set<String>>(emptySet())
     val missingFavorites: StateFlow<Set<String>> = _missingFavorites.asStateFlow()
@@ -289,11 +285,49 @@ object ForgeGalleryManager {
     private val _galleryFilters = MutableStateFlow(GalleryFilters())
     val galleryFilters: StateFlow<GalleryFilters> = _galleryFilters.asStateFlow()
 
-    private val _availableModels = MutableStateFlow<List<String>>(emptyList())
-    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+    // The gallery's top folder as the settings have it: the index under it is made again when it changes.
+    private val galleryPath = ForgeRepository.config.map { it.galleryPath }.distinctUntilChanged()
 
-    private val _availableLoras = MutableStateFlow<List<String>>(emptyList())
-    val availableLoras: StateFlow<List<String>> = _availableLoras.asStateFlow()
+    /**
+     * The index under the gallery's top folder (3.4.0). The counts and filter lists below are made from it only while
+     * the gallery shows them; they used to be made again after every sync, also with the gallery closed.
+     */
+    private val inGalleryIndex: Flow<List<IndexedImage>> =
+        combine(indexedImages, galleryPath) { index, _ ->
+            val root = galleryRoot()?.let { norm(it) }
+            if (root == null) index else index.filter { isUnderNormalized(it.fullpath, root) }
+        }.shareIn(managerScope, SharingStarted.WhileSubscribed(5000), replay = 1)
+
+    val indexedImageCount: StateFlow<Int> =
+        inGalleryIndex.map { it.size }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** How many indexed images each folder holds, its subfolders included (keys: [GalleryPaths.key]). */
+    val folderImageCounts: StateFlow<Map<String, Int>> =
+        inGalleryIndex
+            .map { inGallery -> galleryRoot()?.let { GalleryFolders.imageCounts(inGallery, it) }.orEmpty() }
+            .stateIn(managerScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    /** The search panel's lists: only the models and LoRAs of the current gallery. */
+    val availableModels: StateFlow<List<String>> =
+        inGalleryIndex
+            .map { inGallery ->
+                inGallery
+                    .map { it.model }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .sorted()
+            }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val availableLoras: StateFlow<List<String>> =
+        inGalleryIndex
+            .map { inGallery ->
+                inGallery
+                    .flatMap { it.loras.split(",") }
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .sorted()
+            }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** The search as it was computed: its results (null without a search) and the index under the top folder. */
     private class Search(
@@ -304,7 +338,7 @@ object ForgeGalleryManager {
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val search: StateFlow<Search> =
-        combine(_galleryFilters, indexedImages) { filters, index -> filters to index }
+        combine(_galleryFilters, indexedImages, galleryPath) { filters, index, _ -> filters to index }
             .mapLatest { (filters, index) ->
                 val root = galleryRoot()?.let { norm(it) }
                 val inGallery = if (root == null) index else index.filter { isUnderNormalized(it.fullpath, root) }
@@ -357,7 +391,8 @@ object ForgeGalleryManager {
     /** The All Images tab: every image of the gallery (or the search's results), the newest first or shuffled. */
     val allImages: StateFlow<ImagesView> =
         combine(search, _allImagesOrder, hiddenPaths) { found, order, hidden ->
-            val newest = sortItems((found.hits ?: found.inGallery).map { it.toGalleryItem() }, SortOrder.NEWEST)
+            // The index comes the newest first from the database (3.4.0), and a search keeps its order.
+            val newest = (found.hits ?: found.inGallery).map { it.toGalleryItem() }
             ImagesView(order.apply(newest.withoutPaths(hidden)), found.filters, order)
         }.stateIn(managerScope, SharingStarted.WhileSubscribed(5000), ImagesView(emptyList(), GalleryFilters()))
 
@@ -424,7 +459,12 @@ object ForgeGalleryManager {
         networkManager = network
     }
 
-    /** Returns once the favorites and the index are loaded; the automatic saving to the phone runs from then on. */
+    private val _indexLoaded = MutableStateFlow(false)
+
+    /** The index has been read from the database once (3.4.0: in the background, the start no longer waits for it). */
+    val indexLoaded: StateFlow<Boolean> = _indexLoaded.asStateFlow()
+
+    /** Returns once the favorites are loaded; the index loads in the background, the automatic saving runs from then on. */
     suspend fun start() {
         if (!::getDb.isInitialized) {
             Log.e(TAG, "ForgeGalleryManager start called but getDb is not initialized!")
@@ -441,22 +481,41 @@ object ForgeGalleryManager {
                     .getSetting(LAST_FOLDER_KEY)
                     ?.value
                     ?.takeIf { it.isNotBlank() }
+        }
+        // The whole index is read without holding the start screen (3.4.0); All Images shows placeholders meanwhile.
+        managerScope.launch {
             reloadIndex()
+            _indexLoaded.value = true
         }
         // The index follows new images: the server saved them a moment ago (the extension is found on connecting,
-        // and that starts a sync too).
+        // and that starts a sync too). Only while the gallery is open or all new images are saved to the phone
+        // (3.4.0): a long queue used to list the gallery on the server after every batch; the gallery catches up when
+        // it opens (autoSyncGallery).
         managerScope.launch {
             // The newest image, not the count: the session keeps at most 100 images, so its size stops growing.
             var newest = ForgeQueueManager.sessionImages.value.lastOrNull()
             ForgeQueueManager.sessionImages.collect { images ->
                 val last = images.lastOrNull()
                 if (last != null && last != newest) {
-                    delay(NEW_IMAGE_SYNC_DELAY_MS)
-                    requestSync()
+                    if (galleryVisible || isAutoSavingAll()) {
+                        delay(NEW_IMAGE_SYNC_DELAY_MS)
+                        requestSync()
+                    } else {
+                        missedNewImages = true
+                    }
                 }
                 newest = last
             }
         }
+    }
+
+    // The gallery screen is open (3.4.0), and new images came while it was not.
+    @Volatile private var galleryVisible = false
+
+    @Volatile private var missedNewImages = false
+
+    fun setGalleryVisible(visible: Boolean) {
+        galleryVisible = visible
     }
 
     private fun isAutoSavingAll() = ForgeRepository.config.value.autoSaveMode == AUTO_SAVE_ALL
@@ -469,24 +528,11 @@ object ForgeGalleryManager {
         _galleryFilters.value = GalleryFilters(sortOrder = _galleryFilters.value.sortOrder)
     }
 
-    /** Reloads the index into memory; the filter lists only offer models and LoRAs of the current gallery. */
+    /** Reloads the index into memory, the newest first (the database sorts it, 3.4.0). */
     private suspend fun reloadIndex() {
         synchronized(promptCache) { promptCache.clear() } // an image read again may have its prompt now
         try {
-            val all = getDb().galleryImageDao().getIndexedImages()
-            val root = galleryRoot()?.let { norm(it) }
-            val inGallery = all.filter { root == null || isUnderNormalized(it.fullpath, root) }
-            indexedImages.value = all
-            _indexedImageCount.value = inGallery.size
-            _folderImageCounts.value = galleryRoot()?.let { GalleryFolders.imageCounts(inGallery, it) }.orEmpty()
-            _availableModels.value = inGallery.map { it.model }.filter { it.isNotBlank() }.distinct().sorted()
-            _availableLoras.value =
-                inGallery
-                    .flatMap { it.loras.split(",") }
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .sorted()
+            indexedImages.value = getDb().galleryImageDao().getIndexedImages()
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             Log.e(TAG, "Failed to load the gallery index", e)
@@ -962,8 +1008,8 @@ object ForgeGalleryManager {
 
     // --- INDEX SYNC (automatic) ---
 
-    /** When the gallery opens: an update of the index, skipped if one ran moments ago. */
-    fun autoSyncGallery() = requestSync(throttle = true)
+    /** When the gallery opens: an update of the index, skipped if one ran moments ago and no new images came since. */
+    fun autoSyncGallery() = requestSync(throttle = !missedNewImages)
 
     // Synchronized: asked for from the screen, the server check and the new-image watcher at once, it must still
     // start only one sync.
@@ -977,6 +1023,7 @@ object ForgeGalleryManager {
         val now = System.currentTimeMillis()
         if (throttle && now - lastAutoSyncAt < AUTO_SYNC_INTERVAL_MS) return
         lastAutoSyncAt = now
+        missedNewImages = false
         syncJob = managerScope.launch { runSync(root) }
     }
 
@@ -1093,16 +1140,17 @@ object ForgeGalleryManager {
 
         // Sizes of images indexed before the index kept them (3.2.0): the listing tells them.
         val knownSizes = indexedImages.value.associate { it.fullpath to it.size }
-        listing.files
-            .mapNotNull { file ->
+        val sizes =
+            listing.files.mapNotNull { file ->
                 val bytes = file.bytes ?: 0L
                 if (bytes > 0 && knownSizes[file.fullpath] == 0L) GalleryImageSize(file.fullpath, bytes) else null
-            }.chunked(500)
-            .forEach { dao.updateSizes(it) }
+            }
+        sizes.chunked(500).forEach { dao.updateSizes(it) }
 
         // Folders with unreadable images are listed again next time, so those images get another try.
         saveFolderDates(listing.folderDates.filterKeys { it !in failedFolders })
-        reloadIndex()
+        // Read again only when something changed (3.4.0): each quiet sync used to read the whole index again.
+        if (stale.isNotEmpty() || newFiles.isNotEmpty() || sizes.isNotEmpty()) reloadIndex()
 
         val saved = if (isAutoSavingAll()) autoSaveNewImages(root) else 0
         val added = newFiles.count { it.fullpath !in indexedPaths }
@@ -1748,7 +1796,8 @@ object ForgeGalleryManager {
 
     /** Asks the server for the covers of [folders] it has not given yet (IIB keeps them, so it answers quickly). */
     private fun requestCovers(folders: List<String>) {
-        if (!coversSupported) return
+        // Settings > Features > Folder Covers (3.4.0): off, plain folder icons and no requests.
+        if (!coversSupported || !ForgeRepository.config.value.folderCovers) return
         val missing = folders.filter { GalleryPaths.key(it) !in _folderCovers.value }
         if (missing.isEmpty()) return
         managerScope.launch {
@@ -1791,7 +1840,7 @@ object ForgeGalleryManager {
 
     /** Asks the server which favorites are still there (when the Favorites tab shows; at most every 5 minutes). */
     fun checkFavorites() {
-        if (readyRoot() == null) return
+        if (readyRoot() == null || !ForgeRepository.config.value.favoritesCheck) return // Settings > Features (3.4.0)
         val now = System.currentTimeMillis()
         if (now - favoritesCheckedAt < FAVORITES_CHECK_INTERVAL_MS) return
         favoritesCheckedAt = now

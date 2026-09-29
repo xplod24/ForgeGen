@@ -50,12 +50,6 @@ fun parseTags(prompt: String): List<String> {
     return result
 }
 
-fun countTokens(text: String): Int {
-    if (text.isBlank()) return 0
-    val words = parseTags(text)
-    return words.size
-}
-
 /** A tag without its attention syntax, e.g. "(cat:1.2)" -> ("cat", "1.2") and "(cat)" -> ("cat", "1.1"). */
 data class TagWeight(
     val base: String,

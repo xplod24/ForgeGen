@@ -15,7 +15,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -245,7 +248,37 @@ object ForgeRepository {
             rebuildForgeApi(newUrl)
         }
 
+        rememberResourcePreviews()
         startBackgroundPing()
+    }
+
+    private const val RESOURCE_PREVIEWS_KEY = "resource_previews"
+    private const val RESOURCE_PREVIEWS_SAVE_DELAY_MS = 2_000L
+
+    /**
+     * Which pictures the models and LoRAs have (ResourcePreviews), kept across starts (3.4.0): the LoRA list used to ask
+     * the server up to 8 times again for every LoRA without a picture after each start.
+     */
+    private fun rememberResourcePreviews() {
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                db.appSettingDao().getSetting(RESOURCE_PREVIEWS_KEY)?.value?.let { json ->
+                    val type = object : com.google.gson.reflect.TypeToken<Map<String, Int>>() {}.type
+                    ResourcePreviews.restore(ForgeSettingsManager.gson.fromJson(json, type))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Saved model pictures unreadable: $e")
+            }
+            ResourcePreviews.changes.drop(1).collectLatest {
+                delay(RESOURCE_PREVIEWS_SAVE_DELAY_MS) // a list that scrolls learns many at once
+                try {
+                    val json = ForgeSettingsManager.gson.toJson(ResourcePreviews.saved())
+                    db.appSettingDao().putSetting(AppSettingEntity(RESOURCE_PREVIEWS_KEY, json))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Model pictures not saved: $e")
+                }
+            }
+        }
     }
 
     fun setAppForegroundState(isForeground: Boolean) {
@@ -294,7 +327,15 @@ object ForgeRepository {
     }
 
     private var pingJob: kotlinx.coroutines.Job? = null
-    private const val MEMORY_STATS_EVERY = 5
+
+    // RAM/VRAM change slowly: read every few seconds, and only while the memory meters can be seen (3.4.0).
+    private const val MEMORY_EVERY_GENERATING_MS = 5_000L
+    private const val MEMORY_EVERY_IDLE_MS = 10_000L
+
+    /** The live preview is asked for only while the main screen shows it (3.4.0; before, whenever the app was open). */
+    private fun previewWanted() = _isAppInForeground.value && ForgeQueueManager.previewShown && config.value.livePreview
+
+    private fun memoryWanted() = _isAppInForeground.value && config.value.memoryMeters
 
     // How long the app looks for a server that does not answer, and how often it asks meanwhile (shorter in tests).
     @Volatile internal var searchWindowMs = 60_000L
@@ -348,7 +389,8 @@ object ForgeRepository {
      */
     private suspend fun jobsAheadOfOurs(api: ForgeApi): Int {
         val taskId = ForgeQueueManager.runningTaskId ?: return 0
-        if (!taskProgressSupported || taskSeenStarted == taskId) return 0
+        // Settings > Features > Other Jobs on the Server (3.4.0): off, the server is not asked.
+        if (!config.value.serverQueue || !taskProgressSupported || taskSeenStarted == taskId) return 0
         val state =
             try {
                 api.getTaskProgress(TaskProgressRequestDto(taskId))
@@ -559,15 +601,15 @@ object ForgeRepository {
         if (!_isConnected.value) startSearch()
         pingJob = repositoryScope.launch(Dispatchers.IO) {
             var failCount = 0
-            var pingCount = 0
+            var memoryReadAt = 0L
             while (isActive) {
                 awaitPingNeeded()
                 try {
                     if (forgeApi != null) {
                         val start = System.currentTimeMillis()
-                        // The live preview (a base64 image, sent with every answer while generating) is only shown
-                        // on screen, so in the background it is not requested at all.
-                        val response = forgeApi?.getProgress(skipImage = !_isAppInForeground.value)
+                        // The live preview (a base64 image, sent with every answer while generating) is asked for only
+                        // while it can be seen: not in the background, the gallery, the queue or the settings.
+                        val response = forgeApi?.getProgress(skipImage = !previewWanted())
 
                         if (response?.isSuccessful == true) {
                             _pingMs.value = System.currentTimeMillis() - start
@@ -622,8 +664,10 @@ object ForgeRepository {
                             connectionFailed(++failCount)
                         }
 
-                        // RAM/VRAM change slowly: every 5th ping instead of a second request each second.
-                        if (failCount == 0 && _isConnected.value && pingCount++ % MEMORY_STATS_EVERY == 0) {
+                        val memoryEvery = if (ForgeQueueManager.isGenerating.value) MEMORY_EVERY_GENERATING_MS else MEMORY_EVERY_IDLE_MS
+                        val now = System.currentTimeMillis()
+                        if (failCount == 0 && _isConnected.value && memoryWanted() && now - memoryReadAt >= memoryEvery) {
+                            memoryReadAt = now
                             refreshServerMemory()
                         }
                     }
@@ -648,8 +692,9 @@ object ForgeRepository {
     }
 
     /**
-     * The wait before the next ping. Connected: every second while images are generated (progress and preview),
-     * every 2 s on screen, every 10 s in the background (only while the queue works). Not connected: every
+     * The wait before the next ping. Connected: every second while images are generated on screen (progress and
+     * preview), every 2 s while they are generated in the background (3.4.0: the notification shows no more than that)
+     * and on screen, every 10 s in the background (only while the queue works). Not connected: every
      * [searchPingMs] during the minute of tries, then (only an active queue keeps trying) 5 s, 10 s, 30 s, 1 min.
      */
     internal fun pingDelay(
@@ -660,7 +705,7 @@ object ForgeRepository {
         failCount: Int,
     ): Long =
         when {
-            connected && generating -> 1_000L
+            connected && generating -> if (foreground) 1_000L else 2_000L
             connected && foreground -> 2_000L
             connected -> 10_000L
             searching -> searchPingMs

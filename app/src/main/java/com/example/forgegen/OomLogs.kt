@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -61,16 +62,23 @@ object OomLogs {
         }
     }
 
-    /** Reports an out-of-memory error the app survived, in the background; says where the report was saved. */
+    /**
+     * Reports an out-of-memory error the app survived, in the background; says where the report was saved. For the
+     * server's own ([readServerMemory]) its memory is read first: the app reads it only while its meters show (3.4.0).
+     */
     fun report(
         reason: String,
         details: String,
+        readServerMemory: Boolean = false,
     ) {
         if (!allowed) return
         scope.launch {
+            if (readServerMemory) withTimeoutOrNull(SERVER_MEMORY_WAIT_MS) { ForgeRepository.refreshServerMemory() }
             write(reason, details)?.let { name -> ForgeSettingsManager.showToast("Out-of-memory log saved to Downloads: $name") }
         }
     }
+
+    private const val SERVER_MEMORY_WAIT_MS = 3_000L
 
     /** Writes the report to Downloads; returns its file name, or null when not allowed or not possible. */
     fun write(

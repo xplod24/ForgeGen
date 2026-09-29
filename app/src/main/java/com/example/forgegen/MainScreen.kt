@@ -59,7 +59,10 @@ fun MainScreen(
     navController: NavHostController,
 ) {
     val config by viewModel.config.collectAsStateWithLifecycle()
-    val state by viewModel.appState.collectAsStateWithLifecycle()
+    val appState = viewModel.appState.collectAsStateWithLifecycle()
+    // Every typed character changes the state (3.4.0): the cards below the prompt get it without the prompts, so they
+    // are not drawn again while a prompt is typed.
+    val generationState by remember { derivedStateOf { appState.value.withoutPrompts() } }
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val searchEndsAt by viewModel.searchEndsAt.collectAsStateWithLifecycle()
     val pingMs by viewModel.pingMs.collectAsStateWithLifecycle()
@@ -121,7 +124,8 @@ fun MainScreen(
 
     // The pictures of the model and the LoRAs in use, loaded ahead once the app knows which file each has
     // (ResourcePreviews, 3.0.1); unknown ones are found by the rows themselves.
-    LaunchedEffect(selectedModel, activeLoras, models, availableLoras) {
+    LaunchedEffect(selectedModel, activeLoras, models, availableLoras, config.resourcePictures) {
+        if (!config.resourcePictures) return@LaunchedEffect // Settings > Features > Model and LoRA Pictures (3.4.0)
         launch(Dispatchers.IO) {
             val paths =
                 listOfNotNull(models.find { it.name == selectedModel || it.title == selectedModel }?.path?.let { it to false }) +
@@ -169,16 +173,19 @@ fun MainScreen(
     // Estimate image pixel dimensions dynamically and warn the user about potential CUDA VRAM out-of-memory errors.
     // Only crossing the limit warns; otherwise every slider step above it (and every return to this screen) showed a toast.
     var wasOverVramLimit by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(state.width, state.height, state.hiresFix, state.hiresScale) {
-        val basePixels = state.width * state.height
-        val finalPixels = if (state.hiresFix) basePixels * (state.hiresScale * state.hiresScale) else basePixels.toFloat()
-
-        // Estimate: Above 2.5 million pixels with Hires it starts to be dangerous for standard 8GB cards.
-        val overLimit = finalPixels > 2500000
-        if (overLimit && !wasOverVramLimit) {
-            viewModel.showToast("High VRAM usage warning. Risk of server OOM.")
+    LaunchedEffect(Unit) {
+        // Followed here, not read by the screen: the screen is not drawn again for each change of the state.
+        snapshotFlow {
+            val basePixels = generationState.width * generationState.height
+            if (generationState.hiresFix) basePixels * (generationState.hiresScale * generationState.hiresScale) else basePixels.toFloat()
+        }.collect { finalPixels ->
+            // Estimate: Above 2.5 million pixels with Hires it starts to be dangerous for standard 8GB cards.
+            val overLimit = finalPixels > 2500000
+            if (overLimit && !wasOverVramLimit) {
+                viewModel.showToast("High VRAM usage warning. Risk of server OOM.")
+            }
+            wasOverVramLimit = overLimit
         }
-        wasOverVramLimit = overLimit
     }
 
     // Root screen layout container configured with tap gestures to dismiss the virtual keyboard
@@ -207,6 +214,13 @@ fun MainScreen(
         val keyboardBottom = if (suggesting && !typingLayout.oneBar) keyboardNowDp + typingLayout.stripDp.dp else keyboardNowDp
         val statusBarNowDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
         HideStatusBarWhile(typingLayout.hideStatusBar)
+        // The server sends the live preview only while it can be seen here (3.4.0): not under the settings, not while
+        // typing folds it away, not on the other screens (this one leaves the composition then).
+        val previewVisible = !showSettingsOverlay && !typingLayout.hidePreview
+        DisposableEffect(previewVisible) {
+            viewModel.setPreviewShown(previewVisible)
+            onDispose { viewModel.setPreviewShown(false) }
+        }
 
         CompositionLocalProvider(LocalPromptTyping provides promptTyping) {
             Scaffold(
@@ -224,6 +238,7 @@ fun MainScreen(
                             onGalleryClick = onGalleryClick,
                             onSettingsClick = onSettingsClick,
                             restartingSince = restartingSince,
+                            showMeters = config.memoryMeters,
                         )
                     }
                 },
@@ -239,7 +254,7 @@ fun MainScreen(
                         QueueStatusStrip(viewModel = viewModel, onOpenQueue = onQueueClick)
                         GenerateBar(
                             viewModel = viewModel,
-                            state = state,
+                            state = generationState,
                             queueSize = generationQueue.count { it.status != GenerationStatus.FAILED },
                             isActivelyGenerating = isGenerating || isServerBusy || progress > 0f,
                             progress = progress,
@@ -269,7 +284,7 @@ fun MainScreen(
                             Box(Modifier.wrapContentHeight(Alignment.Top, unbounded = true)) {
                                 PreviewSection(
                                     isGenerating = isGenerating,
-                                    livePreview = livePreview,
+                                    livePreview = livePreview.takeIf { config.livePreview },
                                     isShowingGridPreview = isShowingGridPreview,
                                     sessionImages = sessionImages,
                                     batchStart = batchStart,
@@ -290,7 +305,7 @@ fun MainScreen(
 
                         PromptCard(
                             viewModel = viewModel,
-                            state = state,
+                            state = appState.value,
                             config = config,
                             promptHistory = promptHistory,
                             openRows = openRows,
@@ -300,7 +315,7 @@ fun MainScreen(
 
                         GenerationCard(
                             viewModel = viewModel,
-                            state = state,
+                            state = generationState,
                             config = config,
                             models = models,
                             selectedModel = selectedModel,
@@ -349,7 +364,7 @@ fun MainScreen(
                 status = tagListStatus,
                 wildcards = wildcardNames,
                 loras = loraNames,
-                embeddings = embeddingList.loaded,
+                embeddings = if (config.embeddings) embeddingList.loaded else emptyList(),
                 oneBar = typingLayout.oneBar,
                 height = typingLayout.stripDp.dp,
                 modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.ime),
@@ -381,8 +396,12 @@ fun MainScreen(
                 restarting = restartingSince > 0,
                 onRestart = { confirmRestart = true },
             )
-            // Whether Forge can be restarted from here (/sdapi/v1/cmd-flags), read once per server.
-            LaunchedEffect(Unit) { viewModel.loadServerInfo() }
+            // Whether Forge can be restarted from here (/sdapi/v1/cmd-flags), read once per server; the memory now, as
+            // it is read only while the meters show (3.4.0).
+            LaunchedEffect(Unit) {
+                viewModel.loadServerInfo()
+                viewModel.readServerMemory()
+            }
         }
         if (confirmRestart) {
             RestartForgeDialog(viewModel, generating = isGenerating, onDismiss = {
@@ -416,3 +435,6 @@ private fun HideStatusBarWhile(hidden: Boolean) {
         }
     }
 }
+
+/** The state without the prompts and styles: what the cards below the prompt use (3.4.0). */
+private fun AppState.withoutPrompts() = copy(positivePrompt = "", negativePrompt = "", styles = emptyList())

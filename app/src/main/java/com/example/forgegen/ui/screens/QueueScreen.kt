@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -259,8 +260,7 @@ fun QueueScreen(
                         item(key = "server-first") { ServerJobsFirstNote(serverJobsAhead) }
                     }
                     // The key keeps per-job state (e.g. "open") with its job when jobs are moved or removed.
-                    items(waiting, key = { it.value.id }) { (index, item) ->
-                        val position = waiting.indexOfFirst { it.value.id == item.id }
+                    itemsIndexed(waiting, key = { _, it -> it.value.id }) { position, (index, item) ->
                         val running = item.status == GenerationStatus.GENERATING
                         val startSeconds = if (position == 0) 0.0 else ends.getOrNull(waiting[position - 1].index)
                         val time =

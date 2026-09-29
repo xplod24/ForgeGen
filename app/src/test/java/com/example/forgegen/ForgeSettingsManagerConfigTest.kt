@@ -1,7 +1,9 @@
 package com.example.forgegen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Test
+import java.lang.reflect.Modifier
 
 class ForgeSettingsManagerConfigTest {
     @Test
@@ -44,6 +46,17 @@ class ForgeSettingsManagerConfigTest {
                 galleryView = GalleryView.LIST_LARGE.name,
                 galleryTab = GalleryTab.FAVORITES.name,
                 tagSuggestions = false,
+                serverStyles = true,
+                embeddings = false,
+                loraDetails = false,
+                resourcePictures = false,
+                livePreview = false,
+                memoryMeters = false,
+                folderCovers = false,
+                favoritesCheck = false,
+                imageJobs = false,
+                serverQueue = false,
+                imageCacheMb = 1024,
                 modelSettings =
                     mapOf(
                         "flux1-dev" to
@@ -58,9 +71,25 @@ class ForgeSettingsManagerConfigTest {
                     ),
             )
 
+        // Every field differs from its default here, so a field left out of loadConfig (or out of this test) fails it:
+        // 3.1.0's serverStyles was saved but never loaded, and the switch was off again after each start.
+        val defaults = AppConfig()
+        AppConfig::class.java.declaredFields.filterNot { Modifier.isStatic(it.modifiers) }.forEach { field ->
+            field.isAccessible = true
+            assertNotEquals("set AppConfig.${field.name} to a value other than its default", field.get(defaults), field.get(saved))
+        }
+
         val loaded = ForgeSettingsManager.loadConfig(ForgeSettingsManager.gson.toJson(saved))
 
         assertEquals(saved, loaded)
+    }
+
+    @Test
+    fun `the feature switches of 3_4_0 are on in an older config, and the image cache keeps a known size`() {
+        val old = ForgeSettingsManager.loadConfig("""{"timeout":10,"tagSuggestions":false}""")
+        assertEquals(AppConfig(timeout = 10, tagSuggestions = false), old)
+        assertEquals(ImageCache.DEFAULT_MB, ForgeSettingsManager.loadConfig("""{"imageCacheMb":123}""").imageCacheMb)
+        assertEquals(512, ForgeSettingsManager.loadConfig("""{"imageCacheMb":512}""").imageCacheMb)
     }
 
     @Test

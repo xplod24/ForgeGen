@@ -229,6 +229,8 @@ fun HybridPromptEditor(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
+        // Split tags respecting nesting using a custom Tokenizer; once per change, the token count uses them too.
+        val activeTags = remember(prompt) { parseTags(prompt) }
         UndoRedoTextField(
             value = prompt,
             onValueChange = onPromptChange,
@@ -238,12 +240,9 @@ fun HybridPromptEditor(
             modifier = Modifier.fillMaxWidth(),
             visualTransformation = PromptHighlighting,
             typing = LocalPromptTyping.current,
-            info = { TokenCount(prompt) },
+            info = { TokenCount(if (prompt.isBlank()) 0 else activeTags.size) },
             actions = actions,
         )
-
-        // Split tags respecting nesting using a custom Tokenizer
-        val activeTags = remember(prompt) { parseTags(prompt) }
 
         // "Show Active Tags UI" in the settings hides the row (the setting used to change nothing).
         if (showTagEditor && (activeTags.isNotEmpty() || disabledTags.isNotEmpty())) {

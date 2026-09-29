@@ -1,6 +1,7 @@
 package com.example.forgegen
 
 import android.app.KeyguardManager
+import coil.imageLoader
 import com.example.forgegen.ui.components.MarkdownText
 import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
 import com.example.forgegen.ui.components.RestartForgeDialog
@@ -166,6 +167,7 @@ private enum class SettingsPage(
     val tint: Color,
 ) {
     SERVER("Server", Icons.Default.Dns, Color(0xFF3E80FF)),
+    FEATURES("Features", Icons.Default.ToggleOn, Color(0xFFEC407A)),
     APPEARANCE("Appearance", Icons.Default.Palette, Color(0xFFA87BFF)),
     NOTIFICATIONS("Notifications", Icons.Default.Notifications, Color(0xFFFFA726)),
     QUEUE("Queue & Background", Icons.Default.Bedtime, Color(0xFF26C6DA)),
@@ -236,6 +238,9 @@ fun SetupScreen(
 
     var showNotificationModeDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showImageCacheDialog by remember { mutableStateOf(false) }
+    // How much the image cache takes, read when Backup & Data opens (3.4.0).
+    var imageCacheUsed by remember { mutableStateOf<Long?>(null) }
     var dismissedUpdateVersion by remember { mutableIntStateOf(-1) }
     // All notes of the offered update, from "Show All" on its card.
     var showAllReleaseNotes by remember { mutableStateOf(false) }
@@ -559,28 +564,108 @@ fun SetupScreen(
                     onCheckedChange = { viewModel.saveConfig(config.copy(showGridAfterGeneration = it)) },
                 )
             }
-            add(SettingsPage.APPEARANCE, "Tag Suggestions", "tag suggestions autocomplete danbooru keyboard wildcards lora tagcomplete") {
+
+            // --- FEATURES (3.4.0) ---
+            // Each one can be switched off; off, it leaves the screen and the app no longer asks the server for its data.
+            fun feature(
+                group: String,
+                words: String,
+                title: String,
+                subtitle: String,
+                checked: Boolean,
+                update: (Boolean) -> AppConfig,
+            ) = add(SettingsPage.FEATURES, group, "feature switch $words") {
                 SwitchPreference(
-                    title = "Tag Suggestions",
-                    subtitle = "While you type a prompt, tags, __wildcards and <lora: names above the keyboard",
-                    checked = config.tagSuggestions,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(tagSuggestions = it)) },
+                    title = title,
+                    subtitle = subtitle,
+                    checked = checked,
+                    onCheckedChange = { viewModel.saveConfig(update(it)) },
                 )
             }
+            feature(
+                "Prompt",
+                "tag suggestions autocomplete danbooru keyboard wildcards lora tagcomplete",
+                "Tag Suggestions",
+                "While you type a prompt, tags, __wildcards and <lora: names above the keyboard",
+                config.tagSuggestions,
+            ) { config.copy(tagSuggestions = it) }
             if (config.tagSuggestions) {
-                add(SettingsPage.APPEARANCE, "Tag Suggestions", "tag list danbooru csv tagcomplete download reload") {
+                add(SettingsPage.FEATURES, "Prompt", "tag list danbooru csv tagcomplete download reload") {
                     TextPreference(title = "Tag List", subtitle = tagListText(tagListStatus)) { viewModel.reloadTagList() }
                 }
             }
             // Off unless turned on here (3.1.0, the owner's decision).
-            add(SettingsPage.APPEARANCE, "Prompt", "server styles styles.csv prompt style preset web ui") {
-                SwitchPreference(
-                    title = "Server Styles",
-                    subtitle = "The server's saved styles (styles.csv) in a row under the prompt; the chosen ones go with every job",
-                    checked = config.serverStyles,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(serverStyles = it)) },
-                )
-            }
+            feature(
+                "Prompt",
+                "server styles styles.csv prompt style preset web ui",
+                "Server Styles",
+                "The server's saved styles (styles.csv) in a row under the prompt; the chosen ones go with every job",
+                config.serverStyles,
+            ) { config.copy(serverStyles = it) }
+            feature(
+                "Prompt",
+                "embeddings textual inversion negative suggestions",
+                "Embeddings",
+                "The server's embeddings in the LoRA list and in the suggestions above the keyboard",
+                config.embeddings,
+            ) { config.copy(embeddings = it) }
+            feature(
+                "LoRAs and Models",
+                "lora details base model trigger words training tags fits filter metadata",
+                "LoRA Details",
+                "Each LoRA's model and trigger words, its details and the \"Fits\" filter. Off: their data (megabytes " +
+                    "with many LoRAs) is not downloaded",
+                config.loraDetails,
+            ) { config.copy(loraDetails = it) }
+            feature(
+                "LoRAs and Models",
+                "model lora pictures previews thumbnails images",
+                "Model and LoRA Pictures",
+                "The pictures next to the models and LoRAs, from the server's model folders",
+                config.resourcePictures,
+            ) { config.copy(resourcePictures = it) }
+            feature(
+                "Main Screen",
+                "live preview generating image progress",
+                "Live Preview",
+                "The image as it forms while it is generated. Off: the server sends none",
+                config.livePreview,
+            ) { config.copy(livePreview = it) }
+            feature(
+                "Main Screen",
+                "memory meters vram ram top bar server memory",
+                "Memory Meters",
+                "The server's VRAM and RAM in the top bar. Off: an icon opens Server Memory, which reads them when it opens",
+                config.memoryMeters,
+            ) { config.copy(memoryMeters = it) }
+            feature(
+                "Gallery",
+                "folder covers gallery thumbnails",
+                "Folder Covers",
+                "A folder's newest images as its picture",
+                config.folderCovers,
+            ) { config.copy(folderCovers = it) }
+            feature(
+                "Gallery",
+                "check favorites missing deleted gone server",
+                "Check Favorites",
+                "Tells when favorites are gone from the server",
+                config.favoritesCheck,
+            ) { config.copy(favoritesCheck = it) }
+            feature(
+                "Gallery",
+                "image jobs upscale more like this variance seed",
+                "Image Jobs",
+                "Upscale, More Like This and Variance for gallery images",
+                config.imageJobs,
+            ) { config.copy(imageJobs = it) }
+            feature(
+                "Server",
+                "other jobs server queue web ui waiting internal progress",
+                "Other Jobs on the Server",
+                "Says when jobs from the web UI or another app go first",
+                config.serverQueue,
+            ) { config.copy(serverQueue = it) }
 
             // --- NOTIFICATIONS ---
             add(SettingsPage.NOTIFICATIONS, "Alerts", "notify on batch finish notification completed alert") {
@@ -982,6 +1067,27 @@ fun SetupScreen(
                     onCheckedChange = { viewModel.saveConfig(config.copy(saveOomLogs = it)) },
                 )
             }
+            // The image cache on the phone (3.4.0): its size, up to 2.5 GB (the owner's decision), and emptying it.
+            add(SettingsPage.DATA, "Storage", "image cache size thumbnails storage space disk") {
+                LaunchedEffect(Unit) { imageCacheUsed = withContext(Dispatchers.IO) { ImageCache.usedBytes(context) } }
+                val restart = ImageCache.builtWithMb != 0 && ImageCache.builtWithMb != config.imageCacheMb
+                TextPreference(
+                    title = "Image Cache",
+                    subtitle =
+                        "Up to ${ImageCache.label(config.imageCacheMb)} of thumbnails and images · " +
+                            (imageCacheUsed?.let { "${ImageCache.formatBytes(it)} used" } ?: "counting...") +
+                            if (restart) " · the new size applies after a restart" else "",
+                ) { showImageCacheDialog = true }
+            }
+            add(SettingsPage.DATA, "Storage", "clear image cache thumbnails free space") {
+                TextPreference(title = "Clear Image Cache", subtitle = "Frees the space; images load again from the server") {
+                    scope.launch(Dispatchers.IO) {
+                        clearImageCache(context)
+                        imageCacheUsed = ImageCache.usedBytes(context)
+                        viewModel.showToast("Image cache cleared")
+                    }
+                }
+            }
             add(SettingsPage.DATA, "Danger Zone", "wipe application data delete clear reset") {
                 TextPreference(
                     title = "Wipe Application Data",
@@ -1010,8 +1116,8 @@ fun SetupScreen(
                     },
                     "grid after batch".takeIf { config.showGridAfterGeneration },
                     "tags row".takeIf { config.showActiveTagsUI },
-                    "tag suggestions".takeIf { config.tagSuggestions },
                 ).joinToString(" · "),
+            SettingsPage.FEATURES to FeatureSwitches.summary(config),
             SettingsPage.NOTIFICATIONS to
                 listOfNotNull(
                     "queue finish".takeIf { config.notifOnQueueFinish },
@@ -1040,7 +1146,7 @@ fun SetupScreen(
                         ?: readyUpdate?.takeIf { it.versionCode == updateManifest?.versionCode }?.let { "${it.versionName} ready to install" }
                         ?: ("${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only")
                 ),
-            SettingsPage.DATA to "Export, import, logs, wipe",
+            SettingsPage.DATA to "Export, import, logs, image cache, wipe",
             SettingsPage.DEBUG to "Tools for testing the app",
         )
     val hasUpdate = updateManifest != null && updateManifest?.versionCode != dismissedUpdateVersion
@@ -1304,6 +1410,42 @@ fun SetupScreen(
             )
         }
 
+        if (showImageCacheDialog) {
+            AlertDialog(
+                onDismissRequest = { showImageCacheDialog = false },
+                title = { Text("Image Cache") },
+                text = {
+                    Column {
+                        Text(
+                            "Thumbnails and images kept on the phone, so they show at once. The size applies after a restart.",
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                        ImageCache.SIZES_MB.forEach { mb ->
+                            Row(
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            viewModel.saveConfig(config.copy(imageCacheMb = mb))
+                                            showImageCacheDialog = false
+                                        }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(selected = config.imageCacheMb == mb, onClick = null)
+                                Spacer(Modifier.width(16.dp))
+                                Text(ImageCache.label(mb), fontSize = 16.sp)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showImageCacheDialog = false }) { Text("Close") }
+                },
+            )
+        }
+
         if (showNotificationModeDialog) {
             AlertDialog(
                 onDismissRequest = { showNotificationModeDialog = false },
@@ -1485,6 +1627,14 @@ fun SetupScreen(
                 },
             )
         }
+}
+
+/** Empties the image cache on the phone and in memory (3.4.0); images load again from the server. */
+@OptIn(coil.annotation.ExperimentalCoilApi::class)
+private fun clearImageCache(context: Context) {
+    val loader = context.imageLoader
+    loader.memoryCache?.clear()
+    loader.diskCache?.clear()
 }
 
 /** Into a category page and back: a short slide with a fade. */

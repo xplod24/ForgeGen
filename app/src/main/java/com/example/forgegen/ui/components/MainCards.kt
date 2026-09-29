@@ -120,7 +120,6 @@ import com.example.forgegen.ui.components.ResourcePickerSheet
 import com.example.forgegen.ui.components.ResourcePreview
 import com.example.forgegen.ui.components.StylesRow
 import com.example.forgegen.ui.components.StylesSheet
-import com.example.forgegen.ui.components.countTokens
 import com.example.forgegen.ui.components.rememberLastActive
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -457,8 +456,7 @@ fun FieldIconButton(
 
 /** "41 / 75 tokens"; past 75 the next chunk: "90 / 150 tokens". */
 @Composable
-fun TokenCount(prompt: String) {
-    val tokens = remember(prompt) { countTokens(prompt) }
+fun TokenCount(tokens: Int) {
     val limit = maxOf(TOKEN_CHUNK, (tokens + TOKEN_CHUNK - 1) / TOKEN_CHUNK * TOKEN_CHUNK)
     Text("$tokens / $limit tokens", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f))
 }
@@ -1185,11 +1183,16 @@ fun LorasCard(
     var detailsOf by remember { mutableStateOf<String?>(null) }
     val loraInfo by viewModel.loraInfo.collectAsStateWithLifecycle()
     val embeddings by viewModel.embeddings.collectAsStateWithLifecycle()
-    val appState by viewModel.appState.collectAsStateWithLifecycle()
+    val appState = viewModel.appState.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
     val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
+    // Settings > Features > LoRA Details (3.4.0): off, no trigger words, details or "Fits" filter.
+    val details = config.loraDetails
     // The checkpoint's type as the user set it (3.0.0): which LoRAs fit (3.1.0); Auto knows none.
-    val modelType = ModelSettingsRules.of(config.modelSettings, selectedModel).modelType
+    val modelType = if (details) ModelSettingsRules.of(config.modelSettings, selectedModel).modelType else ModelType.AUTO
+    // The prompt is read only when something here shows it (trigger words, a sheet), so typing a prompt does not draw
+    // this card again otherwise (3.4.0).
+    val prompt = if ((details && activeLoras.isNotEmpty()) || pickLora || detailsOf != null) appState.value.positivePrompt else ""
     MainSectionLabel(
         if (activeLoras.isEmpty()) "LoRAs" else "LoRAs · ${activeLoras.size}",
         actionText = "Add",
@@ -1226,7 +1229,7 @@ fun LorasCard(
                                 Modifier
                                     .weight(1f)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable(onClickLabel = "LoRA Details") { detailsOf = lora.name },
+                                    .clickable(enabled = details, onClickLabel = "LoRA Details") { detailsOf = lora.name },
                         )
                         Text(
                             String.format(Locale.US, "%.2f", lora.strength),
@@ -1240,7 +1243,7 @@ fun LorasCard(
                         onValueChange = { viewModel.updateLoraStrength(lora.name, roundStep(it, 0.05f)) },
                         valueRange = 0.1f..2f,
                     )
-                    LoraTriggers(info, modelType, appState.positivePrompt) { tag -> viewModel.addPromptTags(listOf(tag)) }
+                    if (details) LoraTriggers(info, modelType, prompt) { tag -> viewModel.addPromptTags(listOf(tag)) }
                 }
                 IconButton(onClick = { viewModel.removeLora(lora.name) }) {
                     Icon(
@@ -1268,11 +1271,12 @@ fun LorasCard(
             },
             onRefreshLoras = { viewModel.refreshLoras() },
             embeddings = embeddings,
-            positivePrompt = appState.positivePrompt,
-            negativePrompt = appState.negativePrompt,
+            positivePrompt = prompt,
+            negativePrompt = appState.value.negativePrompt,
             onAddEmbedding = { name, negative -> viewModel.addPromptTags(listOf(name), negative) },
             onRefreshEmbeddings = { viewModel.refreshEmbeddings() },
             onDismiss = { pickLora = false },
+            showEmbeddings = config.embeddings,
         )
     }
     detailsOf?.let { name ->
@@ -1285,7 +1289,7 @@ fun LorasCard(
                     resource?.let { viewModel.previewCandidates(it.path, isLora = true) }.orEmpty()
                 },
             modelType = modelType,
-            prompt = appState.positivePrompt,
+            prompt = prompt,
             onAddTags = { viewModel.addPromptTags(it) },
             onDismiss = { detailsOf = null },
         )

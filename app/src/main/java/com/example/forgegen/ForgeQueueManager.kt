@@ -78,6 +78,16 @@ object ForgeQueueManager {
 
     @Volatile private var lastPreviewText: String? = null
 
+    /** The main screen shows the live preview now (3.4.0): the ping asks the server for it only then. */
+    @Volatile var previewShown = false
+        private set
+
+    fun setPreviewShown(shown: Boolean) {
+        val shownBefore = previewShown
+        previewShown = shown
+        if (shown && !shownBefore && _isGenerating.value) ForgeRepository.pingNow() // the preview at once, not a ping later
+    }
+
     private val _generationQueue = MutableStateFlow<List<QueuedGeneration>>(emptyList())
     val generationQueue: StateFlow<List<QueuedGeneration>> = _generationQueue.asStateFlow()
 
@@ -489,6 +499,14 @@ object ForgeQueueManager {
      * or moved it). The running job is always first, also when failed jobs were moved above it.
      */
     private fun claim(job: QueuedGeneration): QueuedGeneration? {
+        // The conditions again, from the current values (3.4.0): nextJob's combine may see a new queue before the pause
+        // set just before it (Undo restores the pause, then the jobs) and let a paused queue send one job.
+        val mayStart =
+            !_isQueuePaused.value &&
+                _scheduledStart.value == null &&
+                ForgeRepository.isConnected.value &&
+                !ForgeRepository.isServerBusy.value
+        if (!mayStart) return null
         var claimed: QueuedGeneration? = null
         _generationQueue.update { queue ->
             val first = queue.firstOrNull { it.isRunnable() }
@@ -720,6 +738,7 @@ object ForgeQueueManager {
                     OomLogs.report(
                         reason = "The server ran out of memory.",
                         details = "${describeForReport(job)}\n\nServer answer (HTTP ${answer.code}):\n$errorBody",
+                        readServerMemory = true,
                     )
                 } else {
                     _statusText.value = "Error: HTTP ${answer.code}"

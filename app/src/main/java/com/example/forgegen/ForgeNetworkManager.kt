@@ -50,7 +50,10 @@ class ForgeNetworkManager(
         managerScope.launch(Dispatchers.IO) {
             var currentUrl = ""
             var currentTimeout = -1
+            var previous: AppConfig? = null
             ForgeRepository.config.collect { config ->
+                val before = previous
+                previous = config
                 // ForgeSettingsManager replaces the client before it publishes a new timeout.
                 val timeoutChanged = currentTimeout != config.timeout
                 if (timeoutChanged) currentTimeout = config.timeout
@@ -60,6 +63,7 @@ class ForgeNetworkManager(
                     ForgeGalleryManager.onServerChanged()
                     ForgeRepository.resetPingJob()
                     hasFetchedInitialData = false
+                    loraInfoKey = null // another server: its LoRAs' metadata is read anew
                     // isConnected only emits on a change, so when it is already true (app reopened while the process
                     // lived on, or a switch between two reachable servers) the lists must be fetched from here.
                     if (ForgeRepository.isConnected.value) {
@@ -69,6 +73,7 @@ class ForgeNetworkManager(
                 } else if (timeoutChanged && currentUrl.isNotEmpty()) {
                     rebuildForgeApi(currentUrl) // Retrofit keeps the client it was built with
                 }
+                if (before != null) onFeaturesChanged(before, config)
             }
         }
 
@@ -143,13 +148,47 @@ class ForgeNetworkManager(
         }
     }
 
+    /**
+     * A feature of Settings > Features switched on (3.4.0): its list is read now instead of at the next connect; one
+     * switched off drops its list (the LoRAs' metadata can take megabytes).
+     */
+    private fun onFeaturesChanged(
+        before: AppConfig,
+        now: AppConfig,
+    ) {
+        val connected = ForgeRepository.isConnected.value && forgeApi != null
+        if (now.embeddings != before.embeddings) {
+            if (!now.embeddings) {
+                _embeddings.value = EmbeddingList()
+            } else if (connected) {
+                managerScope.launch(Dispatchers.IO) { fetchEmbeddings() }
+            }
+        }
+        if (now.serverStyles != before.serverStyles) {
+            if (!now.serverStyles) {
+                _promptStyles.value = emptyList()
+            } else if (connected) {
+                managerScope.launch(Dispatchers.IO) { fetchPromptStyles() }
+            }
+        }
+        if (now.loraDetails != before.loraDetails) {
+            if (!now.loraDetails) {
+                _loraInfo.value = LoraInfoIndex()
+                loraInfoKey = null
+            } else if (connected) {
+                val key = loraListKey(_availableLoras.value)
+                managerScope.launch(Dispatchers.IO) { if (fetchLoraInfo() != null) loraInfoKey = key }
+            }
+        }
+    }
+
     fun changeCheckpoint(modelTitle: String) {
         ForgeModelManager.updateState(selectedModel = modelTitle)
         managerScope.launch(Dispatchers.IO) {
             try {
                 forgeApi?.setOptions(OptionsPayloadDto(modelTitle))
                 // Which embeddings fit depends on the model (3.1.0).
-                fetchEmbeddings()
+                if (getConfig().embeddings) fetchEmbeddings()
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.e(TAG, "Failed to switch model. Exception: $e")
@@ -285,8 +324,12 @@ class ForgeNetworkManager(
                                         _availableLoras.value = loras
                                         customApiSuccess = true
                                         // The LoRAs' metadata is a large answer: read after the lists, without holding
-                                        // the start (not a child of this fetch).
-                                        managerScope.launch(Dispatchers.IO) { fetchLoraInfo() }
+                                        // the start (not a child of this fetch), and only when the LoRAs changed since
+                                        // it was read (3.4.0: a moment without Wi-Fi used to download it all again).
+                                        val key = loraListKey(loras)
+                                        if (getConfig().loraDetails && (key != loraInfoKey || _loraInfo.value.size == 0)) {
+                                            managerScope.launch(Dispatchers.IO) { if (fetchLoraInfo() != null) loraInfoKey = key }
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -340,11 +383,11 @@ class ForgeNetworkManager(
                         // The VAEs and text encoders model settings pick from (3.0.0): Forge's list, else A1111's VAEs.
                         val defModules = async { fetchModules() }
 
-                        // The embeddings and the server's styles (3.1.0), small lists.
+                        // The embeddings and the server's styles (3.1.0), small lists, when their features are on (3.4.0).
                         val defExtras =
                             async {
-                                fetchEmbeddings()
-                                fetchPromptStyles()
+                                if (getConfig().embeddings) fetchEmbeddings()
+                                if (getConfig().serverStyles) fetchPromptStyles()
                             }
 
                         awaitAll(defSamplers, defSchedulers, defUpscalers, defModelsAndLoras, defOpts, defModules, defExtras)
@@ -358,13 +401,21 @@ class ForgeNetworkManager(
             }
     }
 
-    /** Every LoRA with its training metadata (3.1.0), read as the answer streams; null when the server gave none. */
+    // The LoRA list whose metadata was read last (names and paths), so a reconnect does not read it again (3.4.0).
+    @Volatile private var loraInfoKey: String? = null
+
+    private fun loraListKey(loras: List<ApiResource>) = loras.joinToString("\n") { it.name + "|" + it.path }
+
+    /**
+     * Every LoRA with its training metadata (3.1.0), read as the answer streams; null when the server gave none. Kept
+     * for the screen only with Settings > Features > LoRA Details on (the fallback list of LoRAs needs it anyway).
+     */
     private suspend fun fetchLoraInfo(): List<LoraInfo>? =
         try {
             val res = forgeApi?.getLorasWithMetadata()
             if (res?.isSuccessful == true) {
                 res.body()?.use { body -> JsonReader(body.charStream()).use { LoraMetadata.readList(it) } }?.also {
-                    _loraInfo.value = LoraInfoIndex(it)
+                    if (getConfig().loraDetails) _loraInfo.value = LoraInfoIndex(it)
                 }
             } else {
                 res?.errorBody()?.close()
@@ -504,6 +555,7 @@ class ForgeNetworkManager(
                 val res = forgeApi?.refreshLoras()
                 if (res?.isSuccessful == true) {
                     ResourcePreviews.forget() // new pictures may have come with the new files
+                    loraInfoKey = null // Refresh reads the metadata again, as before 3.4.0
                     fetchApiData()
                     onResult(true, "LoRAs list refreshed successfully")
                 } else {

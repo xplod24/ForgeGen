@@ -113,6 +113,8 @@ fun MainTopBar(
     modifier: Modifier = Modifier,
     // When Restart Forge was asked for (3.3.0); 0 while Forge is not restarting.
     restartingSince: Long = 0L,
+    // Settings > Features > Memory Meters (3.4.0): off, an icon opens the Server Memory panel instead.
+    showMeters: Boolean = true,
 ) {
     Box(modifier = modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 12.dp, vertical = 4.dp)) {
         Surface(
@@ -135,7 +137,9 @@ fun MainTopBar(
                     ConnectionStatus(connection, pingMs, searchEndsAt, restartingSince)
                 }
                 // Only what the server reported, and only while connected (connectionFailed forgets it).
-                if (memory != null && connection == ServerConnection.CONNECTED) {
+                if (!showMeters && connection == ServerConnection.CONNECTED) {
+                    IconButton(onClick = onMemoryClick) { Icon(Icons.Default.Memory, contentDescription = "Server Memory") }
+                } else if (memory != null && connection == ServerConnection.CONNECTED) {
                     MemoryMeters(memory, onClick = onMemoryClick)
                 }
                 IconButton(onClick = onGalleryClick) { Icon(Icons.Default.PhotoLibrary, contentDescription = "Gallery") }

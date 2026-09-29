@@ -653,7 +653,10 @@ class MainActivity : ComponentActivity() {
                         color = MaterialTheme.colorScheme.background,
                     ) {
                         if (isStarted) {
-                            AppNavigation(viewModel = viewModel, navController = navController)
+                            // Settings > Features > Model and LoRA Pictures (3.4.0), for every list with such pictures.
+                            CompositionLocalProvider(LocalResourcePictures provides config.resourcePictures) {
+                                AppNavigation(viewModel = viewModel, navController = navController)
+                            }
                             LaunchedEffect(Unit) {
                                 withFrameNanos { } // drawn once: the splash may leave
                                 mainShown = true

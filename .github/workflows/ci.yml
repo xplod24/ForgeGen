@@ -34,4 +34,5 @@ jobs:
         run: ./gradlew testDebugUnitTest
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        # Not debuggable, as published (3.4.0; see app/build.gradle.kts).
+        run: ./gradlew assembleDebug -Pforgegen.publish

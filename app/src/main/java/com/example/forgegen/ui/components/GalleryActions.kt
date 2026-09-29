@@ -107,7 +107,8 @@ fun SelectionMoreMenu(
     canWrite: Boolean,
     onSave: () -> Unit,
     onZip: () -> Unit,
-    onUpscale: () -> Unit,
+    // Null without Settings > Features > Image Jobs (3.4.0).
+    onUpscale: (() -> Unit)?,
     onMove: () -> Unit,
     onCopy: () -> Unit,
     onDelete: () -> Unit,
@@ -147,7 +148,7 @@ fun SelectionMoreMenu(
             )
             item("Save to Phone", Icons.Default.Save, onClick = onSave)
             item("Download as ZIP", Icons.Default.FolderZip, onClick = onZip)
-            item("Upscale or Vary", Icons.Default.OpenInFull, onClick = onUpscale)
+            if (onUpscale != null) item("Upscale or Vary", Icons.Default.OpenInFull, onClick = onUpscale)
             HorizontalDivider()
             item("Move to Folder", Icons.AutoMirrored.Filled.DriveFileMove, enabled = canWrite, onClick = onMove)
             item("Copy to Folder", Icons.Default.ContentCopy, enabled = canWrite, onClick = onCopy)

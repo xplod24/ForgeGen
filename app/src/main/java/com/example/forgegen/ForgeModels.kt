@@ -89,9 +89,48 @@ data class AppConfig(
     var tagSuggestions: Boolean = true,
     // The styles saved on the server under the prompt (3.1.0); off unless turned on (the owner's decision).
     var serverStyles: Boolean = false,
+    // Features that can be switched off in Settings > Features (3.4.0); on unless switched off. Off, a feature leaves
+    // the screen and the app no longer asks the server for its data.
+    var embeddings: Boolean = true,
+    var loraDetails: Boolean = true,
+    var resourcePictures: Boolean = true,
+    var livePreview: Boolean = true,
+    var memoryMeters: Boolean = true,
+    var folderCovers: Boolean = true,
+    var favoritesCheck: Boolean = true,
+    var imageJobs: Boolean = true,
+    var serverQueue: Boolean = true,
+    // The image cache's size on the phone in MB (ImageCache.SIZES_MB, 3.4.0); used from the next start.
+    var imageCacheMb: Int = ImageCache.DEFAULT_MB,
     // What each checkpoint is and needs, and its own defaults (3.0.0), under ModelSettingsRules.key of the model.
     var modelSettings: Map<String, ModelSettings> = emptyMap(),
 )
+
+/** The switches of Settings > Features (3.4.0), for the line under the page's name on the main settings page. */
+object FeatureSwitches {
+    fun of(config: AppConfig): List<Boolean> =
+        with(config) {
+            listOf(
+                tagSuggestions,
+                serverStyles,
+                embeddings,
+                loraDetails,
+                resourcePictures,
+                livePreview,
+                memoryMeters,
+                folderCovers,
+                favoritesCheck,
+                imageJobs,
+                serverQueue,
+            )
+        }
+
+    /** "9 of 11 on". */
+    fun summary(config: AppConfig): String {
+        val switches = of(config)
+        return "${switches.count { it }} of ${switches.size} on"
+    }
+}
 
 /** The rows of the main screen's cards that open (AppConfig.mainOpenRows, 3.0.0). */
 object MainRows {
@@ -334,8 +373,11 @@ interface GalleryImageDao {
     @Query("DELETE FROM gallery_images")
     suspend fun clearAll()
 
-    /** The index without the prompts, which are most of its size; they are searched with [findPathsByPrompt]. */
-    @Query("SELECT fullpath, name, date, model, loras, size FROM gallery_images")
+    /**
+     * The index without the prompts, which are most of its size; they are searched with [findPathsByPrompt]. The newest
+     * first (3.4.0): All Images used to sort the whole index after every change.
+     */
+    @Query("SELECT fullpath, name, date, model, loras, size FROM gallery_images ORDER BY date DESC, name DESC")
     suspend fun getIndexedImages(): List<IndexedImage>
 
     /** Sizes of images indexed before the index kept them (3.2.0), filled in by the next sync. */
