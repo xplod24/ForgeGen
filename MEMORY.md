@@ -341,6 +341,44 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `findPathsByPrompt` (SQL LIKE, escaped); sync reads `getAllPaths`. Grid and list: `GalleryThumbnail` (AsyncImage) +
   `Modifier.shimmer()` (draw phase). Models/LoRAs: `ResourcePickerSheet` (lazy, searchable). Undo history: 100 steps,
   typing grouped (800 ms). `PromptHighlighting` is an object. Tests: G32 (session, debounce, answer order).
+- **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
+  `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
+  `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run
+  the unshrunk code, so none of them can catch an R8 fault: it shows only in the published app. When coding:
+  - **Gson data stays in `com.example.forgegen`** (any subpackage): settings, presets, the saved queue, backups and the
+    server's answers. The keep rule keeps every class there with all its fields and constructors, so a new data class
+    there needs nothing. A class Gson reads outside that package, or a library's class, needs its own `-keep` rule.
+  - **Names stay:** field names are the JSON keys of saved data and of the server's answers, so `-dontobfuscate` must
+    stay. Renaming a field of saved data still needs `@SerializedName("oldName")` (as without R8).
+  - **Generic types for Gson** only as `object : TypeToken<List<X>>() {}.type`, as the app does now (TypeToken
+    subclasses and the `Signature` attribute are kept).
+  - **No reflection on methods or by name:** fields and constructors of app classes are kept, methods are not (R8
+    inlines, merges or removes them). No `getMethod`/`getDeclaredMethod`/`Class.forName` on names in strings, no
+    kotlin-reflect (`memberProperties`; not a dependency). If it is ever needed, add a keep rule for exactly that and
+    check it in the dex. `e.javaClass.simpleName` in messages is fine (names are not obfuscated).
+  - **Resources only through `R.`** (`R.drawable.x`, `R.string.x`): `isShrinkResources` removes resources the code does
+    not refer to, so never look one up by name (`getIdentifier`); if that is ever needed, list it with `tools:keep` in
+    `res/raw/keep.xml`. Files in `assets/` (the CHANGELOG) are never removed.
+  - **Libraries:** Retrofit, Room, OkHttp, Coil, coroutines and Compose ship their own rules (Gson's own cover only
+    `@SerializedName` fields and TypeTokens, hence the app's keep rule); a new
+    endpoint in `ForgeApi` needs nothing (the generic return types keep their signatures). Manifest components
+    (activities, services, `QueueTileService`, `UpdateCheckJob`) are kept automatically. A new library: check whether
+    its AAR ships consumer rules and whether it reads classes by reflection (Moshi/Jackson without codegen, Gson on
+    the library's own classes); if so, add rules.
+  - **Crash logs from the published APK:** class and method names are real, but the line numbers are R8's (e.g. line 8
+    for line 45) and inlined methods are missing. Rebuild that version's commit with
+    `./gradlew assembleDebug -Pforgegen.publish` (R8 gives the same output for the same commit: 3.4.1 built here and on
+    GitHub had the same size to the byte), then run `~/android-sdk/cmdline-tools/latest/bin/retrace
+    app/build/outputs/mapping/debug/mapping.txt <trace file>`.
+  - **Check before a release** that adds Gson data outside the package, reflection, a new library or resources looked
+    up by name (routine changes need only the CI build): build with `-Pforgegen.publish`, read
+    `app/build/outputs/mapping/debug/usage.txt` (what R8 removed: unused methods such as `copy`/`componentN` are
+    expected, a class or field of `com.example.forgegen` never), compare `javap -p` of
+    `app/build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes` with `dexdump` of the APK, and check
+    resources with `apkanalyzer`. 3.4.1 was checked this way (all 830 classes, 3514 fields and every constructor kept).
+    No emulator here, so also ask the owner to try the published APK.
+  - **Don't** turn R8 off, obfuscate names, narrow the keep rules for size, or switch to the release build type
+    without the owner.
 - **2.0.0 conveniences:** queue Undo (`RemovedJobs`, `restoreJobs`), `duplicateJob` (before failed jobs), drag
   (`moveQueueItem`, the running job stays first); `AppState.withSwappedSize`; `vibrateOnFinish` (`batchFinished`,
   VIBRATE); `Modifier.zoomable` (pinch/double tap, 1x swipes left to the pager; images decoded at
@@ -358,6 +396,9 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   extras/upscale endpoints or interrogate (prompt from an image); new ideas must work through txt2img parameters.
 - **Language (owner's explicit request):** always talk to the owner in Polish, with no English sentences or headings and Polish words instead of English jargon where a natural one exists; code, UI texts and release notes stay in English.
 - **Releases (owner's standing request):** after finishing a change, Claude publishes the release itself: bump `gradle.properties` (patch for fixes and small changes, minor for new features, major only for a clear change across the whole repository OR on the owner's explicit command), add the `## <version>` section to `CHANGELOG.md` and push to master. Release notes are written for the user of the app, in English like the rest of the UI. Since 3.0.0-4 (owner's request) each section names its kind (**Bugfix**, **Polish**, **Feature**, **Overhaul**) in its first line and sorts its items into New, Changed and Fixed, so a reader knows at once what the update is (rule in CLAUDE.md).
+- **R8 from now on (owner, after 3.4.1 ran without faults):** every published APK is shrunk and optimized by R8, and
+  new code must work with it: follow "R8 rules" in section 1 whenever code touches saved data, Gson, reflection,
+  resources or a new library.
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: "What's New" once after an update, since 3.0.0 as the floating bar (the notes open only on "Show").
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.
@@ -376,14 +417,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Release build type:** since 3.4.0 (owner's "Tak") the published APK is the debug variant built with
   `-Pforgegen.publish`: not debuggable, same `.debug` app id, key and `app-debug.apk` name. Since 3.4.1 (patch
   "Polish", after the owner confirmed 3.4.0 ran smoothly) R8 shrinks it too (`isMinifyEnabled`/`isShrinkResources`
-  only with the property; ~6.5 MB): `proguard-rules.pro` has `-dontobfuscate` + `SourceFile,LineNumberTable` (crash
-  logs, OOM reports and the debug log keep real names) and keeps every class of `com.example.forgegen` with its
-  fields and constructors (Gson reads them by name; R8 drops fields it sees written but never read, and the no-arg
-  constructor gives an older save the defaults of new fields), `Signature`/annotations and TypeToken subclasses.
-  No emulator here: 3.4.1 was checked by comparing the classes before and after R8 (all 830 classes, 3514 fields and
-  every constructor kept; the TypeToken and Retrofit generic signatures intact). Any new class read by reflection
-  outside `com.example.forgegen` needs its own keep rule. Don't switch to the release build type or a new key without
-  the owner.
+  only with the property; ~6.5 MB instead of 52): `proguard-rules.pro` has `-dontobfuscate` +
+  `SourceFile,LineNumberTable` (crash logs, OOM reports and the debug log keep real names) and keeps every class of
+  `com.example.forgegen` with its fields and constructors (Gson reads them by name; R8 drops fields it sees written
+  but never read, and the no-arg constructor gives an older save the defaults of new fields), `Signature`/annotations
+  and TypeToken subclasses. The owner confirmed 3.4.1 works without faults; the rules for new code are "R8 rules" in
+  section 1. Don't switch to the release build type or a new key without the owner.
 - **Now Bar: the owner confirmed at 2.0.3 that it works on their Samsung and looks great;** the "(Work in Progress)" label was removed in 2.3.0. Samsung shows other companies' Live Updates only with "Live notifications for all apps" in the developer options (or for apps on its list); to be continued later. Live Updates for every Android 16 phone (not only Samsung) were proposed and wait for this too.
 - The Infinite Image Browsing cookie (`IIB_S=...`) is hard-coded in `ForgeApi`, `ForgeNetworkManager`, `ForgeSettingsManager` and `SetupScreen`; it should become a setting.
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.

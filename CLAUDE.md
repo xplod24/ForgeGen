@@ -19,3 +19,6 @@ Read `MEMORY.md` before working: it holds the architecture notes and the owner's
   Its items then go under `### New`, `### Changed` and `### Fixed`, in that order, leaving out the empty ones.
   MarkdownTest checks this for every section from 3.0.0-4 on.
 - A session cannot push tags; the workflow creates them.
+- The published APK is shrunk and optimized by R8 (owner's decision since 3.4.1), but local builds and all tests run
+  unshrunk code. Code touching saved data, Gson, reflection, resources or a new library follows "R8 rules" in
+  `MEMORY.md`.
