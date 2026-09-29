@@ -399,6 +399,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **R8 from now on (owner, after 3.4.1 ran without faults):** every published APK is shrunk and optimized by R8, and
   new code must work with it: follow "R8 rules" in section 1 whenever code touches saved data, Gson, reflection,
   resources or a new library.
+- **README.md (owner's request after 3.4.1):** the repository's front page, in English: the app icon as its logo
+  (`docs/images/logo.png`, made from `app/src/main/ic_launcher-playstore.png` with rounded corners; make it again if
+  the icon changes), a **build** badge (shields.io status of `release.yml` on master, which runs the tests and the
+  build on every push there; `ci.yml` never runs on master), the features, the server's requirements, installation,
+  building, structure and releases. Keep it true: a change that adds, removes or renames a feature, a requirement or
+  a build step updates README.md in the same commit.
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: "What's New" once after an update, since 3.0.0 as the floating bar (the notes open only on "Show").
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.

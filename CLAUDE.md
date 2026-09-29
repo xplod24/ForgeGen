@@ -12,7 +12,8 @@ Read `MEMORY.md` before working: it holds the architecture notes and the owner's
   command; a micro-patch `x.y.z-n` via `VERSION_MICRO` only on the owner's command, and `VERSION_MICRO` goes back
   to 0 whenever patch, minor or major is raised), add a `## <version>` section to the top of `CHANGELOG.md`
   and push to master. `.github/workflows/release.yml` then tags `v<version>` and publishes `app-debug.apk`. The
-  `## <version>` section is also what the app shows in its "What's New" dialog after the update.
+  `## <version>` section is also what the app shows in its "What's New" dialog after the update. A change that adds,
+  removes or renames a feature, a server requirement or a build step also updates `README.md`.
 - Every `## <version>` section (owner's rule since 3.0.0-4) starts with one line naming the release's kind in bold and
   summing it up (`**Bugfix** · a lighter top bar ...`), kinds: **Bugfix** (mainly fixes), **Polish** (small changes
   to the look and use), **Feature** (new features), **Overhaul** (a large rework of a part of the app or all of it).
