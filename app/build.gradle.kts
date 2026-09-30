@@ -133,29 +133,30 @@ android {
     }
 }
 
-// CHANGELOG.md goes into the app's assets for the "What's New" dialog shown after an update (WhatsNew.kt).
-abstract class CopyChangelogTask : DefaultTask() {
-    @get:InputFile
-    @get:PathSensitive(PathSensitivity.NONE)
-    abstract val changelog: RegularFileProperty
+// Files from the repository's root that go into the app's assets: CHANGELOG.md for the "What's New" dialog shown
+// after an update (WhatsNew.kt), and LICENSE for Settings > Updates > License (AppLicense.kt, 3.4.2).
+abstract class CopyAppAssetsTask : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.NAME_ONLY)
+    abstract val files: ConfigurableFileCollection
 
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun copy() {
-        changelog.get().asFile.copyTo(outputDir.file("CHANGELOG.md").get().asFile, overwrite = true)
+        files.forEach { it.copyTo(outputDir.file(it.name).get().asFile, overwrite = true) }
     }
 }
 
-val copyChangelog =
-    tasks.register<CopyChangelogTask>("copyChangelog") {
-        changelog.set(layout.projectDirectory.file("../CHANGELOG.md"))
+val copyAppAssets =
+    tasks.register<CopyAppAssetsTask>("copyAppAssets") {
+        files.from(layout.projectDirectory.file("../CHANGELOG.md"), layout.projectDirectory.file("../LICENSE"))
     }
 
 androidComponents {
     onVariants { variant ->
-        variant.sources.assets?.addGeneratedSourceDirectory(copyChangelog, CopyChangelogTask::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(copyAppAssets, CopyAppAssetsTask::outputDir)
     }
 }
 

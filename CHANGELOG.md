@@ -1,3 +1,9 @@
+## 3.4.2
+**Polish** · ForgeGen is free software under the GNU GPL, and Settings > Updates shows its license
+
+### New
+- **License:** ForgeGen is now free software under the GNU General Public License, version 3 or later. You may use, change and share it, as long as what you share stays under the same license with its source code. Settings > Updates > License shows the notice, the whole license (also offline) and a link to the source code.
+
 ## 3.4.1
 **Polish** · the app is about 6.5 MB instead of 52 MB
 

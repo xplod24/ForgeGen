@@ -123,6 +123,7 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   installs it in the background where Android allows it, never while the queue works or while you use the app. After
   an update a "What's New" bar offers the release notes.
 - Light, dark or system theme.
+- The license, its full text and a link to the source code in Settings > Updates > License.
 
 ## Requirements
 

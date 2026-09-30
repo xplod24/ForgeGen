@@ -3,7 +3,7 @@ package com.example.forgegen
 /* ============================================================================
  * WHAT'S NEW
  * After an update the app shows the CHANGELOG.md sections of the versions the user has not seen yet.
- * The build copies CHANGELOG.md into the app's assets (see copyChangelog in app/build.gradle.kts).
+ * The build copies CHANGELOG.md into the app's assets (see copyAppAssets in app/build.gradle.kts).
  * ============================================================================ */
 object WhatsNew {
     const val CHANGELOG_ASSET = "CHANGELOG.md"

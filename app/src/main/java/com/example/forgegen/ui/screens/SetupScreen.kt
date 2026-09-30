@@ -2,6 +2,7 @@ package com.example.forgegen
 
 import android.app.KeyguardManager
 import coil.imageLoader
+import com.example.forgegen.ui.components.LicenseDialog
 import com.example.forgegen.ui.components.MarkdownText
 import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
 import com.example.forgegen.ui.components.RestartForgeDialog
@@ -246,6 +247,7 @@ fun SetupScreen(
     var showAllReleaseNotes by remember { mutableStateOf(false) }
     // "Install" while the queue works: installing ends the app, so it asks first.
     var confirmInstallDuringQueue by remember { mutableStateOf(false) }
+    var showLicenseDialog by remember { mutableStateOf(false) }
 
     var isTestingConnection by remember { mutableStateOf(false) }
     var testStatus by remember { mutableStateOf<String?>(null) }
@@ -1019,6 +1021,12 @@ fun SetupScreen(
                     }
                 }
             }
+            add(SettingsPage.UPDATES, null, "license gpl gnu free software source code copyright author") {
+                TextPreference(
+                    title = "License",
+                    subtitle = "${AppLicense.NAME} · © 2026 ${AppLicense.AUTHOR}",
+                ) { showLicenseDialog = true }
+            }
             add(SettingsPage.UPDATES, null, "install updates automatically background wi-fi") {
                 SwitchPreference(
                     title = "Install Updates Automatically",
@@ -1373,6 +1381,13 @@ fun SetupScreen(
                 markdown = releaseNotesMarkdown(notesOf.changelog.orEmpty()),
                 onDismiss = { showAllReleaseNotes = false },
                 title = "What's New in ${notesOf.versionName}",
+            )
+        }
+
+        if (showLicenseDialog) {
+            LicenseDialog(
+                onDismiss = { showLicenseDialog = false },
+                onOpenSource = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(AppLicense.SOURCE_URL))) },
             )
         }
 
