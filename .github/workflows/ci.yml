@@ -38,7 +38,7 @@ jobs:
         run: ./gradlew assembleDebug -Pforgegen.publish
 
       - name: Sign with ForgeGen's key
-        # As release.yml signs the published APK (3.5.1), so a missing or wrong secret shows before master. Pull
+        # As release.yml signs the published APK, so a missing or wrong secret shows before master. Pull
         # requests get no secrets from forks, so only pushes check it.
         if: github.event_name == 'push'
         env:

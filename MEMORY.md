@@ -14,25 +14,22 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Out-of-memory logs:** `OomLogs` writes a report (reason, app/device/memory info, job settings without prompts, server answer, then the app's own `logcat -d --pid` streamed into the file) to Downloads as `ForgeGen-OOM-<date>.txt` through MediaStore (no permission needed on Android 10+), only when `AppConfig.saveOomLogs` is on (Settings > Backup & Data). Called for server OOM and the app's `OutOfMemoryError` in `executeGeneration`, and by the default uncaught-exception handler (`OomLogs.install`, from the ViewModel) for OOM crashes, which then continue to the previous handler.
 - **Updates:** `ForgeUpdateManager.kt` reads `releases/latest` of `xplod24/ForgeGen` through `GitHubApi` (public repo, no token), offers releases tagged `v<major>.<minor>.<patch>` whose versionCode (`versionCodeFromTag`) is higher than the installed one, downloads the `.apk` asset and checks the SHA-256 `digest` GitHub reports.
 - **Versioning:** the version is `VERSION_MAJOR/MINOR/PATCH/MICRO` in `gradle.properties` (started at 1.0.0). `versionName = "major.minor.patch"`, or `"major.minor.patch-micro"` for a micro-patch (micro > 0, owner's command only; reset to 0 when raising anything else). Since 1.1.4-1 `versionCode = major*100_000_000 + minor*100_000 + patch*100 + micro` (major <= 20, minor/patch < 1000, micro < 100); up to 1.1.4 it was `major*1_000_000 + minor*1_000 + patch`, and every new code is higher. `versionCodeFromTag` in `ForgeModels.kt` must use the same formula. The 1.1.4 updater cannot parse `-micro` tags, so 1.1.4 users install 1.1.4-1 by hand once. Builds up to build-1034 used 1000 + commit count. Only local (debuggable) builds end in `-DEBUG`; since 3.5.2 the published `-Pforgegen.publish` APK shows the plain version (owner: "DEBUG" misled users about a finished, signed build). Code that reads the installed version strips a `-DEBUG` (`ForgeViewModel.installedVersion` for What's New, `ForgeUpdateManager`'s "up to date" toast).
-- **Signing (3.5.1, key rotation):** up to 3.5.0 the published APK was signed with the committed
-  `app/debug.keystore` (password `android`, alias `androiddebugkey`, cert SHA-256 `0dc1e860…`), so anyone could sign
-  an update. Since 3.5.1 it is signed with ForgeGen's own key (PKCS12, alias `forgegen`, cert SHA-256
+- **Signing:** ForgeGen's own key (PKCS12, alias `forgegen`, cert SHA-256
   `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`, made 2026-09-24): never in the repo; the owner
-  has it (backup zip with password and lineage, 2026-09-30) and it is in the repository secrets
+  has it (backup zip with password and the old lineage, 2026-09-30) and it is in the repository secrets
   `RELEASE_KEYSTORE_BASE64` / `RELEASE_KEYSTORE_PASSWORD` (Actions, repository level; added by the owner, the session
-  cannot read or set secrets). `tools/sign-apk.sh` signs by APK Signature Scheme v3 rotation: `apksigner sign` with
-  the debug key, `--next-signer` the release key, `--lineage app/signing/forgegen-lineage.bin` (committed; debug ->
-  release, the old key without the rollback capability), `--v1-signing-enabled false --rotation-min-sdk-version 31`
-  (so only a v3.0 block, which every Android 9+ reads); then it checks the v3 signer is the release key alone and the
-  lineage runs 0dc1e860 -> 22c6e6ad (newer apksigner prints "V3.0 Signer: certificate ...", older "Signer #1
-  certificate ..."). release.yml runs it before publishing (a missing or wrong secret stops the release), ci.yml on
-  every push to a work branch. So a phone takes 3.5.1 as an ordinary update of the debug-signed app and from then on
-  accepts only APKs signed with the release key; an APK signed with the debug key alone no longer installs over it.
-  Local builds: with `RELEASE_KEYSTORE_FILE` / `RELEASE_KEYSTORE_PASSWORD` set, Gradle signs the debug builds with
-  the release key (no lineage needed to update an app whose current signer is that key). Never commit `*.p12` /
-  `*.jks` (.gitignore). The rotated APK's install could not be tried here (no device); the owner's update to 3.5.1 is
-  the first real one.
-- **Package:** `applicationId = io.github.xplod24.forgegen` (debug: `.debug`, label "ForgeGen"); the code namespace stays `com.example.forgegen`. Changed in build-1033 because builds signed with the old Android Studio key used `com.example.forgegen.debug`; changing it again makes a separate app without the user's data.
+  cannot read or set secrets). `tools/sign-apk.sh` re-signs the built APK with that key alone (`apksigner sign
+  --v1-signing-enabled false`: a v3 block only, as minSdk is 31) and checks that the only signer is that key and that
+  there is no lineage (newer apksigner prints "V3.0 Signer: certificate ...", older "Signer #1 certificate ...").
+  release.yml runs it before publishing (a missing or wrong secret stops the release), ci.yml on every push to a
+  work branch. Local builds: with `RELEASE_KEYSTORE_FILE` / `RELEASE_KEYSTORE_PASSWORD` set, Gradle signs the debug
+  builds with that key; otherwise with the committed `app/debug.keystore` (password `android`, alias
+  `androiddebugkey`, cert `0dc1e860…`), and those do not install over the published app. Never commit `*.p12` /
+  `*.jks` (.gitignore). History: up to 3.5.0 releases were signed with the public debug key (anyone could sign an
+  update); 3.5.1 to 3.5.2-1 (package `.debug`) by v3 rotation debug -> release key (lineage without the rollback
+  capability; the owner confirmed 3.5.1 updated fine); since 3.5.2-2 (new package) the release key alone, and
+  `app/signing/forgegen-lineage.bin` was removed.
+- **Package:** `applicationId = io.github.xplod24.forgegen` for every build since 3.5.2-2 (owner's command 2026-09-30: "debug" in the package hurt the eye; label "ForgeGen"); the code namespace stays `com.example.forgegen`. Up to 3.5.2-1 the debug build type added `.debug` (the published app was `io.github.xplod24.forgegen.debug`), and before build-1033 it was `com.example.forgegen`. Changing it again makes another separate app.
 - **Move to the package without `.debug` (owner's command 2026-09-30, then the owner chose this "bridge"):** a new package is a
   separate app for Android, and the 3.5.2 updater opens its PackageInstaller session with `setAppPackageName`, so it
   would fail on it again and again. So two micro-patches: **3.5.2-1** (still `.debug`, signed by rotation as 3.5.1)
@@ -46,8 +43,10 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `applicationIdSuffix`, and `tools/sign-apk.sh` signs with the release key alone (no lineage: the public debug key
   keeps no say in the new app: `apksigner sign --ks <release> --v1-signing-enabled false`, then check a v3 signer
   22c6e6ad alone and that `apksigner lineage` finds none; remove `app/signing/forgegen-lineage.bin`), and updates
-  build.gradle.kts comments, README (package, "Coming from 3.5.2-1 or older?" steps, signing) and this file. Release it
-  only after the owner confirms 3.5.2-1 is installed, else 3.5.2 phones would meet it.
+  build.gradle.kts comments, README (package, "Coming from 3.5.2-1 or older?" steps, signing) and this file; the
+  manifest's `<queries>` went away with it (it named the app itself). Released after the owner confirmed 3.5.2-1
+  (2026-09-30). The move code stays for a later move; the new app's first self-update asks for a confirmation once
+  (the old app or the system's installer is its installer of record).
 - **Releasing:** raise the version in `gradle.properties`, add a `## <version>` section at the top of `CHANGELOG.md` (the release notes, also shown in the app's "What's New" dialog) and push to master. `.github/workflows/release.yml` tests, builds, signs (`tools/sign-apk.sh`, 3.5.1) and publishes `v<version>` with `ForgeGen.apk` (`app-debug.apk` up to 3.5.2; the updater takes any `.apk` of a release) and, since 3.5.0, R8's `mapping.zip` only if that tag does not exist yet and is newer than the last `v*` tag; other pushes just test and build. `ci.yml` tests and builds pull requests and pushes to work branches (so a change is known to compile before master) and must never publish a release (it would become "latest"). AGP 9 creates unit tests only for the debug variant (`testDebugUnitTest`). The session cannot push tags, the workflow creates them.
 - **What's New:** the build copies `CHANGELOG.md` into the assets (`copyAppAssets` in `app/build.gradle.kts`, which since 3.4.2 also copies `LICENSE`). After an update `ForgeViewModel.checkWhatsNew` takes the sections newer than the last version seen (`whats_new_last_version` setting; without it only the current version, and nothing after a fresh install) into `whatsNew` and sets `whatsNewBar`. Since 3.0.0 (owner's request) `WhatsNewBar` (MainActivity's overlay, top centre, once unlocked and past the start) floats half-transparent at the top: slides in, bobs (infinite transition, ±3 dp), shakes lightly every 5 s (`Animatable` in a `LaunchedEffect`), and after `WHATS_NEW_BAR_MS` = 30 s flies up off the screen (`hideWhatsNewBar`, which also drops the notes). The version counts as seen when the bar shows (`markWhatsNewSeen`). "Show" = `openWhatsNew` (`whatsNewOpen`) -> `WhatsNewDialog`, rendered by `Markdown.parse` + `MarkdownText`; OK = `dismissWhatsNew`. Debug "Show What's New" shows the bar again. Keep the changelog in simple Markdown (`## version`, `- ` items, **bold**, `code`, [links](url)). Since 3.0.0-4 (owner's rule, see CLAUDE.md) every section starts with `**<Kind>** · summary` (Bugfix, Polish, Feature, Overhaul) and has `### New` / `### Changed` / `### Fixed`; MarkdownTest checks it. Tests: G18.
   The "Update Available" card in Settings > Updates draws the release notes the same way since 3.0.0-2:
@@ -370,7 +369,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   "Install Update" goes through `SelfUpdate.install` (the old ACTION_VIEW screen only if a session cannot be opened).
   Tested by the owner with 2.0.3 (an empty release) on the Samsung phone: the silent update works; only Google Play
   Protect shows its prompt (sideloaded, debug-signed, debuggable app). Since 3.4.0 the published APK is not
-  debuggable and since 3.5.1 it is signed with the own key (rotation, same app id: no move needed); whether Play
+  debuggable, since 3.5.1 it is signed with the own key and since 3.5.2-2 its package has no ".debug"; whether Play
   Protect then prompts less is not known yet. `GitHubApi.baseUrl` is overridable for tests (G34).
   From the app it is two steps since 3.0.0-3 (owner's bug report: after the download the card offered "Install Update"
   again and each tap started another install while the app was open, a loop). "Download" =
@@ -490,7 +489,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 
 ## 4. Current Outstanding Tasks
 - **Release build type:** since 3.4.0 (owner's "Tak") the published APK is the debug variant built with
-  `-Pforgegen.publish`: not debuggable, same `.debug` app id, key and `app-debug.apk` name. Since 3.4.1 (patch
+  `-Pforgegen.publish`: not debuggable, the same app id as local builds (no `.debug` since 3.5.2-2), published as
+  `ForgeGen.apk` since 3.5.2-1. Since 3.4.1 (patch
   "Polish", after the owner confirmed 3.4.0 ran smoothly) R8 shrinks it too (`isMinifyEnabled`/`isShrinkResources`
   only with the property; ~6.5 MB instead of 52): `proguard-rules.pro` has `-dontobfuscate` +
   `SourceFile,LineNumberTable` (crash logs, OOM reports and the debug log keep real names) and keeps every class of

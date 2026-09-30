@@ -149,7 +149,10 @@ object SelfUpdate {
         return info?.packageName?.takeIf { it != context.packageName }
     }
 
-    /** Whether the app [packageName] is installed (the manifest's <queries> lets this app see it). */
+    /**
+     * Whether the app [packageName] is installed. Android 11+ shows another app only when the manifest's <queries>
+     * names it: 3.5.2-1 named the app without ".debug"; since 3.5.2-2 that is this app, so the list is gone.
+     */
     fun isInstalled(
         context: Context,
         packageName: String,

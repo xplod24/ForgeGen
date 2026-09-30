@@ -1,3 +1,10 @@
+## 3.5.2-2
+**Polish** · "debug" is gone from the app's package name too, so this version is a new app next to the old one
+
+### Changed
+- **A new app:** ForgeGen is now io.github.xplod24.forgegen (was io.github.xplod24.forgegen.debug), so Android installs it next to the old app instead of updating it. The old app (3.5.2-1) guides the move in Settings > Updates: export there, install this app, import the file here (Settings > Backup & Data > Import Settings), then uninstall the old app. Your settings, presets, server profiles, wildcards, gallery favorites and queue come along; the gallery asks for its key again.
+- This app is signed with ForgeGen's own key alone: the key shared in the source code, which signed the old app up to 3.5.0, has no say in it.
+
 ## 3.5.2-1
 **Feature** · the backup now carries your favorites and queue, ready for the app without "debug" in its package name
 

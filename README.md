@@ -169,9 +169,15 @@ export COMMANDLINE_ARGS="--api --listen --api-server-stop"
    top bar, or go to Settings > Server).
 4. That's it: later versions arrive by themselves (Settings > Updates to check now or to turn off automatic installs).
 
-The APK is shrunk and optimized by R8 (about 6.5 MB; up to 3.5.2 it was named `app-debug.apk`). The app's package is
-`io.github.xplod24.forgegen.debug` (`io.github.xplod24.forgegen` from 3.5.2-2 on). Since 3.5.1 it is signed with
+The APK is shrunk and optimized by R8 (about 6.5 MB). The app's package is `io.github.xplod24.forgegen`, signed with
 ForgeGen's own key, certificate SHA-256 `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`.
+
+**Coming from 3.5.2-1 or older?** Up to 3.5.2-1 the app was `io.github.xplod24.forgegen.debug`, so the current version
+installs as a new app next to it. 3.5.2-1 shows the steps in Settings > Updates: export your data there (Export
+Settings also takes the gallery favorites and the queue), install the new app, import the file in it (Settings >
+Backup & Data > Import Settings), then uninstall the old app. The gallery asks for its key again. From an older
+version, update to 3.5.2-1 first, or export, install `ForgeGen.apk` by hand and import (favorites and the queue need
+3.5.2-1's export).
 
 ## Building from source
 
@@ -189,12 +195,11 @@ java -jar ktlint.jar "app/src/**/*.kt"       # code style check
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-- **Signing:** the published APK is signed with ForgeGen's own key, which is not in the repository, by key rotation
-  (APK Signature Scheme v3) from `app/debug.keystore`, which signed it up to 3.5.0:
-  [`tools/sign-apk.sh`](tools/sign-apk.sh) with the lineage in `app/signing/forgegen-lineage.bin`. A phone with 3.5.1
-  or later accepts updates signed with that key only, so a local build signed with `app/debug.keystore` installs
-  only after the app (and its data) is removed. With `RELEASE_KEYSTORE_FILE` and `RELEASE_KEYSTORE_PASSWORD` set
-  (environment or `~/.gradle/gradle.properties`), local builds are signed with that key and update the app.
+- **Signing:** the published APK is signed with ForgeGen's own key, which is not in the repository
+  ([`tools/sign-apk.sh`](tools/sign-apk.sh)). The phone accepts updates signed with that key only, so a local build
+  signed with the committed `app/debug.keystore` installs only after the app (and its data) is removed. With
+  `RELEASE_KEYSTORE_FILE` and `RELEASE_KEYSTORE_PASSWORD` set (environment or `~/.gradle/gradle.properties`), local
+  builds are signed with that key and update the app.
 - **R8:** only `-Pforgegen.publish` builds go through R8; local builds and the tests run the code as written. Code
   that touches saved data, Gson, reflection, resources or a new library follows the "R8 rules" in
   [`MEMORY.md`](MEMORY.md).
@@ -222,7 +227,7 @@ ForgeGen/
 │       └── components/           cards, pickers, top bars, dialogs, tag suggestion strip
 ├── app/src/test/                 JVM unit tests
 ├── .github/workflows/            ci.yml (work branches) and release.yml (master)
-├── tools/sign-apk.sh             signs the published APK with ForgeGen's key (key rotation)
+├── tools/sign-apk.sh             signs the published APK with ForgeGen's key
 ├── CHANGELOG.md                  release notes, also shown in the app after an update
 ├── MEMORY.md                     architecture notes and the owner's decisions
 └── CLAUDE.md                     working rules for AI-assisted development

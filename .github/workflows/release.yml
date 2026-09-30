@@ -6,9 +6,9 @@ name: Release
 # "v<major>.<minor>.<patch>-<micro>") and attaches ForgeGen.apk, which the app's updater then offers.
 # Any other push to master only runs the tests and the build.
 #
-# Since 3.5.1 the published APK is signed with ForgeGen's own key by key rotation from app/debug.keystore, which
-# signed the releases up to 3.5.0 (tools/sign-apk.sh). The key comes from the repository secrets
-# RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD; without them, or with wrong ones, nothing is published.
+# The published APK is signed with ForgeGen's own key (tools/sign-apk.sh; 3.5.1 to 3.5.2-1 by rotation from
+# app/debug.keystore). The key comes from the repository secrets RELEASE_KEYSTORE_BASE64 and
+# RELEASE_KEYSTORE_PASSWORD; without them, or with wrong ones, nothing is published.
 on:
   push:
     branches:

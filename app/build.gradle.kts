@@ -46,15 +46,15 @@ android {
     }
 
     signingConfigs {
-        // The keystore is committed on purpose: it signed the published APK up to 3.5.0, and since 3.5.1 it is the
-        // first key of the rotation to ForgeGen's own key (tools/sign-apk.sh, app/signing/forgegen-lineage.bin).
+        // The keystore is committed on purpose: it signs local builds without ForgeGen's key. It signed the published
+        // APK up to 3.5.0 (package io.github.xplod24.forgegen.debug), which 3.5.1 rotated to ForgeGen's own key.
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
-        // ForgeGen's own key, which signs the published APK since 3.5.1. It is never committed; set
+        // ForgeGen's own key, which signs the published APK (tools/sign-apk.sh). It is never committed; set
         // RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment or ~/.gradle/gradle.properties). Then the
         // debug builds are signed with it too, and the release build type (not published) is built unsigned without it.
         val releaseKeystore =
@@ -78,9 +78,10 @@ android {
     }
 
     defaultConfig {
-        // Changed from com.example.forgegen: the GitHub builds are signed with the repository key, so they are
-        // a separate app and install next to builds signed with an Android Studio key instead of clashing.
-        // Release builds (not published yet) drop the ".debug" suffix and would be another separate app.
+        // Changed from com.example.forgegen in build-1033, and without the ".debug" suffix since 3.5.2-2 (owner's
+        // decision): up to 3.5.2-1 the published app was io.github.xplod24.forgegen.debug, a separate app whose data
+        // moves over with Settings > Backup & Data (the 3.5.2-1 bridge guides it). Changing it again makes another
+        // separate app.
         applicationId = "io.github.xplod24.forgegen"
         minSdk = 31
         targetSdk = 37
@@ -112,10 +113,9 @@ android {
             isMinifyEnabled = publish
             isShrinkResources = publish
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // The phone accepts updates of the published app (3.5.1+) signed with ForgeGen's key only, so a local build
-            // installs over it only when that key is set (above); otherwise it is signed with the debug key.
+            // The phone accepts updates of the published app signed with ForgeGen's key only, so a local build installs
+            // over it only when that key is set (above); otherwise it is signed with the debug key.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
-            applicationIdSuffix = ".debug"
             // Only the builds that really are debuggable say so (3.5.2): the published APK shows the plain version.
             if (!publish) versionNameSuffix = "-DEBUG"
             resValue("string", "app_name", "ForgeGen")
