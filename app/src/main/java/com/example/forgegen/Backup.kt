@@ -8,7 +8,8 @@ import com.google.gson.reflect.TypeToken
  * BACKUP
  * The settings (with the presets, the server profiles and the default generation settings) and the wildcards in one
  * JSON file, to move them to another phone or keep them safe. Reading goes through loadConfig, so a backup from an
- * older version, or with a wrong value, gets the defaults for what it lacks.
+ * older version, or with a wrong value, gets the defaults for what it lacks. The gallery keys' fingerprints stay out
+ * of it (3.5.0): they open the server's gallery like a password, so an import keeps the phone's own.
  * ============================================================================ */
 object Backup {
     private const val APP = "ForgeGen"
@@ -30,7 +31,7 @@ object Backup {
                 "app" to APP,
                 "format" to FORMAT,
                 "version" to appVersion,
-                "config" to config,
+                "config" to config.copy(galleryKeys = emptyMap()),
                 "wildcards" to wildcards,
             ),
         )

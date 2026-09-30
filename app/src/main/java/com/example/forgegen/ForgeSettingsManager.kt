@@ -186,7 +186,7 @@ object ForgeSettingsManager {
 
     /**
      * The one HTTP client of the app (its pool and threads are shared by every API, the image loader included):
-     * timeouts, the gallery cookie, the optional HTTP log ("HTTP Logging" in the debug panel) and error logging.
+     * timeouts, the gallery key, the optional HTTP log ("HTTP Logging" in the debug panel) and error logging.
      */
     fun createClient(timeoutSeconds: Int): OkHttpClient {
         val bodyLogging = HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BODY }
@@ -228,18 +228,26 @@ object ForgeSettingsManager {
                 val originalRequest = chain.request()
                 val requestBuilder = originalRequest.newBuilder()
                 val path = originalRequest.url.encodedPath
-                if (GALLERY_PREFIXES.any { path.contains(it) }) {
-                    requestBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                }
+                val isGallery = GALLERY_PREFIXES.any { path.contains(it) }
+                // The gallery key's fingerprint for this server (3.5.0), only where one was saved: see GalleryKey.
+                if (isGallery) GalleryKey.savedFor(_config.value)?.let { requestBuilder.header("Cookie", "${GalleryKey.COOKIE}=$it") }
 
                 try {
                     val response = chain.proceed(requestBuilder.build())
                     if (!response.isSuccessful) {
-                        try {
-                            val bodyStr = response.peekBody(MAX_LOGGED_ERROR_BYTES).string()
+                        val bodyStr =
+                            try {
+                                response.peekBody(MAX_LOGGED_ERROR_BYTES).string()
+                            } catch (e: Exception) {
+                                null
+                            }
+                        if (bodyStr != null) {
                             Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url}\nBody: $bodyStr")
-                        } catch (e: Exception) {
+                        } else {
                             Log.e(TAG, "API ERROR [${response.code}]: ${response.request.url} (Could not read body)")
+                        }
+                        if (isGallery && response.code == 401 && GalleryKey.errorType(bodyStr) == GalleryKey.LOCKED_TYPE) {
+                            GalleryKey.reportRefused()
                         }
                     }
                     response
@@ -358,6 +366,7 @@ object ForgeSettingsManager {
             imageJobs = parsed?.imageJobs ?: true,
             serverQueue = parsed?.serverQueue ?: true,
             imageCacheMb = ImageCache.sizeOf(parsed?.imageCacheMb),
+            galleryKeys = parsed?.galleryKeys.orEmpty(),
             modelSettings = parsed?.modelSettings.orEmpty(),
         )
     }

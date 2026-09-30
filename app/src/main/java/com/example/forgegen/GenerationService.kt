@@ -153,6 +153,10 @@ class GenerationService : Service() {
                         lastJobNo = state.jobNo
                         lastWaitingUntil = state.waitingUntil
                         isNotificationDismissed = false
+                        // Whether the system shows it as a Live Update (the one posted a moment ago), for the settings.
+                        if (state.generating && LiveUpdates.shouldPromote(this@GenerationService, ForgeRepository.config.value)) {
+                            LiveUpdates.notePromotion(this@GenerationService, notificationId)
+                        }
                         ForgeNotifications.post(notificationId, buildCurrentNotification())
                     }
 
@@ -263,7 +267,7 @@ class GenerationService : Service() {
             progress = ForgeQueueManager.progress.value,
             etaSeconds = ForgeQueueManager.currentEta.value,
             notificationMode = ForgeRepository.config.value.notificationMode,
-            inNowBar = NowBar.shouldPromote(this, ForgeRepository.config.value),
+            asLiveUpdate = LiveUpdates.shouldPromote(this, ForgeRepository.config.value),
             jobNo = ForgeRepository.currentJobNo.value,
             jobCount = ForgeRepository.currentJobCount.value,
             batchSize =
@@ -278,7 +282,7 @@ class GenerationService : Service() {
         progress: Float,
         etaSeconds: Double,
         notificationMode: String,
-        inNowBar: Boolean,
+        asLiveUpdate: Boolean,
         jobNo: Int,
         jobCount: Int,
         batchSize: Int,
@@ -309,12 +313,13 @@ class GenerationService : Service() {
                 .Builder(this, ForgeNotifications.CHANNEL_PROGRESS)
                 .setSmallIcon(R.mipmap.ic_launcher_foreground)
                 .setContentIntent(openIntent)
-                .setOngoing(inNowBar) // otherwise it can be swiped away; a Live Update has to be ongoing
+                .setOngoing(asLiveUpdate) // otherwise it can be swiped away; a Live Update has to be ongoing
                 .setDeleteIntent(deleteIntent)
                 .setOnlyAlertOnce(true)
-        // "Show Progress in Now Bar": a Live Update, which Samsung shows in the pill at the bottom of the lock screen.
+        // "Show Progress as Live Update" (LiveUpdates): a chip in the status bar and the progress on the lock screen;
+        // Samsung puts it in the Now Bar, the pill at the bottom of its lock screen.
         // Public, so the app itself never hides it there: it only shows the image number and the progress, no prompt.
-        if (inNowBar) {
+        if (asLiveUpdate) {
             builder.setRequestPromotedOngoing(true)
             builder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         }
@@ -329,7 +334,7 @@ class GenerationService : Service() {
             // The values must match the options offered in SetupScreen: "Simple", "Verbose", "Disabled".
             when (notificationMode) {
                 "Verbose" -> {
-                    builder.showProgress(progInt, inNowBar)
+                    builder.showProgress(progInt, asLiveUpdate)
                     builder.setContentTitle("$image | Batch size: $batchSize")
                     builder.setContentText("Progress: $progInt%$eta")
                     builder.addAction(R.drawable.ic_launcher_foreground, "Open App", openIntent)
@@ -338,7 +343,7 @@ class GenerationService : Service() {
                     builder.setContentTitle("Generating in background")
                 }
                 else -> { // "Simple"
-                    builder.showProgress(progInt, inNowBar)
+                    builder.showProgress(progInt, asLiveUpdate)
                     builder.setContentTitle(image)
                     builder.setContentText("Progress: $progInt%$eta")
                 }
@@ -363,12 +368,12 @@ class GenerationService : Service() {
         return builder.build()
     }
 
-    /** A progress bar; in the Now Bar the progress style (its bar) and a short text for the status bar chip. */
+    /** A progress bar; as a Live Update the progress style (its bar) and a short text for the status bar chip. */
     private fun NotificationCompat.Builder.showProgress(
         percent: Int,
-        inNowBar: Boolean,
+        asLiveUpdate: Boolean,
     ) {
-        if (inNowBar) {
+        if (asLiveUpdate) {
             setStyle(NotificationCompat.ProgressStyle().setProgress(percent).setProgressIndeterminate(percent == 0))
             if (percent > 0) setShortCriticalText("$percent%")
         } else {

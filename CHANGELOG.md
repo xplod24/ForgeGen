@@ -1,3 +1,15 @@
+## 3.5.0
+**Feature** · the gallery asks for your server's key instead of using one built into the app, and the progress shows as a Live Update on every Android 16 phone
+
+### New
+- **Gallery key:** when Infinite Image Browsing on your server is locked with a secret key (IIB_SECRET_KEY), the gallery says so and asks for it once: type it and tap Unlock. The phone keeps only a fingerprint of the key, for that server, never the key itself, and backups leave it out. Settings > Server > Gallery Key changes or removes it. A server without a key needs nothing. When Forge has a login and the extension has no key, the gallery tells you to set one on the server first.
+- **Live Updates on every Android 16 phone:** "Show Progress in Now Bar" is now "Show Progress as Live Update" and works on any phone with Android 16 or newer, not only on Samsung phones. The progress shows as a chip in the status bar and stays expanded on the lock screen; Samsung phones still show it in the Now Bar. An update's download shows the same way.
+- **Did it work:** the Live Update checklist in Settings > Notifications now tells whether your phone really showed the last job's progress as a Live Update, since some phones add rules of their own.
+
+### Changed
+- The gallery no longer sends a fixed key built into the app. If it asks for a key after this update, enter your server's IIB_SECRET_KEY (it is in the .env file in the extension's folder).
+- Each release on GitHub also has mapping.zip, which turns the line numbers in a crash log back into the code's, for bug reports.
+
 ## 3.4.2
 **Polish** · ForgeGen is free software under the GNU GPL, and Settings > Updates shows its license
 

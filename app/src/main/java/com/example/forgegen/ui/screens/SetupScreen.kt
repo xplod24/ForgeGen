@@ -2,6 +2,7 @@ package com.example.forgegen
 
 import android.app.KeyguardManager
 import coil.imageLoader
+import com.example.forgegen.ui.components.GalleryKeyDialog
 import com.example.forgegen.ui.components.LicenseDialog
 import com.example.forgegen.ui.components.MarkdownText
 import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
@@ -179,7 +180,7 @@ private enum class SettingsPage(
 }
 
 /**
- * One setting (or a block of its page, e.g. the Now Bar checklist) in its [page] and [group], with the [words] the
+ * One setting (or a block of its page, e.g. the Live Update checklist) in its [page] and [group], with the [words] the
  * search looks through (its title and explanation, plus other words people may look for).
  */
 private class SettingItem(
@@ -248,6 +249,8 @@ fun SetupScreen(
     // "Install" while the queue works: installing ends the app, so it asks first.
     var confirmInstallDuringQueue by remember { mutableStateOf(false) }
     var showLicenseDialog by remember { mutableStateOf(false) }
+    var showGalleryKeyDialog by remember { mutableStateOf(false) }
+    val galleryExtension by viewModel.galleryExtension.collectAsStateWithLifecycle()
 
     var isTestingConnection by remember { mutableStateOf(false) }
     var testStatus by remember { mutableStateOf<String?>(null) }
@@ -306,10 +309,13 @@ fun SetupScreen(
     val pm = remember { context.getSystemService(Context.POWER_SERVICE) as PowerManager }
     var isIgnoringBattery by remember { mutableStateOf(pm.isIgnoringBatteryOptimizations(context.packageName)) }
 
-    // Samsung Now Bar: offered on One UI 8+ only; the system can also turn live notifications off for the app.
-    val isNowBarSupported = remember { NowBar.isSupported(context) }
-    var isNowBarAllowed by remember { mutableStateOf(NowBar.isAllowedBySystem(context)) }
-    var areNotificationsAllowed by remember { mutableStateOf(NowBar.areNotificationsAllowed(context)) }
+    // Live Updates: offered on Android 16+ (3.5.0; only Samsung's One UI 8 before); the system can also turn live
+    // notifications off for the app, and whether it showed the last job's progress as one is read back (LiveUpdates).
+    val isLiveUpdateSupported = remember { LiveUpdates.isSupported(context) }
+    val isSamsung = remember { LiveUpdates.isSamsung(context) }
+    var isLiveUpdateAllowed by remember { mutableStateOf(LiveUpdates.isAllowedBySystem(context)) }
+    var areNotificationsAllowed by remember { mutableStateOf(LiveUpdates.areNotificationsAllowed(context)) }
+    var promotedLastTime by remember { mutableStateOf(LiveUpdates.promotedLastTime(context)) }
 
     // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION AND LIVE NOTIFICATION REFRESH ---
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -318,8 +324,9 @@ fun SetupScreen(
             LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
                     isIgnoringBattery = pm.isIgnoringBatteryOptimizations(context.packageName)
-                    isNowBarAllowed = NowBar.isAllowedBySystem(context)
-                    areNotificationsAllowed = NowBar.areNotificationsAllowed(context)
+                    isLiveUpdateAllowed = LiveUpdates.isAllowedBySystem(context)
+                    areNotificationsAllowed = LiveUpdates.areNotificationsAllowed(context)
+                    promotedLastTime = LiveUpdates.promotedLastTime(context)
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -348,11 +355,6 @@ fun SetupScreen(
                     .Builder()
                     .connectTimeout(1, java.util.concurrent.TimeUnit.SECONDS)
                     .readTimeout(1, java.util.concurrent.TimeUnit.SECONDS)
-            testClientBuilder.addInterceptor { chain ->
-                val reqBuilder = chain.request().newBuilder()
-                reqBuilder.header("Cookie", "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172")
-                chain.proceed(reqBuilder.build())
-            }
             val testClient = testClientBuilder.build()
             val endpoints = listOf("progress", "memory", "options", "samplers", "schedulers", "sd-models", "loras")
             val resultsMap = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -464,6 +466,22 @@ fun SetupScreen(
                     title = "Diagnostics",
                     subtitle = "Asks 7 of the server's endpoints how fast they answer",
                 ) { runDiagnostics() }
+            }
+            // The secret key of the server's Infinite Image Browsing (3.5.0), for a gallery that asks for one.
+            add(SettingsPage.SERVER, "Gallery", "gallery key iib secret key infinite image browsing locked password") {
+                val saved = GalleryKey.savedFor(config) != null
+                TextPreference(
+                    title = "Gallery Key",
+                    subtitle =
+                        when {
+                            galleryExtension.state == ForgeGalleryManager.Extension.LOCKED ->
+                                if (saved) "The saved key no longer opens the gallery: tap to enter the new one" else "Needed: the gallery asks for its secret key"
+                            galleryExtension.state == ForgeGalleryManager.Extension.KEY_NOT_SET ->
+                                "Forge has a login, so IIB_SECRET_KEY must first be set on the server"
+                            saved -> "Saved for this server (only its fingerprint) · tap to change or remove"
+                            else -> "Not needed by this server"
+                        },
+                ) { showGalleryKeyDialog = true }
             }
 
             // What Forge tells about itself (3.3.0, board 2C): read once per server when the page shows.
@@ -706,29 +724,39 @@ fun SetupScreen(
                     subtitle = "${config.notificationMode}: $modeDesc",
                 ) { showNotificationModeDialog = true }
             }
-            add(SettingsPage.NOTIFICATIONS, "Progress", "show progress in now bar samsung lock screen live notification") {
-                // Off until the user turns it on; greyed out on phones without Samsung's One UI 8 or newer.
+            add(SettingsPage.NOTIFICATIONS, "Progress", "show progress as live update now bar samsung status bar chip lock screen live notification") {
+                // Off until the user turns it on (Google's rules: a Live Update the user asked for); greyed out below
+                // Android 16. Saved as nowBarProgress, its name up to 3.4.2.
                 SwitchPreference(
-                    title = "Show Progress in Now Bar",
+                    title = "Show Progress as Live Update",
                     subtitle =
                         when {
-                            !isNowBarSupported -> "Samsung phones with One UI 8 or newer only"
+                            !isLiveUpdateSupported -> "Android 16 or newer only"
                             config.notificationMode == "Disabled" -> "Needs a Progress Notification Mode other than Disabled"
-                            else -> "Show the generation progress in the pill at the bottom of the lock screen (Samsung Now Bar)"
+                            isSamsung -> "The generation progress in the Now Bar at the bottom of the lock screen and in the status bar"
+                            else -> "The generation progress as a chip in the status bar and on the lock screen"
                         },
-                    checked = isNowBarSupported && config.nowBarProgress,
-                    enabled = isNowBarSupported,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(nowBarProgress = it)) },
+                    checked = isLiveUpdateSupported && config.nowBarProgress,
+                    enabled = isLiveUpdateSupported,
+                    onCheckedChange = {
+                        if (it) {
+                            LiveUpdates.forgetPromotion(context)
+                            promotedLastTime = null
+                        }
+                        viewModel.saveConfig(config.copy(nowBarProgress = it))
+                    },
                 )
             }
-            if (isNowBarSupported && config.nowBarProgress) {
-                add(SettingsPage.NOTIFICATIONS, "Progress", "now bar checklist live notifications developer options lock screen") {
-                    NowBarChecklist(
+            if (isLiveUpdateSupported && config.nowBarProgress) {
+                add(SettingsPage.NOTIFICATIONS, "Progress", "live update checklist live notifications developer options lock screen now bar") {
+                    LiveUpdateChecklist(
                         notificationsAllowed = areNotificationsAllowed,
-                        liveNotificationsAllowed = isNowBarAllowed,
-                        onOpenNotificationSettings = { NowBar.openNotificationSettings(context) },
-                        onOpenLiveNotificationSettings = { NowBar.openSystemSettings(context) },
-                        onOpenDeveloperOptions = { NowBar.openDeveloperOptions(context) },
+                        liveNotificationsAllowed = isLiveUpdateAllowed,
+                        promotedLastTime = promotedLastTime,
+                        isSamsung = isSamsung,
+                        onOpenNotificationSettings = { LiveUpdates.openNotificationSettings(context) },
+                        onOpenLiveNotificationSettings = { LiveUpdates.openSystemSettings(context) },
+                        onOpenDeveloperOptions = { LiveUpdates.openDeveloperOptions(context) },
                     )
                 }
             }
@@ -864,7 +892,7 @@ fun SetupScreen(
             val download = updateDownload
             if (download != null) {
                 // "Install Update" was tapped: it downloads in the background (UpdateDownloadService), also with the
-                // app closed or the screen locked; the notification (and the Now Bar) shows the same.
+                // app closed or the screen locked; the notification (and a Live Update) shows the same.
                 add(SettingsPage.UPDATES, null, "update downloading progress ${download.versionName}") {
                     Column(
                         modifier =
@@ -993,7 +1021,7 @@ fun SetupScreen(
                             }
                             Spacer(Modifier.width(8.dp))
                             // Two steps (3.0.0-3): "Download" runs in UpdateDownloadService with its progress here, in the
-                            // notifications and the Now Bar, and the app stays open; once the file matches the release,
+                            // notifications and a Live Update, and the app stays open; once the file matches the release,
                             // "Install" sends the app to the background and Android replaces it.
                             if (ready != null) {
                                 Button(onClick = {
@@ -1132,7 +1160,7 @@ fun SetupScreen(
                     "batch finish".takeIf { config.notifOnBatchFinish },
                     "vibration".takeIf { config.vibrateOnFinish },
                     "${config.notificationMode} progress",
-                    "Now Bar".takeIf { isNowBarSupported && config.nowBarProgress },
+                    "Live Update".takeIf { isLiveUpdateSupported && config.nowBarProgress },
                 ).joinToString(" · ").replaceFirstChar { it.uppercase() },
             SettingsPage.QUEUE to
                 listOfNotNull(
@@ -1381,6 +1409,15 @@ fun SetupScreen(
                 markdown = releaseNotesMarkdown(notesOf.changelog.orEmpty()),
                 onDismiss = { showAllReleaseNotes = false },
                 title = "What's New in ${notesOf.versionName}",
+            )
+        }
+
+        if (showGalleryKeyDialog) {
+            GalleryKeyDialog(
+                saved = GalleryKey.savedFor(config) != null,
+                onSave = viewModel::saveGalleryKey,
+                onRemove = { viewModel.forgetGalleryKey() },
+                onDismiss = { showGalleryKeyDialog = false },
             )
         }
 
@@ -1925,13 +1962,16 @@ private fun ServerCard(
 }
 
 /**
- * What the Now Bar needs besides the app: what the app can check is marked, the rest (Samsung's) is listed, with
- * buttons to the pages where it is changed.
+ * What Live Updates need (3.5.0): notifications allowed and live notifications allowed by the system, which the app
+ * can read, and whether the system showed the last job's progress as one (LiveUpdates.notePromotion). Samsung's own
+ * rule is listed with a button to the developer options, and the rest with buttons to the pages where it is changed.
  */
 @Composable
-private fun NowBarChecklist(
+private fun LiveUpdateChecklist(
     notificationsAllowed: Boolean,
     liveNotificationsAllowed: Boolean,
+    promotedLastTime: Boolean?,
+    isSamsung: Boolean,
     onOpenNotificationSettings: () -> Unit,
     onOpenLiveNotificationSettings: () -> Unit,
     onOpenDeveloperOptions: () -> Unit,
@@ -1946,15 +1986,28 @@ private fun NowBarChecklist(
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("For the Now Bar", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text("For Live Updates", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Spacer(Modifier.height(6.dp))
-            NowBarCheck(notificationsAllowed, "Notifications allowed")
-            NowBarCheck(liveNotificationsAllowed, "Live notifications allowed by the system")
+            LiveUpdateCheck(notificationsAllowed, "Notifications allowed")
+            LiveUpdateCheck(liveNotificationsAllowed, "Live notifications allowed by the system")
+            LiveUpdateCheck(
+                promotedLastTime,
+                when (promotedLastTime) {
+                    true -> "Shown as a Live Update: yes, during the last job"
+                    false -> "Shown as a Live Update: no, the phone kept it as a normal notification"
+                    null -> "Shown as a Live Update: not checked yet, start a job"
+                },
+            )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Samsung also needs these, which the app cannot check: \"Live notifications for all apps\" turned on in " +
-                    "the developer options (otherwise Samsung shows only the apps on its own list), and ForgeGen's " +
-                    "notifications shown on the lock screen, with their content.",
+                if (isSamsung) {
+                    "Samsung also needs \"Live notifications for all apps\" turned on in the developer options (otherwise " +
+                        "it shows only the apps on its own list), and ForgeGen's notifications shown on the lock screen, " +
+                        "with their content."
+                } else {
+                    "The lock screen also needs ForgeGen's notifications shown with their content. Some phones add " +
+                        "rules of their own: the line above tells whether yours showed the progress as a Live Update."
+                },
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1966,22 +2019,37 @@ private fun NowBarChecklist(
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onOpenNotificationSettings) { Text("Notifications") }
-                TextButton(onClick = onOpenDeveloperOptions) { Text("Developer Options") }
+                if (isSamsung) TextButton(onClick = onOpenDeveloperOptions) { Text("Developer Options") }
             }
         }
     }
 }
 
+/** One line of the checklist: done, missing, or (null) not known yet. */
 @Composable
-private fun NowBarCheck(
-    ok: Boolean,
+private fun LiveUpdateCheck(
+    ok: Boolean?,
     text: String,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
         Icon(
-            if (ok) Icons.Default.CheckCircle else Icons.Default.Warning,
-            contentDescription = if (ok) "Done" else "Missing",
-            tint = if (ok) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error,
+            when (ok) {
+                true -> Icons.Default.CheckCircle
+                false -> Icons.Default.Warning
+                null -> Icons.Default.HelpOutline
+            },
+            contentDescription =
+                when (ok) {
+                    true -> "Done"
+                    false -> "Missing"
+                    null -> "Not known yet"
+                },
+            tint =
+                when (ok) {
+                    true -> Color(0xFF2E7D32)
+                    false -> MaterialTheme.colorScheme.error
+                    null -> MaterialTheme.colorScheme.onSurfaceVariant
+                },
             modifier = Modifier.size(18.dp),
         )
         Spacer(Modifier.width(8.dp))

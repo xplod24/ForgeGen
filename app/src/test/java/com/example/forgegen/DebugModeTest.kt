@@ -32,7 +32,7 @@ class DebugModeTest {
     @Test
     fun `nothing can be forced while the debug mode is locked`() {
         DebugMode.lock()
-        DebugMode.setForceNowBar(true)
-        assertFalse(DebugMode.forceNowBar.value)
+        DebugMode.setForceLiveUpdates(true)
+        assertFalse(DebugMode.forceLiveUpdates.value)
     }
 }

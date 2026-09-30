@@ -57,6 +57,7 @@ class ForgeSettingsManagerConfigTest {
                 imageJobs = false,
                 serverQueue = false,
                 imageCacheMb = 1024,
+                galleryKeys = mapOf("http://192.168.1.90:7860" to GalleryKey.fingerprint("key")),
                 modelSettings =
                     mapOf(
                         "flux1-dev" to

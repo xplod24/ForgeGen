@@ -88,13 +88,15 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   connection is retried.
 - **Other jobs on the server:** the queue shows how many jobs from Forge's web UI (or another app) run before yours.
 - Notifications for finished batches and queues, a vibration, a Quick Settings tile, launcher shortcuts (Generate
-  Again, Queue, Gallery) and the progress in the **Now Bar** on Samsung phones with One UI 8 or newer.
+  Again, Queue, Gallery) and the progress as a **Live Update** on Android 16 or newer: a chip in the status bar, the
+  lock screen, and the Now Bar on Samsung phones.
 
 ### Gallery
 
 - Your server's images through [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing):
   Gallery, Favorites and All Images tabs, folder covers, a grid of 2 to 5 columns or a list, and pinch to zoom.
 - **Search by prompt** across the whole gallery, from an index kept on the phone.
+- **Locked galleries:** when the extension has a secret key, the app asks for it once and keeps only its fingerprint.
 - **Select many:** save to the phone (or privately), share (optionally without generation data), download as ZIP, add
   to the favorites, delete with Undo, or move and copy to a folder.
 - **Jobs from images:** Upscale Selected, More Like This (similar images or neighbouring seeds) and Variance on Seed
@@ -139,7 +141,7 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 | --- | --- | --- |
 | Stable Diffusion WebUI Forge or Forge Neo, started with `--api --listen` | Everything | `--api` opens the API, `--listen` lets the phone reach it. AUTOMATIC1111 works too, but of the model settings only an SD model's VAE is sent to it. |
 | No API password | Everything | ForgeGen does not sign in, so don't use `--api-auth`. Keep the server on a private network or a VPN. |
-| [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) extension | The gallery | Deleting, moving and copying need write access (not `IIB_ACCESS_CONTROL_PERMISSION=read-only`). |
+| [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) extension | The gallery | Deleting, moving and copying need write access (not `IIB_ACCESS_CONTROL_PERMISSION=read-only`). With `IIB_SECRET_KEY` set, the app asks for the key once; with Forge's login on, the extension needs such a key. |
 | [tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete) extension | Tag suggestions | Optional. |
 | `--api-server-stop`, Forge started by `webui.bat` or `webui.sh` | Restart Forge | Optional. Without it the button is greyed out. |
 | Forge's web UI without a login (not `--nowebui`) | Seeing other jobs on the server | Optional. Without it the progress works as before. |
@@ -226,7 +228,7 @@ ForgeGen/
   `major × 100 000 000 + minor × 100 000 + patch × 100 + micro`.
 - Pushing a new version to `master` with its `## <version>` section in [`CHANGELOG.md`](CHANGELOG.md) makes
   [`release.yml`](.github/workflows/release.yml) run the tests, build the APK, tag `v<version>` and publish the
-  release with `app-debug.apk`. Every other push to `master` runs the tests and the build too (the **build** badge
+  release with `app-debug.apk` and `mapping.zip` (R8's mapping, to read crash logs). Every other push to `master` runs the tests and the build too (the **build** badge
   above). Work branches and pull requests are checked by [`ci.yml`](.github/workflows/ci.yml).
 - Each release names its kind in its first line: **Bugfix**, **Polish**, **Feature** or **Overhaul**, then lists what
   is New, Changed and Fixed.

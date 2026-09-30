@@ -7,7 +7,6 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
-import retrofit2.http.Header
 import retrofit2.http.Headers
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -159,7 +158,6 @@ interface ForgeApi {
     @GET
     suspend fun getGalleryFilesDynamic(
         @Url url: String,
-        @Header("Cookie") cookie: String = "IIB_S=bf63789069ec13d6b7b95a5176468e99f8940fe6aa65931edc17e1abf5c5e172",
         @Query(value = "folder_path", encoded = true) folderPath: String = "",
     ): Response<ResponseBody>
 

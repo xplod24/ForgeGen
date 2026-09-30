@@ -87,6 +87,12 @@ jobs:
         # Not debuggable, as published (3.4.0; see app/build.gradle.kts).
         run: ./gradlew assembleDebug -Pforgegen.publish
 
+      - name: Mapping file
+        # R8's mapping of this very build (3.5.0), to read the line numbers of crash logs from the published APK
+        # (MEMORY.md, "R8 rules"): about 4 MB zipped. The in-app updater takes the release's .apk and ignores it.
+        if: steps.version.outputs.publish == 'true'
+        run: cd app/build/outputs/mapping/debug && zip -9 -q "$GITHUB_WORKSPACE/mapping.zip" mapping.txt
+
       - name: Publish release
         if: steps.version.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
@@ -95,5 +101,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.tag }}
           body_path: release-notes.md
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            mapping.zip
           make_latest: true

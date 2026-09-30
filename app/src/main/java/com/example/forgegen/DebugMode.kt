@@ -46,15 +46,15 @@ object DebugMode {
     private val _unlocked = MutableStateFlow(false)
     val unlocked: StateFlow<Boolean> = _unlocked.asStateFlow()
 
-    // Offers the Now Bar option on any phone (it is meant for One UI 8+), to test it elsewhere.
-    private val _forceNowBar = MutableStateFlow(false)
-    val forceNowBar: StateFlow<Boolean> = _forceNowBar.asStateFlow()
+    // Offers "Show Progress as Live Update" on any phone (it is meant for Android 16+), to test its settings elsewhere.
+    private val _forceLiveUpdates = MutableStateFlow(false)
+    val forceLiveUpdates: StateFlow<Boolean> = _forceLiveUpdates.asStateFlow()
 
     fun init(context: Context) {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = p
         _unlocked.value = p.getBoolean(KEY_UNLOCKED, false)
-        _forceNowBar.value = _unlocked.value && p.getBoolean(KEY_FORCE_NOW_BAR, false)
+        _forceLiveUpdates.value = _unlocked.value && p.getBoolean(KEY_FORCE_NOW_BAR, false)
     }
 
     /** PBKDF2 with HMAC-SHA256, 32 bytes. Slow on purpose: call it off the main thread. */
@@ -102,13 +102,13 @@ object DebugMode {
     /** Hides the debug mode again and undoes its overrides. */
     fun lock() {
         _unlocked.value = false
-        _forceNowBar.value = false
+        _forceLiveUpdates.value = false
         prefs?.edit()?.clear()?.apply()
     }
 
-    fun setForceNowBar(on: Boolean) {
+    fun setForceLiveUpdates(on: Boolean) {
         if (!_unlocked.value) return
-        _forceNowBar.value = on
+        _forceLiveUpdates.value = on
         prefs?.edit()?.putBoolean(KEY_FORCE_NOW_BAR, on)?.apply()
     }
 }

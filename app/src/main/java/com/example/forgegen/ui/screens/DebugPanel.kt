@@ -50,7 +50,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
     val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
     val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
     val favorites by viewModel.favoritePaths.collectAsStateWithLifecycle()
-    val forceNowBar by viewModel.debugForceNowBar.collectAsStateWithLifecycle()
+    val forceLiveUpdates by viewModel.debugForceLiveUpdates.collectAsStateWithLifecycle()
 
     var refresh by remember { mutableIntStateOf(0) }
     var showRawEditor by remember { mutableStateOf(false) }
@@ -71,7 +71,7 @@ fun DebugPanel(viewModel: ForgeViewModel) {
                 appendLine("App: ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE}), ${context.packageName}")
                 appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
                 appendLine(
-                    "Now Bar: ${if (NowBar.isSupported(context)) "offered" else "not offered"}${if (forceNowBar) " (forced)" else ""}",
+                    "Live Updates: ${if (LiveUpdates.isSupported(context)) "offered" else "not offered"}${if (forceLiveUpdates) " (forced)" else ""}",
                 )
                 appendLine("Memory: $memoryUsed MB used of ${runtime.maxMemory() shr 20} MB")
                 appendLine("Server: ${config.apiUrl}")
@@ -99,10 +99,10 @@ fun DebugPanel(viewModel: ForgeViewModel) {
             onCheckedChange = { viewModel.saveConfig(config.copy(enableLogging = it)) },
         )
         SwitchPreference(
-            title = "Force Now Bar Support",
-            subtitle = "Offers \"Show Progress in Now Bar\" on any phone",
-            checked = forceNowBar,
-            onCheckedChange = { viewModel.debugSetForceNowBar(it) },
+            title = "Offer Live Updates on Any Phone",
+            subtitle = "Offers \"Show Progress as Live Update\" below Android 16 too, to check its settings",
+            checked = forceLiveUpdates,
+            onCheckedChange = { viewModel.debugSetForceLiveUpdates(it) },
         )
         DebugButton("Edit Raw Settings") { showRawEditor = true }
 

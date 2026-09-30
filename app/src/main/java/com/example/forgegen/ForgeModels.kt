@@ -102,6 +102,9 @@ data class AppConfig(
     var serverQueue: Boolean = true,
     // The image cache's size on the phone in MB (ImageCache.SIZES_MB, 3.4.0); used from the next start.
     var imageCacheMb: Int = ImageCache.DEFAULT_MB,
+    // The gallery key's fingerprint for each server that asks for one (GalleryKey, 3.5.0): server address -> hash.
+    // Never the key itself, and left out of Backup exports.
+    var galleryKeys: Map<String, String> = emptyMap(),
     // What each checkpoint is and needs, and its own defaults (3.0.0), under ModelSettingsRules.key of the model.
     var modelSettings: Map<String, ModelSettings> = emptyMap(),
 )

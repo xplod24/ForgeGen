@@ -22,8 +22,8 @@ import java.util.Locale
  * UPDATE DOWNLOAD (2.3.0-1)
  * "Download" in Settings > Updates downloads the release here, in a foreground service, so a locked screen or the app
  * in the background does not stop it (it ran in the screen's own coroutine before and the phone froze it). The
- * progress is a notification (a Live Update in Samsung's Now Bar where the phone offers it and "Show Progress in Now
- * Bar" is on) and a card in Settings > Updates (SelfUpdate.downloadProgress). Since 3.0.0-3 it only downloads: a file
+ * progress is a notification (a Live Update on Android 16+ when "Show Progress as Live Update" is on, see
+ * LiveUpdates) and a card in Settings > Updates (SelfUpdate.downloadProgress). Since 3.0.0-3 it only downloads: a file
  * whose SHA-256 matches the release becomes SelfUpdate.readyUpdate, and "Install" (ForgeUpdateManager.installUpdate)
  * is a separate tap.
  * ============================================================================ */
@@ -138,7 +138,7 @@ class UpdateDownloadService : Service() {
         }
     }
 
-    /** The download's notification: a Live Update (Now Bar) where the phone offers it, else a plain progress bar. */
+    /** The download's notification: a Live Update where the phone offers it, else a plain progress bar. */
     private fun progressNotification(
         versionName: String,
         done: Long,
@@ -162,7 +162,7 @@ class UpdateDownloadService : Service() {
                 .setOnlyAlertOnce(true)
                 .setSilent(true)
                 .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-        if (NowBar.isSupported(this) && ForgeRepository.config.value.nowBarProgress) {
+        if (LiveUpdates.isSupported(this) && ForgeRepository.config.value.nowBarProgress) {
             // The same Live Update as the generation progress (see GenerationService): no custom views, not colorized.
             builder
                 .setRequestPromotedOngoing(true)

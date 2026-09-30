@@ -132,14 +132,14 @@ class ForgeViewModel(
 
     // --- DEBUG MODE (DebugMode) ---
     val debugUnlocked: StateFlow<Boolean> = DebugMode.unlocked
-    val debugForceNowBar: StateFlow<Boolean> = DebugMode.forceNowBar
+    val debugForceLiveUpdates: StateFlow<Boolean> = DebugMode.forceLiveUpdates
 
     /** Checks the password off the main thread (PBKDF2 is slow on purpose). */
     suspend fun debugUnlock(password: String): DebugMode.UnlockResult = withContext(Dispatchers.Default) { DebugMode.unlock(password) }
 
     fun debugLock() = DebugMode.lock()
 
-    fun debugSetForceNowBar(on: Boolean) = DebugMode.setForceNowBar(on)
+    fun debugSetForceLiveUpdates(on: Boolean) = DebugMode.setForceLiveUpdates(on)
 
 
     /** The settings as JSON, for the raw editor. */
@@ -722,7 +722,9 @@ class ForgeViewModel(
                 }
                 val current = ForgeSettingsManager.config.value
                 withContext(Dispatchers.Main) {
-                    ForgeSettingsManager.saveConfig(backup.config.copy(lastUpdateCheckDate = current.lastUpdateCheckDate))
+                    ForgeSettingsManager.saveConfig(
+                        backup.config.copy(lastUpdateCheckDate = current.lastUpdateCheckDate, galleryKeys = current.galleryKeys),
+                    )
                 }
                 ForgePromptManager.saveWildcards(backup.wildcards)
                 showToast(
@@ -832,6 +834,16 @@ class ForgeViewModel(
     fun checkGalleryExtension() {
         if (ForgeRepository.isConnected.value) ForgeGalleryManager.checkExtension() else ForgeRepository.reconnect()
     }
+
+    /** "Unlock" in the gallery or "Save" in Settings > Server > Gallery Key (3.5.0); [onResult]: the server took it. */
+    fun saveGalleryKey(
+        key: String,
+        onResult: (Boolean) -> Unit,
+    ) {
+        viewModelScope.launch { onResult(ForgeGalleryManager.tryKey(key)) }
+    }
+
+    fun forgetGalleryKey() = ForgeGalleryManager.forgetKey()
 
     fun readyGalleryRoot(): String? = ForgeGalleryManager.readyRoot()
 

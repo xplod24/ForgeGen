@@ -161,6 +161,12 @@ object ForgeGalleryManager {
 
         /** The extension answered with an error, or without its folders. */
         FAILED,
+
+        /** The extension asks for its secret key, or refused the one saved for this server (GalleryKey, 3.5.0). */
+        LOCKED,
+
+        /** Forge has a login and the extension no secret key, so it refuses everything (GalleryKey, 3.5.0). */
+        KEY_NOT_SET,
     }
 
     data class ExtensionStatus(
@@ -482,6 +488,11 @@ object ForgeGalleryManager {
                     ?.value
                     ?.takeIf { it.isNotBlank() }
         }
+        // A gallery request refused for its key (3.5.0), e.g. after the key was changed on the server: the extension
+        // is asked again, which locks the gallery until the new key is entered.
+        managerScope.launch {
+            GalleryKey.refused.collect { if (_extension.value.state == Extension.READY) checkExtension() }
+        }
         // The whole index is read without holding the start screen (3.4.0); All Images shows placeholders meanwhile.
         managerScope.launch {
             reloadIndex()
@@ -632,6 +643,26 @@ object ForgeGalleryManager {
         managerScope.launch { detectExtension() }
     }
 
+    /**
+     * "Unlock" in the gallery or "Gallery Key" in the settings (3.5.0): saves [key]'s fingerprint for this server and
+     * asks the extension again. False when the server refused it; the key saved before, if any, is then kept.
+     */
+    suspend fun tryKey(key: String): Boolean {
+        val before = ForgeRepository.config.value
+        ForgeSettingsManager.saveConfig(GalleryKey.withFingerprint(before, GalleryKey.fingerprint(key)))
+        detectExtension()
+        if (_extension.value.state != Extension.LOCKED) return true
+        ForgeSettingsManager.saveConfig(GalleryKey.withFingerprint(ForgeRepository.config.value, GalleryKey.savedFor(before)))
+        _extension.value = ExtensionStatus(Extension.LOCKED, "The server did not accept this key.")
+        return false
+    }
+
+    /** Removes the key saved for this server and asks the extension again. */
+    fun forgetKey() {
+        ForgeSettingsManager.saveConfig(GalleryKey.withFingerprint(ForgeRepository.config.value, null))
+        checkExtension()
+    }
+
     /** Another server: what was found on the previous one no longer holds, the open folder included. */
     fun onServerChanged() {
         _extension.value = ExtensionStatus(Extension.UNKNOWN)
@@ -673,8 +704,28 @@ object ForgeGalleryManager {
                     Log.w(TAG, "No answer from the server about the gallery extension: ${e.message}")
                     return ExtensionStatus(Extension.UNKNOWN, "The server did not answer: ${e.message ?: e.javaClass.simpleName}")
                 }
+            val errorType =
+                if (response.isSuccessful) {
+                    null
+                } else {
+                    try {
+                        GalleryKey.errorType(response.errorBody()?.string())
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        null
+                    }
+                }
             when {
                 response.code() == 404 || response.code() == 405 -> continue // not under this name
+                response.code() == 401 && errorType == GalleryKey.LOCKED_TYPE -> {
+                    apiPrefix = prefix
+                    val saved = GalleryKey.savedFor(ForgeRepository.config.value) != null
+                    return ExtensionStatus(Extension.LOCKED, "The key saved for this server no longer opens the gallery.".takeIf { saved })
+                }
+                response.code() == 400 && errorType == GalleryKey.KEY_REQUIRED_TYPE -> {
+                    apiPrefix = prefix
+                    return ExtensionStatus(Extension.KEY_NOT_SET)
+                }
                 response.code() == 401 || response.code() == 403 -> {
                     apiPrefix = prefix
                     return ExtensionStatus(Extension.FAILED, "The gallery extension refused the app (HTTP ${response.code()}).")

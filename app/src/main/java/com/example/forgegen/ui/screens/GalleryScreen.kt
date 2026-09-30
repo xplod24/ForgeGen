@@ -186,6 +186,8 @@ fun GalleryScreen(
     val showExtensionStatus =
         extension.state == ForgeGalleryManager.Extension.MISSING ||
             extension.state == ForgeGalleryManager.Extension.FAILED ||
+            extension.state == ForgeGalleryManager.Extension.LOCKED ||
+            extension.state == ForgeGalleryManager.Extension.KEY_NOT_SET ||
             (currentPath.isEmpty() && extension.state != ForgeGalleryManager.Extension.READY)
 
     // TABS (2.2.0): Gallery | Favorites | All Images, switched with a tap or a swipe; the gallery opens on the one
@@ -393,6 +395,7 @@ fun GalleryScreen(
                         onOpenPage = {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ForgeGalleryManager.EXTENSION_URL)))
                         },
+                        onUnlock = viewModel::saveGalleryKey,
                         modifier = Modifier.align(Alignment.Center),
                     )
                 } else {
@@ -819,13 +822,17 @@ private fun ViewOption(
     )
 }
 
-/** Why there is nothing to browse: no connection, no gallery extension on the server, or an error from it. */
+/**
+ * Why there is nothing to browse: no connection, no gallery extension on the server, an error from it, or it asks for
+ * its secret key (3.5.0).
+ */
 @Composable
 private fun ExtensionStatusPanel(
     status: ForgeGalleryManager.ExtensionStatus,
     isConnected: Boolean,
     onCheckAgain: () -> Unit,
     onOpenPage: () -> Unit,
+    onUnlock: (key: String, onResult: (Boolean) -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -864,6 +871,8 @@ private fun ExtensionStatusPanel(
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = onCheckAgain) { Text("Check Again") }
             }
+            ForgeGalleryManager.Extension.LOCKED -> GalleryLockedPanel(status.message, onUnlock)
+            ForgeGalleryManager.Extension.KEY_NOT_SET -> GalleryKeyNotSetPanel(onCheckAgain)
             ForgeGalleryManager.Extension.UNKNOWN -> {
                 Icon(Icons.Default.CloudOff, null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
