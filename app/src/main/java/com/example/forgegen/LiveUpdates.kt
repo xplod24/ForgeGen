@@ -81,12 +81,12 @@ object LiveUpdates {
             } ?: return // not shown yet: tried again with the next update
         lastCheckMs = now
         val promoted = posted.flags and Notification.FLAG_PROMOTED_ONGOING != 0
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(PROMOTED_KEY, if (promoted) 1 else 0).apply()
+        prefs(context).edit().putInt(PROMOTED_KEY, if (promoted) 1 else 0).apply()
     }
 
     /** Whether the progress was shown as a Live Update during the last job; null when not seen yet. */
     fun promotedLastTime(context: Context): Boolean? =
-        when (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(PROMOTED_KEY, -1)) {
+        when (prefs(context).getInt(PROMOTED_KEY, -1)) {
             1 -> true
             0 -> false
             else -> null
@@ -94,9 +94,11 @@ object LiveUpdates {
 
     /** Turning the option on again starts a new check. */
     fun forgetPromotion(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(PROMOTED_KEY).apply()
+        prefs(context).edit().remove(PROMOTED_KEY).apply()
         lastCheckMs = 0L
     }
+
+    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** The app's notification settings: notifications, on the lock screen, with their content. */
     fun openNotificationSettings(context: Context) {

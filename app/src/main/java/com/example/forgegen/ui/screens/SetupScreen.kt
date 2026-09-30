@@ -475,7 +475,11 @@ fun SetupScreen(
                     subtitle =
                         when {
                             galleryExtension.state == ForgeGalleryManager.Extension.LOCKED ->
-                                if (saved) "The saved key no longer opens the gallery: tap to enter the new one" else "Needed: the gallery asks for its secret key"
+                                if (saved) {
+                                    "The saved key no longer opens the gallery: tap to enter the new one"
+                                } else {
+                                    "Needed: the gallery asks for its secret key"
+                                }
                             galleryExtension.state == ForgeGalleryManager.Extension.KEY_NOT_SET ->
                                 "Forge has a login, so IIB_SECRET_KEY must first be set on the server"
                             saved -> "Saved for this server (only its fingerprint) · tap to change or remove"
@@ -724,7 +728,7 @@ fun SetupScreen(
                     subtitle = "${config.notificationMode}: $modeDesc",
                 ) { showNotificationModeDialog = true }
             }
-            add(SettingsPage.NOTIFICATIONS, "Progress", "show progress as live update now bar samsung status bar chip lock screen live notification") {
+            add(SettingsPage.NOTIFICATIONS, "Progress", "show progress as live update now bar samsung status chip lock screen") {
                 // Off until the user turns it on (Google's rules: a Live Update the user asked for); greyed out below
                 // Android 16. Saved as nowBarProgress, its name up to 3.4.2.
                 SwitchPreference(
@@ -748,7 +752,7 @@ fun SetupScreen(
                 )
             }
             if (isLiveUpdateSupported && config.nowBarProgress) {
-                add(SettingsPage.NOTIFICATIONS, "Progress", "live update checklist live notifications developer options lock screen now bar") {
+                add(SettingsPage.NOTIFICATIONS, "Progress", "live update checklist did it work live notifications developer options") {
                     LiveUpdateChecklist(
                         notificationsAllowed = areNotificationsAllowed,
                         liveNotificationsAllowed = isLiveUpdateAllowed,

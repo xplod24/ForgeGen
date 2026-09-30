@@ -49,14 +49,18 @@ object GalleryKey {
         fingerprint: String?,
     ): AppConfig {
         val server = serverOf(config.apiUrl)
-        return config.copy(galleryKeys = if (fingerprint == null) config.galleryKeys - server else config.galleryKeys + (server to fingerprint))
+        val keys = if (fingerprint == null) config.galleryKeys - server else config.galleryKeys + (server to fingerprint)
+        return config.copy(galleryKeys = keys)
     }
 
     /** The "type" IIB puts in an error's "detail" (e.g. [LOCKED_TYPE]), or null for any other answer. */
     fun errorType(body: String?): String? =
         try {
-            val detail = body?.let { JsonParser.parseString(it) }?.takeIf { it.isJsonObject }?.asJsonObject?.get("detail")
-            detail
+            body
+                ?.let { JsonParser.parseString(it) }
+                ?.takeIf { it.isJsonObject }
+                ?.asJsonObject
+                ?.get("detail")
                 ?.takeIf { it.isJsonObject }
                 ?.asJsonObject
                 ?.get("type")

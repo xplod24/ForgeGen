@@ -42,6 +42,11 @@ class GalleryKeyTest {
         val config = AppConfig(galleryKeys = mapOf("http://192.168.1.90:7860" to GalleryKey.fingerprint("secret")))
         val json = Backup.write(config, emptyList(), "3.5.0")
         assertFalse(json.contains(GalleryKey.fingerprint("secret")))
-        assertTrue(Backup.read(json)!!.config.galleryKeys.isEmpty())
+        assertTrue(
+            Backup
+                .read(json)!!
+                .config.galleryKeys
+                .isEmpty(),
+        )
     }
 }

@@ -70,9 +70,8 @@ fun DebugPanel(viewModel: ForgeViewModel) {
             buildString {
                 appendLine("App: ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE}), ${context.packageName}")
                 appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                appendLine(
-                    "Live Updates: ${if (LiveUpdates.isSupported(context)) "offered" else "not offered"}${if (forceLiveUpdates) " (forced)" else ""}",
-                )
+                val offered = if (LiveUpdates.isSupported(context)) "offered" else "not offered"
+                appendLine("Live Updates: $offered${if (forceLiveUpdates) " (forced)" else ""}")
                 appendLine("Memory: $memoryUsed MB used of ${runtime.maxMemory() shr 20} MB")
                 appendLine("Server: ${config.apiUrl}")
                 appendLine("  connected=$isConnected busy=$isServerBusy")
