@@ -405,6 +405,11 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   build on every push there; `ci.yml` never runs on master), the features, the server's requirements, installation,
   building, structure and releases. Keep it true: a change that adds, removes or renames a feature, a requirement or
   a build step updates README.md in the same commit.
+- **License (owner's choice after 3.4.1):** GPL-3.0-or-later, author "xplod24 (Szymon Tempiński)", since 2026.
+  `LICENSE` is the FSF's text unchanged (so GitHub recognises it); the copyright notice and the "or later" wording are
+  in README's License section. Source files carry no headers. New dependencies must be GPL-3.0-compatible (Apache-2.0,
+  MIT, BSD are; GPL-2.0-only is not). Code others contribute stays theirs under the GPL, so relicensing later would
+  need their consent.
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: "What's New" once after an update, since 3.0.0 as the floating bar (the notes open only on "Show").
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.

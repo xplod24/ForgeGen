@@ -15,6 +15,7 @@
   <a href="https://github.com/xplod24/ForgeGen/releases"><img src="https://img.shields.io/github/downloads/xplod24/ForgeGen/total?color=7F52FF" alt="Downloads"></a>
   <a href="#requirements"><img src="https://img.shields.io/badge/Android-12%2B-3DDC84?logo=android&logoColor=white" alt="Android 12+"></a>
   <a href="#tech-stack"><img src="https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin and Jetpack Compose"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-BD0000" alt="License: GPL-3.0-or-later"></a>
 </p>
 
 <p align="center">
@@ -40,6 +41,7 @@
 - [Tech stack](#tech-stack)
 - [Privacy](#privacy)
 - [Acknowledgements](#acknowledgements)
+- [License](#license)
 
 ## About
 
@@ -255,3 +257,24 @@ The exact versions are in [`gradle/libs.versions.toml`](gradle/libs.versions.tom
   gallery.
 - [tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete) by DominikDoom, whose tag lists feed the
   suggestions.
+
+## License
+
+ForgeGen is free software, released under the [GNU General Public License v3.0 or later](LICENSE).
+
+```
+ForgeGen
+Copyright (C) 2026 xplod24 (Szymon Tempiński)
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+```
+
+In short: you may use, study, change and share ForgeGen, also for money, as long as every copy or changed version you
+share keeps this license and comes with access to its source code. The app comes as it is, without any warranty.
