@@ -1,3 +1,9 @@
+## 3.5.2
+**Polish** · the version number no longer says "DEBUG"
+
+### Changed
+- The version shown in the app (Settings > Updates, the start screen) no longer ends in "-DEBUG": the app from GitHub is a finished build, optimized and signed with ForgeGen's own key. Only builds made from the source code for development still say "DEBUG", as they really are debuggable.
+
 ## 3.5.1
 **Polish** · updates are signed with ForgeGen's own key, so only its author can publish one
 

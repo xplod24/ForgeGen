@@ -179,7 +179,7 @@ You need JDK 21 and the Android SDK with platform 37 (a current Android Studio h
 git clone https://github.com/xplod24/ForgeGen.git
 cd ForgeGen
 
-./gradlew assembleDebug                      # development build (debuggable, not shrunk)
+./gradlew assembleDebug                      # development build (debuggable, not shrunk, version "x.y.z-DEBUG")
 ./gradlew assembleDebug -Pforgegen.publish   # as published: not debuggable, shrunk by R8
 ./gradlew testDebugUnitTest                  # unit tests
 java -jar ktlint.jar "app/src/**/*.kt"       # code style check

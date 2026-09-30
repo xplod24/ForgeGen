@@ -116,7 +116,8 @@ android {
             // installs over it only when that key is set (above); otherwise it is signed with the debug key.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-DEBUG"
+            // Only the builds that really are debuggable say so (3.5.2): the published APK shows the plain version.
+            if (!publish) versionNameSuffix = "-DEBUG"
             resValue("string", "app_name", "ForgeGen")
         }
     }
