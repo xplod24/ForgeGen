@@ -1,3 +1,13 @@
+## 3.5.2-1
+**Feature** · the backup now carries your favorites and queue, ready for the app without "debug" in its package name
+
+### New
+- **Favorites and queue in the backup:** Export Settings also saves the gallery favorites and the queue, and Import Settings adds them. Imported jobs wait in a paused queue until you resume it.
+- **Moving to the new app:** the next version, 3.5.2-2, drops "debug" from the app's package name, so Android installs it as a new app next to this one. When it arrives, Settings > Updates shows the four steps instead of installing it: export, install the new app, import there, uninstall this one. Nothing is lost on the way.
+
+### Changed
+- The file in each release is now ForgeGen.apk (was app-debug.apk).
+
 ## 3.5.2
 **Polish** · the version number no longer says "DEBUG"
 

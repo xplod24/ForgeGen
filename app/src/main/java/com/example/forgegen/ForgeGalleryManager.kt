@@ -569,6 +569,19 @@ object ForgeGalleryManager {
         _favoritePaths.value = favorites.mapTo(HashSet()) { it.fullpath }
     }
 
+    /** The favorites as saved, for a backup (3.5.2-1). */
+    suspend fun favoritesForBackup(): List<FavoriteImageEntity> = getDb().favoriteImageDao().getAllFavorites()
+
+    /** The favorites of a backup (3.5.2-1), with their own dates; those already here stay. How many were new. */
+    suspend fun importFavorites(favorites: List<FavoriteImageEntity>): Int {
+        val dao = getDb().favoriteImageDao()
+        val added = favorites.filter { it.fullpath !in _favoritePaths.value }.distinctBy { it.fullpath }
+        if (added.isEmpty()) return 0
+        for (favorite in added) dao.insertFavorite(favorite)
+        loadFavoritePaths()
+        return added.size
+    }
+
     /** Up to 1.0.2 images could also be "pinned", a second list of bookmarks; they become favorites. */
     private suspend fun migratePinnedToFavorites() {
         val pinned = ForgeSettingsManager.pinnedImages.value

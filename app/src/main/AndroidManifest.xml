@@ -25,7 +25,10 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
-
+    <!-- SelfUpdate.isInstalled: the app without ".debug" in its package (3.5.2-2), which the move installs. -->
+    <queries>
+        <package android:name="io.github.xplod24.forgegen" />
+    </queries>
 
     <application
         android:name=".ForgeApp"

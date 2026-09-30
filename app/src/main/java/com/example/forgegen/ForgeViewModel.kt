@@ -694,12 +694,19 @@ class ForgeViewModel(
 
     fun moveQueueItemUp(id: String) = ForgeQueueManager.moveQueueItemUp(id)
 
-    // --- BACKUP (settings, presets, server profiles and wildcards in one file) ---
+    // --- BACKUP (settings, presets, server profiles, wildcards, and since 3.5.2-1 favorites and the queue, in one file) ---
 
     fun exportBackup(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val json = Backup.write(ForgeSettingsManager.config.value, ForgePromptManager.wildcards.value, AppVersion.currentVersion)
+                val json =
+                    Backup.write(
+                        ForgeSettingsManager.config.value,
+                        ForgePromptManager.wildcards.value,
+                        AppVersion.currentVersion,
+                        favorites = ForgeGalleryManager.favoritesForBackup(),
+                        queue = ForgeQueueManager.jobsForBackup(),
+                    )
                 getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { it.write(json.toByteArray()) }
                     ?: throw java.io.IOException("The file cannot be written")
                 showToast("Settings exported")
@@ -727,9 +734,13 @@ class ForgeViewModel(
                     )
                 }
                 ForgePromptManager.saveWildcards(backup.wildcards)
+                val favorites = ForgeGalleryManager.importFavorites(backup.favorites)
+                val jobs = ForgeQueueManager.importJobs(backup.queue)
                 showToast(
                     "Settings imported: ${backup.config.presets.size} presets, ${backup.config.serverProfiles.size} server profiles, " +
-                        "${backup.wildcards.size} wildcards",
+                        "${backup.wildcards.size} wildcards" +
+                        (if (favorites > 0) ", $favorites favorites" else "") +
+                        (if (jobs > 0) ", $jobs queued jobs (the queue is paused)" else ""),
                 )
             } catch (e: Exception) {
                 showToast("Import failed: ${e.message}")

@@ -108,6 +108,7 @@ object ForgeQueueManager {
 
     const val CONNECTION_LOST_REASON = "Connection to the server was lost. The queue continues when the server is back."
     const val USER_PAUSED_REASON = "Paused by you. The running job finishes; resume the queue to go on."
+    const val IMPORTED_REASON = "Jobs imported from a backup wait here. Resume the queue to run them."
 
     /** The user pauses the queue (the Quick Settings tile): the running job finishes, the next ones wait. */
     fun pauseByUser() {
@@ -1198,6 +1199,33 @@ object ForgeQueueManager {
         val liftedPause = liftPauseIfNothingToRun()
         saveQueueState()
         return RemovedJobs(removed, liftedPause).takeIf { removed.isNotEmpty() }
+    }
+
+    /** The queue for a backup (3.5.2-1); a running job is saved as waiting, as when the app closes. */
+    fun jobsForBackup(): List<QueuedGeneration> =
+        _generationQueue.value.map { if (it.status == GenerationStatus.GENERATING) it.copy(status = GenerationStatus.QUEUED) else it }
+
+    /**
+     * The jobs of a backup (3.5.2-1) after the ones here; jobs already here are skipped. The queue pauses first, so they
+     * wait until the user resumes it instead of starting on the spot. How many were added.
+     */
+    fun importJobs(jobs: List<QueuedGeneration>): Int {
+        val current = _generationQueue.value.map { it.id }.toSet()
+        val added =
+            jobs
+                .filter { it.id !in current }
+                .distinctBy { it.id }
+                .map { if (it.isRunnable()) it.copy(status = GenerationStatus.QUEUED) else it }
+        if (added.isEmpty()) return 0
+        val runnable = added.count { it.isRunnable() }
+        if (runnable > 0 && !_isQueuePaused.value) pauseQueue(IMPORTED_REASON)
+        _generationQueue.update { it + added }
+        if (runnable > 0) {
+            if (_totalQueueSize.value == 0) _completedQueueItems.value = 0
+            _totalQueueSize.update { it + runnable }
+        }
+        saveQueueState()
+        return added.size
     }
 
     /**

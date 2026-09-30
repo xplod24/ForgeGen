@@ -129,7 +129,9 @@ class ForgeUpdateManager(
      */
     fun installUpdate(sendToBackground: () -> Unit) {
         val manifest = _updateManifest.value ?: return
-        if (SelfUpdate.readyUpdate.value?.versionCode != manifest.versionCode) return
+        val ready = SelfUpdate.readyUpdate.value
+        if (ready?.versionCode != manifest.versionCode) return
+        if (ready.movesTo != null) return // another app (3.5.2-1): the card moves the data instead
         if (SelfUpdate.installing.value != null || SelfUpdate.downloadProgress.value != null) return
         SelfUpdate.setInstalling(manifest.versionName)
         scope.launch(Dispatchers.IO) {

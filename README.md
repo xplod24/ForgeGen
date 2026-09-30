@@ -119,8 +119,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   switched off leaves the screen and the app stops asking the server for its data.
 - **Privacy and security:** App Lock (the phone's PIN or biometrics), hide the app in Recents, block screenshots, hide
   prompts in notifications, save images privately and share them without generation data.
-- **Backup and data:** export and import the settings, presets, server profiles and wildcards; the image cache size
-  (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log; and a choice of what to wipe.
+- **Backup and data:** export and import the settings, presets, server profiles, wildcards, gallery favorites and
+  queue; the image cache size (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log; and a choice of
+  what to wipe.
 - **Updates from GitHub:** the app looks for a new release every 6 hours on Wi-Fi, checks the download's SHA-256 and
   installs it in the background where Android allows it, never while the queue works or while you use the app. After
   an update a "What's New" bar offers the release notes.
@@ -160,16 +161,17 @@ export COMMANDLINE_ARGS="--api --listen --api-server-stop"
 
 ## Installation
 
-1. Download `app-debug.apk` from the [latest release](https://github.com/xplod24/ForgeGen/releases/latest).
+1. Download [`ForgeGen.apk`](https://github.com/xplod24/ForgeGen/releases/latest/download/ForgeGen.apk) from the
+   [latest release](https://github.com/xplod24/ForgeGen/releases/latest).
 2. Open it on the phone and allow installing apps from that source. Play Protect may offer to scan it, as it does
    for any app from outside the Play Store.
 3. Open ForgeGen and enter your server's address, for example `http://192.168.1.90:7860` (tap the connection in the
    top bar, or go to Settings > Server).
 4. That's it: later versions arrive by themselves (Settings > Updates to check now or to turn off automatic installs).
 
-The file is named `app-debug.apk` for historical reasons: it is not debuggable, and it is shrunk and optimized by R8
-(about 6.5 MB). The app's package is `io.github.xplod24.forgegen.debug`. Since 3.5.1 it is signed with ForgeGen's own
-key, certificate SHA-256 `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`.
+The APK is shrunk and optimized by R8 (about 6.5 MB; up to 3.5.2 it was named `app-debug.apk`). The app's package is
+`io.github.xplod24.forgegen.debug` (`io.github.xplod24.forgegen` from 3.5.2-2 on). Since 3.5.1 it is signed with
+ForgeGen's own key, certificate SHA-256 `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`.
 
 ## Building from source
 
@@ -233,7 +235,7 @@ ForgeGen/
   `major × 100 000 000 + minor × 100 000 + patch × 100 + micro`.
 - Pushing a new version to `master` with its `## <version>` section in [`CHANGELOG.md`](CHANGELOG.md) makes
   [`release.yml`](.github/workflows/release.yml) run the tests, build and sign the APK, tag `v<version>` and publish the
-  release with `app-debug.apk` and `mapping.zip` (R8's mapping, to read crash logs). Every other push to `master` runs the tests and the build too (the **build** badge
+  release with `ForgeGen.apk` and `mapping.zip` (R8's mapping, to read crash logs). Every other push to `master` runs the tests and the build too (the **build** badge
   above). Work branches and pull requests are checked by [`ci.yml`](.github/workflows/ci.yml).
 - Each release names its kind in its first line: **Bugfix**, **Polish**, **Feature** or **Overhaul**, then lists what
   is New, Changed and Fixed.
