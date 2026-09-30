@@ -1,3 +1,10 @@
+## 3.5.1
+**Polish** · updates are signed with ForgeGen's own key, so only its author can publish one
+
+### Changed
+- ForgeGen is now signed with its own key instead of the one shared in its source code, which anyone could use to sign an app your phone would take as an update. This update installs as usual and keeps all your data; from now on the phone accepts only updates signed with the new key.
+- A build of your own from the source code installs over the app from GitHub only when it is signed with the same key (see README).
+
 ## 3.5.0
 **Feature** · the gallery asks for your server's key instead of using one built into the app, and the progress shows as a Live Update on every Android 16 phone
 

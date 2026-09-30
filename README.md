@@ -168,7 +168,8 @@ export COMMANDLINE_ARGS="--api --listen --api-server-stop"
 4. That's it: later versions arrive by themselves (Settings > Updates to check now or to turn off automatic installs).
 
 The file is named `app-debug.apk` for historical reasons: it is not debuggable, and it is shrunk and optimized by R8
-(about 6.5 MB). The app's package is `io.github.xplod24.forgegen.debug`.
+(about 6.5 MB). The app's package is `io.github.xplod24.forgegen.debug`. Since 3.5.1 it is signed with ForgeGen's own
+key, certificate SHA-256 `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`.
 
 ## Building from source
 
@@ -186,9 +187,12 @@ java -jar ktlint.jar "app/src/**/*.kt"       # code style check
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
-- **Signing:** `app/debug.keystore` is committed on purpose. The published APK is signed with it, so a build from
-  this repository installs over the published app and keeps its data. A `release` build type with its own key is
-  prepared (`RELEASE_KEYSTORE_FILE` and `RELEASE_KEYSTORE_PASSWORD`) but not published.
+- **Signing:** the published APK is signed with ForgeGen's own key, which is not in the repository, by key rotation
+  (APK Signature Scheme v3) from `app/debug.keystore`, which signed it up to 3.5.0:
+  [`tools/sign-apk.sh`](tools/sign-apk.sh) with the lineage in `app/signing/forgegen-lineage.bin`. A phone with 3.5.1
+  or later accepts updates signed with that key only, so a local build signed with `app/debug.keystore` installs
+  only after the app (and its data) is removed. With `RELEASE_KEYSTORE_FILE` and `RELEASE_KEYSTORE_PASSWORD` set
+  (environment or `~/.gradle/gradle.properties`), local builds are signed with that key and update the app.
 - **R8:** only `-Pforgegen.publish` builds go through R8; local builds and the tests run the code as written. Code
   that touches saved data, Gson, reflection, resources or a new library follows the "R8 rules" in
   [`MEMORY.md`](MEMORY.md).
@@ -216,6 +220,7 @@ ForgeGen/
 │       └── components/           cards, pickers, top bars, dialogs, tag suggestion strip
 ├── app/src/test/                 JVM unit tests
 ├── .github/workflows/            ci.yml (work branches) and release.yml (master)
+├── tools/sign-apk.sh             signs the published APK with ForgeGen's key (key rotation)
 ├── CHANGELOG.md                  release notes, also shown in the app after an update
 ├── MEMORY.md                     architecture notes and the owner's decisions
 └── CLAUDE.md                     working rules for AI-assisted development
@@ -227,7 +232,7 @@ ForgeGen/
   `VERSION_PATCH`, plus `VERSION_MICRO` for a micro-patch (`3.0.0-4`). The version code is
   `major × 100 000 000 + minor × 100 000 + patch × 100 + micro`.
 - Pushing a new version to `master` with its `## <version>` section in [`CHANGELOG.md`](CHANGELOG.md) makes
-  [`release.yml`](.github/workflows/release.yml) run the tests, build the APK, tag `v<version>` and publish the
+  [`release.yml`](.github/workflows/release.yml) run the tests, build and sign the APK, tag `v<version>` and publish the
   release with `app-debug.apk` and `mapping.zip` (R8's mapping, to read crash logs). Every other push to `master` runs the tests and the build too (the **build** badge
   above). Work branches and pull requests are checked by [`ci.yml`](.github/workflows/ci.yml).
 - Each release names its kind in its first line: **Bugfix**, **Polish**, **Feature** or **Overhaul**, then lists what

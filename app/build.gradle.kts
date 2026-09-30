@@ -46,18 +46,17 @@ android {
     }
 
     signingConfigs {
-        // The keystore is committed on purpose: the GitHub releases are debug builds, and Android Studio and the
-        // release workflow must sign with the same key, otherwise the phone refuses to install a release over the
-        // installed app.
+        // The keystore is committed on purpose: it signed the published APK up to 3.5.0, and since 3.5.1 it is the
+        // first key of the rotation to ForgeGen's own key (tools/sign-apk.sh, app/signing/forgegen-lineage.bin).
         getByName("debug") {
             storeFile = file("debug.keystore")
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
-        // Prepared for signed release builds (not published yet). The release key is never committed; set
-        // RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment or ~/.gradle/gradle.properties).
-        // Without them the release APK is built unsigned and cannot be installed.
+        // ForgeGen's own key, which signs the published APK since 3.5.1. It is never committed; set
+        // RELEASE_KEYSTORE_FILE and RELEASE_KEYSTORE_PASSWORD (environment or ~/.gradle/gradle.properties). Then the
+        // debug builds are signed with it too, and the release build type (not published) is built unsigned without it.
         val releaseKeystore =
             providers
                 .environmentVariable("RELEASE_KEYSTORE_FILE")
@@ -105,7 +104,7 @@ android {
         debug {
             // The APK published on GitHub is built with -Pforgegen.publish (release.yml, and ci.yml to check it) and is
             // not debuggable (3.4.0): Android then compiles it ahead and uses Compose's startup profiles; Compose ran
-            // much slower in the debuggable app. Same package, key and file name, so it updates the installed app.
+            // much slower in the debuggable app. Same package and file name, so it updates the installed app.
             // Since 3.4.1 R8 also shrinks and optimizes it (about 6 MB instead of 52; rules in proguard-rules.pro).
             // Builds from Android Studio stay debuggable and unshrunk.
             val publish = providers.gradleProperty("forgegen.publish").isPresent
@@ -113,6 +112,9 @@ android {
             isMinifyEnabled = publish
             isShrinkResources = publish
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The phone accepts updates of the published app (3.5.1+) signed with ForgeGen's key only, so a local build
+            // installs over it only when that key is set (above); otherwise it is signed with the debug key.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-DEBUG"
             resValue("string", "app_name", "ForgeGen")

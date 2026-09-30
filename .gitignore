@@ -14,6 +14,10 @@
 .cxx
 local.properties
 
+# ForgeGen's own signing key is never committed (MEMORY.md, "Signing"); app/debug.keystore is, on purpose.
+*.p12
+*.jks
+
 # Agent temporary files
 *.py
 # ...but the repository's own tools are kept (e.g. tools/splash/gen_splash.py, which generates the splash).

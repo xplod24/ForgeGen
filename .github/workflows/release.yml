@@ -6,9 +6,9 @@ name: Release
 # "v<major>.<minor>.<patch>-<micro>") and attaches app-debug.apk, which the app's updater then offers.
 # Any other push to master only runs the tests and the build.
 #
-# Releases are debug builds signed with app/debug.keystore (the owner's choice). Signing them with the release
-# key instead is prepared in app/build.gradle.kts; the workflow for it is in commit 42b5928 and needs the
-# RELEASE_KEYSTORE_BASE64 / RELEASE_KEYSTORE_PASSWORD secrets.
+# Since 3.5.1 the published APK is signed with ForgeGen's own key by key rotation from app/debug.keystore, which
+# signed the releases up to 3.5.0 (tools/sign-apk.sh). The key comes from the repository secrets
+# RELEASE_KEYSTORE_BASE64 and RELEASE_KEYSTORE_PASSWORD; without them, or with wrong ones, nothing is published.
 on:
   push:
     branches:
@@ -86,6 +86,14 @@ jobs:
       - name: Build Debug APK
         # Not debuggable, as published (3.4.0; see app/build.gradle.kts).
         run: ./gradlew assembleDebug -Pforgegen.publish
+
+      - name: Sign with ForgeGen's key
+        # Stops the job, before anything is published, when a secret is missing or the signature is not as expected.
+        if: steps.version.outputs.publish == 'true'
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+        run: bash tools/sign-apk.sh app/build/outputs/apk/debug/app-debug.apk
 
       - name: Mapping file
         # R8's mapping of this very build (3.5.0), to read the line numbers of crash logs from the published APK
