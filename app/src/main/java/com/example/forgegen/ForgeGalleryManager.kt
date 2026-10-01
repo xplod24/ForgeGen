@@ -286,9 +286,12 @@ object ForgeGalleryManager {
         val name: String = "",
         val prompt: String = "",
         val sortOrder: SortOrder = SortOrder.NEWEST,
+        // A setting the statistics opened the gallery with (3.6.0), shown as one chip.
+        val detail: GalleryDetailFilter? = null,
     ) {
         /** A search looks through the whole indexed gallery instead of the open folder. */
-        val isSearch: Boolean get() = name.isNotBlank() || prompt.isNotBlank() || models.isNotEmpty() || loras.isNotEmpty()
+        val isSearch: Boolean
+            get() = name.isNotBlank() || prompt.isNotBlank() || models.isNotEmpty() || loras.isNotEmpty() || detail != null
     }
 
     private val _galleryFilters = MutableStateFlow(GalleryFilters())
@@ -354,7 +357,8 @@ object ForgeGalleryManager {
                 val hits =
                     if (filters.isSearch) {
                         val promptHits = filters.prompt.trim().takeIf { it.isNotEmpty() }?.let { promptMatches(it) }
-                        inGallery.filter { matches(it, filters, promptHits) }
+                        val detailHits = filters.detail?.let { detailMatches(it) }
+                        inGallery.filter { matches(it, filters, promptHits) && (detailHits == null || it.fullpath in detailHits) }
                     } else {
                         null
                     }
@@ -410,6 +414,36 @@ object ForgeGalleryManager {
     /** All Images the newest first, or shuffled; Random chosen again shuffles anew. */
     fun setAllImagesRandom(random: Boolean) {
         _allImagesOrder.value = if (random) AllImagesOrder(true, System.nanoTime()) else AllImagesOrder()
+    }
+
+    /** Paths of the images made with the setting [filter] (3.6.0), found by the database. */
+    private suspend fun detailMatches(filter: GalleryDetailFilter): Set<String> {
+        val dao = getDb().galleryImageDao()
+        return try {
+            when (filter.kind) {
+                GalleryDetailFilter.Kind.SIZE -> {
+                    val (w, h) = filter.value.split('x').map { it.trim().toIntOrNull() ?: -1 } + listOf(-1, -1)
+                    dao.findPathsBySize(w, h)
+                }
+                GalleryDetailFilter.Kind.SAMPLER -> dao.findPathsBySampler(filter.value, filter.extra)
+                GalleryDetailFilter.Kind.MODULES -> dao.findPathsByModules(filter.value)
+                GalleryDetailFilter.Kind.HIRES -> dao.findPathsWithHires()
+                GalleryDetailFilter.Kind.EMBEDDING -> {
+                    val escaped =
+                        filter.value
+                            .replace("\\", "\\\\")
+                            .replace("%", "\\%")
+                            .replace("_", "\\_")
+                    dao.findPathsByEmbedding("%,$escaped,%")
+                }
+                GalleryDetailFilter.Kind.STEPS -> dao.findPathsBySteps(filter.value.toIntOrNull() ?: -1)
+                GalleryDetailFilter.Kind.CFG -> dao.findPathsByCfg(filter.value.toFloatOrNull() ?: -1f)
+            }.toHashSet()
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.e(TAG, "Detail search failed", e)
+            emptySet()
+        }
     }
 
     /** Paths of the images whose prompts contain [text] (ignoring case), found by the database. */
@@ -1986,17 +2020,28 @@ object ForgeGalleryManager {
             val root = galleryRoot()?.let { norm(it) }
             val images = indexedImages.value.filter { root == null || isUnderNormalized(it.fullpath, root) }
             val inGallery = images.mapTo(HashSet()) { it.fullpath }
-            val tags = HashMap<String, Int>()
+            // 3.6.0: the details and the favorites too, a page at a time (the prompts are most of the index's size).
+            val insights = GalleryInsights(favoritePaths.value)
             val dao = getDb().galleryImageDao()
             var offset = 0
             while (true) {
                 ensureActive()
-                val page = dao.getPrompts(PROMPT_PAGE, offset)
-                page.forEach { if (it.fullpath in inGallery) GalleryStatistics.countTags(it.positivePrompt, tags) }
+                val page = dao.getStatsRows(PROMPT_PAGE, offset)
+                page.forEach { if (it.fullpath in inGallery) insights.add(it) }
                 if (page.size < PROMPT_PAGE) break
                 offset += PROMPT_PAGE
             }
-            GalleryStatistics.compute(images, LocalDate.now(), tags)
+            offset = 0
+            while (true) {
+                ensureActive()
+                val page = dao.getPromptPairs(PROMPT_PAGE, offset)
+                page.forEach { if (it.fullpath in inGallery) insights.addPrompts(it.fullpath, it.positivePrompt, it.negativePrompt) }
+                if (page.size < PROMPT_PAGE) break
+                offset += PROMPT_PAGE
+            }
+            GalleryStatistics
+                .compute(images, LocalDate.now(), insights.tagCounts())
+                .copy(details = insights.details(), liked = insights.liked())
         }
 
     // --- METADATA ---

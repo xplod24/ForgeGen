@@ -700,6 +700,14 @@ fun SetupScreen(
                 "Says when jobs from the web UI or another app go first",
                 config.serverQueue,
             ) { config.copy(serverQueue = it) }
+            feature(
+                "Server",
+                "generation history statistics model loading swap cold start speed vram job times",
+                "Generation History",
+                "Times each job's model loading, sampling and VRAM for the statistics and the queue. Off: nothing is " +
+                    "recorded and the VRAM is not read while a model loads",
+                config.generationHistory,
+            ) { config.copy(generationHistory = it) }
 
             // --- NOTIFICATIONS ---
             add(SettingsPage.NOTIFICATIONS, "Alerts", "notify on batch finish notification completed alert") {

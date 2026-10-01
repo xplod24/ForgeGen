@@ -449,12 +449,6 @@ data class GalleryImageSize(
     val size: Long,
 )
 
-/** An image's positive prompt, read page by page for the statistics' tags. */
-data class GalleryImagePrompt(
-    val fullpath: String,
-    val positivePrompt: String,
-)
-
 @Dao
 interface GalleryImageDao {
     @Query("SELECT * FROM gallery_images WHERE fullpath = :path LIMIT 1")
@@ -487,13 +481,6 @@ interface GalleryImageDao {
         newPath: String,
     )
 
-    /** The positive prompts, [limit] at a time (the statistics count the tags without loading them all at once). */
-    @Query("SELECT fullpath, positivePrompt FROM gallery_images ORDER BY fullpath LIMIT :limit OFFSET :offset")
-    suspend fun getPrompts(
-        limit: Int,
-        offset: Int,
-    ): List<GalleryImagePrompt>
-
     @Query("SELECT fullpath FROM gallery_images")
     suspend fun getAllPaths(): List<String>
 
@@ -522,7 +509,83 @@ interface GalleryImageDao {
 
     @Update(entity = GalleryImageEntity::class)
     suspend fun updateDetails(details: List<GalleryImageDetails>)
+
+    /** The statistics' rows without the prompts (3.6.0), [limit] at a time. */
+    @Query(
+        "SELECT fullpath, date, model, sampler, loras, size, width, height, steps, cfg, distilledCfg, scheduler, hiresScale, " +
+            "hiresUpscaler, hiresSteps, denoising, modules, embeddings, details FROM gallery_images ORDER BY fullpath LIMIT :limit OFFSET :offset",
+    )
+    suspend fun getStatsRows(
+        limit: Int,
+        offset: Int,
+    ): List<GalleryStatsRow>
+
+    /** Both prompts, [limit] at a time (3.6.0: the negative tags and the favorites' tags). */
+    @Query("SELECT fullpath, positivePrompt, negativePrompt FROM gallery_images ORDER BY fullpath LIMIT :limit OFFSET :offset")
+    suspend fun getPromptPairs(
+        limit: Int,
+        offset: Int,
+    ): List<GalleryPromptPair>
+
+    // The images of a setting the statistics show (3.6.0, GalleryDetailFilter).
+    @Query("SELECT fullpath FROM gallery_images WHERE width = :width AND height = :height")
+    suspend fun findPathsBySize(
+        width: Int,
+        height: Int,
+    ): List<String>
+
+    // An empty scheduler is the row of the images whose infotext names none, as the statistics count them.
+    @Query("SELECT fullpath FROM gallery_images WHERE details > 0 AND sampler = :sampler AND IFNULL(TRIM(scheduler), '') = :scheduler")
+    suspend fun findPathsBySampler(
+        sampler: String,
+        scheduler: String,
+    ): List<String>
+
+    @Query("SELECT fullpath FROM gallery_images WHERE details > 0 AND ((:modules = '' AND modules IS NULL) OR modules = :modules)")
+    suspend fun findPathsByModules(modules: String): List<String>
+
+    @Query("SELECT fullpath FROM gallery_images WHERE hiresScale IS NOT NULL")
+    suspend fun findPathsWithHires(): List<String>
+
+    @Query("SELECT fullpath FROM gallery_images WHERE (',' || embeddings || ',') LIKE :pattern ESCAPE '\\'")
+    suspend fun findPathsByEmbedding(pattern: String): List<String>
+
+    @Query("SELECT fullpath FROM gallery_images WHERE steps = :steps")
+    suspend fun findPathsBySteps(steps: Int): List<String>
+
+    @Query("SELECT fullpath FROM gallery_images WHERE cfg = :cfg")
+    suspend fun findPathsByCfg(cfg: Float): List<String>
 }
+
+/** One image's numbers for the statistics (3.6.0): everything but the prompts. */
+data class GalleryStatsRow(
+    val fullpath: String,
+    val date: String,
+    val model: String,
+    val sampler: String,
+    val loras: String,
+    val size: Long,
+    val width: Int?,
+    val height: Int?,
+    val steps: Int?,
+    val cfg: Float?,
+    val distilledCfg: Float?,
+    val scheduler: String?,
+    val hiresScale: Float?,
+    val hiresUpscaler: String?,
+    val hiresSteps: Int?,
+    val denoising: Float?,
+    val modules: String?,
+    val embeddings: String?,
+    val details: Int,
+)
+
+/** An image's two prompts (3.6.0). */
+data class GalleryPromptPair(
+    val fullpath: String,
+    val positivePrompt: String,
+    val negativePrompt: String,
+)
 
 /** A gallery image of the index as the app keeps it in memory: without its prompts. */
 data class IndexedImage(

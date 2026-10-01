@@ -508,6 +508,29 @@ class ForgeViewModel(
 
     suspend fun galleryStatistics(): GalleryStats = ForgeGalleryManager.statistics()
 
+    // --- STATISTICS (3.6.0) ---
+
+    /** Images whose details are still being read (the Gallery tab of the statistics shows it while not 0). */
+    val galleryDetailsBacklog: StateFlow<Int> = ForgeGalleryManager.detailsBacklog
+
+    /** Goes up with every job recorded, so the Generation tab reads the history again. */
+    val jobsRecorded: StateFlow<Int> = JobRecorder.recorded
+
+    suspend fun generationStatistics(): GenerationStats =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            GenerationStatistics.compute(ForgeRepository.db.jobRunDao().getAllWithoutCurves())
+        }
+
+    /** One recorded job with its VRAM readings (the job's details). */
+    suspend fun jobRun(id: String): JobRunEntity? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ForgeRepository.db.jobRunDao().get(id) }
+
+    /** The gallery's All Images with the images of a statistics row (3.6.0). */
+    fun openGalleryFrom(target: StatTarget) {
+        ForgeGalleryManager.applyFilters(StatTarget.filters(target, ForgeGalleryManager.galleryFilters.value))
+        ForgeGalleryManager.selectTab(GalleryTab.ALL_IMAGES)
+    }
+
     fun galleryBreadcrumb(path: String): List<Pair<String, String>> = ForgeGalleryManager.breadcrumb(path)
 
     fun galleryParentFolder(path: String): String? = ForgeGalleryManager.parentFolder(path)

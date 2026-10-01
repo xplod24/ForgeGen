@@ -408,6 +408,10 @@ fun GalleryScreen(
                     ) { page ->
                         val pageTab = GalleryTab.entries[page]
                         Column(modifier = Modifier.fillMaxSize()) {
+                            // A setting opened from the statistics (3.6.0): one chip, its cross clears it.
+                            galleryFilters.detail?.let { detail ->
+                                DetailFilterChip(detail.label) { viewModel.applyGalleryFilters(galleryFilters.copy(detail = null)) }
+                            }
                             if (pageTab == GalleryTab.GALLERY) {
                                 val crumbs = remember(folder.path, config.galleryPath) { viewModel.galleryBreadcrumb(folder.path) }
                                 PathBar(
@@ -675,6 +679,23 @@ private fun ScrollToTopOnNewFilters(
             shown = filters
             state.scrollToItem(0)
         }
+    }
+}
+
+/** The setting the statistics opened the gallery with (3.6.0), with a cross that clears it. */
+@Composable
+private fun DetailFilterChip(
+    label: String,
+    onClear: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp)) {
+        InputChip(
+            selected = true,
+            onClick = onClear,
+            label = { Text(label, maxLines = 1) },
+            trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp)) },
+        )
+        Text("  from Statistics", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

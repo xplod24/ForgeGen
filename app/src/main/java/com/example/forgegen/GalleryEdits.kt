@@ -129,6 +129,10 @@ data class GalleryStats(
     val topModels: List<Pair<String, Int>>,
     val topLoras: List<Pair<String, Int>>,
     val topTags: List<Pair<String, Int>>,
+    // 3.6.0: images per month ("yyyy-MM") from the first image's month to this one, the details and What You Like.
+    val perMonth: List<Pair<String, Int>> = emptyList(),
+    val details: GalleryDetailStats = GalleryDetailStats(),
+    val liked: LikedStats? = null,
 ) {
     val busiestDay: Int get() = perDay.maxOrNull() ?: 0
 
@@ -163,8 +167,10 @@ object GalleryStatistics {
         var unknownSizes = 0
         val models = HashMap<String, Int>()
         val loras = HashMap<String, Int>()
+        val months = HashMap<String, Int>()
         for (image in images) {
             if (image.date.startsWith(month)) thisMonth++
+            dayOf(image.date)?.let { months.merge(image.date.take(7), 1, Int::plus) }
             dayOf(image.date)?.let { day ->
                 val index = ChronoUnit.DAYS.between(first, day)
                 if (index in 0 until span) perDay[index.toInt()]++
@@ -191,7 +197,27 @@ object GalleryStatistics {
             topModels = top(models, TOP),
             topLoras = top(loras, TOP),
             topTags = top(tagCounts, TOP_TAGS),
+            perMonth = monthsUpTo(months, today),
         )
+    }
+
+    /** [counts] for every month from the first one with images to [today]'s (none for an empty gallery). */
+    private fun monthsUpTo(
+        counts: Map<String, Int>,
+        today: LocalDate,
+    ): List<Pair<String, Int>> {
+        val first = counts.keys.minOrNull() ?: return emptyList()
+        val start = runCatching { java.time.YearMonth.parse(first) }.getOrNull() ?: return emptyList()
+        val end = java.time.YearMonth.from(today)
+        if (start.isAfter(end)) return emptyList()
+        val result = ArrayList<Pair<String, Int>>()
+        var m = start
+        while (!m.isAfter(end)) {
+            val key = m.toString()
+            result += key to (counts[key] ?: 0)
+            m = m.plusMonths(1)
+        }
+        return result
     }
 
     /**
