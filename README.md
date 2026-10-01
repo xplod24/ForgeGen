@@ -85,7 +85,7 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   queue should be done. Drag to reorder, Duplicate, Edit, Remove, Undo and **Skip Image**.
 - **Start at** a chosen time of day.
 - **Overnight Batch Mode:** a failed job is set aside with its reason (Retry is one tap) and the queue goes on. A lost
-  connection is retried.
+  connection is retried; a server busy loading a checkpoint shows "Loading model …", not a lost connection.
 - **Other jobs on the server:** the queue shows how many jobs from Forge's web UI (or another app) run before yours.
 - Notifications for finished batches and queues, a vibration, a Quick Settings tile, launcher shortcuts (Generate
   Again, Queue, Gallery) and the progress as a **Live Update** on Android 16 or newer: a chip in the status bar, the
@@ -123,8 +123,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   queue; the image cache size (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log; and a choice of
   what to wipe.
 - **Updates from GitHub:** the app looks for a new release every 6 hours on Wi-Fi, checks the download's SHA-256 and
-  installs it in the background where Android allows it, never while the queue works or while you use the app. After
-  an update a "What's New" bar offers the release notes.
+  installs it in the background where Android allows it, never while the queue works or while you use the app. In
+  Settings > Updates a new version has its own section, with its notes and its download's progress. After an update
+  a "What's New" bar offers the release notes.
 - Light, dark or system theme.
 - The license, its full text and a link to the source code in Settings > Updates > License.
 

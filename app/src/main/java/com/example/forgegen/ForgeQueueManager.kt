@@ -367,6 +367,15 @@ object ForgeQueueManager {
         if (image != null) setLivePreviewImage(image)
     }
 
+    // The checkpoint of the last job the server finished: a job with another one makes Forge load it first (3.5.3).
+    @Volatile private var lastJobModel: String? = null
+
+    /** What the queue says while the server is too busy to answer a ping (SlowServer, 3.5.3). */
+    fun slowServerText(): String {
+        val job = _generationQueue.value.firstOrNull { it.status == GenerationStatus.GENERATING }
+        return SlowServer.statusText(_isGenerating.value, job?.payload?.override_settings?.sdModelCheckpoint, lastJobModel)
+    }
+
     fun updateStatusText(text: String) {
         _statusText.value = text
     }
@@ -714,6 +723,7 @@ object ForgeQueueManager {
                     }
 
                     succeeded = true
+                    lastJobModel = job.payload.override_settings.sdModelCheckpoint
                     _batchFinished.tryEmit(Unit)
                     learnSpeed(job, (System.currentTimeMillis() - startedAt) / 1000.0)
                 }

@@ -7,6 +7,7 @@ import com.example.forgegen.ui.components.LicenseDialog
 import com.example.forgegen.ui.components.MarkdownText
 import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
 import com.example.forgegen.ui.components.RestartForgeDialog
+import com.example.forgegen.ui.components.UpdateCard
 import com.example.forgegen.ui.components.UpdateMoveCard
 import com.example.forgegen.ui.components.WhatsNewDialog
 import android.content.Context
@@ -196,6 +197,9 @@ private fun SettingItem.matches(query: String): Boolean {
     val text = words.lowercase()
     return query.lowercase().split(' ').filter { it.isNotBlank() }.all { it in text }
 }
+
+// Settings > Updates: the section of the release on offer, below the app's own version and settings.
+private const val NEW_VERSION = "New Version"
 
 private val CONNECTED_GREEN = Color(0xFF4CAF50)
 private val SEARCHING_AMBER = Color(0xFFFFB300)
@@ -899,50 +903,54 @@ fun SetupScreen(
             }
 
             // --- UPDATES ---
-            val download = updateDownload
-            if (download != null) {
-                // "Install Update" was tapped: it downloads in the background (UpdateDownloadService), also with the
-                // app closed or the screen locked; the notification (and a Live Update) shows the same.
-                add(SettingsPage.UPDATES, null, "update downloading progress ${download.versionName}") {
-                    Column(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                                .clip(MaterialTheme.shapes.small)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
-                                .padding(16.dp),
-                    ) {
-                        Text("Downloading ${download.versionName}", fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        Spacer(Modifier.height(10.dp))
-                        if (download.total <= 0) {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        } else {
-                            LinearProgressIndicator(progress = { download.fraction }, modifier = Modifier.fillMaxWidth())
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        val detail =
-                            when {
-                                download.total > 0 ->
-                                    "${(download.fraction * 100).toInt()}% · " +
-                                        "${"%.1f".format(java.util.Locale.US, download.done / 1048576.0)} / " +
-                                        "${"%.1f".format(java.util.Locale.US, download.total / 1048576.0)} MB"
-                                else -> "Starting the download..."
-                            }
-                        Text(detail, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                        Text(
-                            "It goes on in the background: you can leave the app or lock the screen.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                        )
+            add(SettingsPage.UPDATES, null, "app version build number") {
+                TextPreference(
+                    title = "App Version",
+                    subtitle = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
+                    trailing = null,
+                ) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    versionTaps = if (now - lastVersionTap <= DebugMode.TAP_WINDOW_MS) versionTaps + 1 else 1
+                    lastVersionTap = now
+                    if (versionTaps >= DebugMode.TAPS_TO_UNLOCK) {
+                        versionTaps = 0
+                        if (debugUnlocked) viewModel.showToast("Debug mode is already on") else showDebugPasswordDialog = true
                     }
                 }
             }
+            add(SettingsPage.UPDATES, null, "license gpl gnu free software source code copyright author") {
+                TextPreference(
+                    title = "License",
+                    subtitle = "${AppLicense.NAME} · © 2026 ${AppLicense.AUTHOR}",
+                ) { showLicenseDialog = true }
+            }
+            add(SettingsPage.UPDATES, null, "install updates automatically background wi-fi") {
+                SwitchPreference(
+                    title = "Install Updates Automatically",
+                    subtitle =
+                        "Looks for new releases every 6 hours on Wi-Fi and installs them in the background " +
+                            "(never while the queue works); off: only a notification",
+                    checked = config.autoInstallUpdates,
+                    onCheckedChange = { viewModel.saveConfig(config.copy(autoInstallUpdates = it)) },
+                )
+            }
+            add(SettingsPage.UPDATES, null, "check for updates github release") {
+                TextPreference(
+                    title = "Check for Updates",
+                    subtitle = "Look for a newer release on GitHub",
+                    trailing = { Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                ) {
+                    dismissedUpdateVersion = -1
+                    viewModel.checkForUpdates(manual = true)
+                }
+            }
+            // The release on offer, its download and its install: a section of their own below (2026-10-01).
+            val download = updateDownload
             val installing = installingUpdate
             if (installing != null) {
                 // "Install" was tapped: the app went to the background and Android replaces it. No button here, so it
                 // cannot be started twice (3.0.0-3).
-                add(SettingsPage.UPDATES, null, "update installing $installing") {
+                add(SettingsPage.UPDATES, NEW_VERSION, "update installing $installing") {
                     Column(
                         modifier =
                             Modifier
@@ -984,7 +992,7 @@ fun SetupScreen(
             val manifest = updateManifest
             if (download == null && installing == null && manifest != null && movesTo != null) {
                 // Another app (3.5.2-1): no "Install", no "Dismiss"; the steps move the data to it.
-                add(SettingsPage.UPDATES, null, "update new app move data export import uninstall ${manifest.versionName}") {
+                add(SettingsPage.UPDATES, NEW_VERSION, "update new app move data export import uninstall ${manifest.versionName}") {
                     UpdateMoveCard(
                         versionName = manifest.versionName,
                         newPackage = movesTo,
@@ -1015,108 +1023,23 @@ fun SetupScreen(
                     )
                 }
             }
-            val offerUpdate = download == null && installing == null && manifest != null && movesTo == null
-            if (offerUpdate && manifest != null && manifest.versionCode != dismissedUpdateVersion) {
+            // Also while it downloads: the notes stay and the progress slides out below them (UpdateCard).
+            val offerUpdate = installing == null && manifest != null && movesTo == null
+            if (offerUpdate && manifest != null && (manifest.versionCode != dismissedUpdateVersion || download != null)) {
                 val ready = readyUpdate?.takeIf { it.versionCode == manifest.versionCode }
-                add(SettingsPage.UPDATES, null, "update available download install new version ${manifest.versionName}") {
-                    Column(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                                .clip(MaterialTheme.shapes.small)
-                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f))
-                                .padding(16.dp),
-                    ) {
-                        Text(
-                            if (ready != null) "Update Ready: ${manifest.versionName}" else "Update Available: ${manifest.versionName}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                        )
-                        if (ready != null) {
-                            Text(
-                                "Downloaded and checked · ${"%.1f".format(java.util.Locale.US, ready.size / 1048576.0)} MB",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                        val notes = manifest.changelog ?: emptyList()
-                        val noteCount = releaseNoteCount(notes)
-                        if (notes.isNotEmpty()) {
-                            Text("What's new:", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Spacer(Modifier.height(4.dp))
-                            // Drawn from Markdown like the What's New notes (3.0.0-2: the ** of bold text showed), with
-                            // the release's kind and its New / Changed / Fixed headings (3.0.0-4).
-                            MarkdownText(
-                                markdown = releaseNotesMarkdown(notes, maxItems = 3),
-                                textStyle = MaterialTheme.typography.bodySmall,
-                            )
-                            if (noteCount > 3) {
-                                TextButton(onClick = { showAllReleaseNotes = true }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                                    Text("Show All ($noteCount)")
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { dismissedUpdateVersion = manifest.versionCode }) {
-                                Text("Dismiss")
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            // Two steps (3.0.0-3): "Download" runs in UpdateDownloadService with its progress here, in the
-                            // notifications and a Live Update, and the app stays open; once the file matches the release,
-                            // "Install" sends the app to the background and Android replaces it.
-                            if (ready != null) {
-                                Button(onClick = {
-                                    if (queueActive || generating) confirmInstallDuringQueue = true else installNow()
-                                }) { Text("Install") }
-                            } else {
-                                Button(onClick = { viewModel.downloadUpdate() }) { Text("Download") }
-                            }
-                        }
-                    }
-                }
-            }
-            add(SettingsPage.UPDATES, null, "app version build number") {
-                TextPreference(
-                    title = "App Version",
-                    subtitle = "${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
-                    trailing = null,
-                ) {
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    versionTaps = if (now - lastVersionTap <= DebugMode.TAP_WINDOW_MS) versionTaps + 1 else 1
-                    lastVersionTap = now
-                    if (versionTaps >= DebugMode.TAPS_TO_UNLOCK) {
-                        versionTaps = 0
-                        if (debugUnlocked) viewModel.showToast("Debug mode is already on") else showDebugPasswordDialog = true
-                    }
-                }
-            }
-            add(SettingsPage.UPDATES, null, "license gpl gnu free software source code copyright author") {
-                TextPreference(
-                    title = "License",
-                    subtitle = "${AppLicense.NAME} · © 2026 ${AppLicense.AUTHOR}",
-                ) { showLicenseDialog = true }
-            }
-            add(SettingsPage.UPDATES, null, "install updates automatically background wi-fi") {
-                SwitchPreference(
-                    title = "Install Updates Automatically",
-                    subtitle =
-                        "Looks for new releases every 6 hours on Wi-Fi and installs them in the background " +
-                            "(never while the queue works); off: only a notification",
-                    checked = config.autoInstallUpdates,
-                    onCheckedChange = { viewModel.saveConfig(config.copy(autoInstallUpdates = it)) },
-                )
-            }
-            add(SettingsPage.UPDATES, null, "check for updates github release") {
-                TextPreference(
-                    title = "Check for Updates",
-                    subtitle = "Look for a newer release on GitHub",
-                    trailing = { Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                ) {
-                    dismissedUpdateVersion = -1
-                    viewModel.checkForUpdates(manual = true)
+                add(SettingsPage.UPDATES, NEW_VERSION, "update available download install new version ${manifest.versionName}") {
+                    // Two steps (3.0.0-3): "Download" runs in UpdateDownloadService with its progress here, in the
+                    // notifications and a Live Update, and the app stays open; once the file matches the release,
+                    // "Install" sends the app to the background and Android replaces it.
+                    UpdateCard(
+                        manifest = manifest,
+                        ready = ready,
+                        download = download,
+                        onDismiss = { dismissedUpdateVersion = manifest.versionCode },
+                        onDownload = { viewModel.downloadUpdate() },
+                        onInstall = { if (queueActive || generating) confirmInstallDuringQueue = true else installNow() },
+                        onShowAll = { showAllReleaseNotes = true },
+                    )
                 }
             }
 

@@ -342,6 +342,23 @@ object ForgeRepository {
 
     @Volatile internal var searchPingMs = 2_000L
 
+    // Since when the server, still connected, has been too busy to answer a ping (SlowServer, 3.5.3); 0 while it answers.
+    @Volatile private var slowSince = 0L
+
+    /**
+     * A ping that timed out on a server too busy to answer (SlowServer, 3.5.3: Forge loading a checkpoint): the app stays
+     * connected, the server counts as busy and the queue says what it waits for. False when it is a lost connection.
+     */
+    private fun serverTooBusy(e: Exception): Boolean {
+        if (_connection.value != ServerConnection.CONNECTED || !SlowServer.isSlowAnswer(e)) return false
+        val now = System.currentTimeMillis()
+        if (slowSince == 0L) slowSince = now
+        if (now - slowSince > SlowServer.maxSlowMs || !SlowServer.stillListening(config.value.apiUrl)) return false
+        _isServerBusy.value = true
+        ForgeQueueManager.updateStatusText(ForgeQueueManager.slowServerText())
+        return true
+    }
+
     // Ends a wait between pings early (back on screen, another try asked for).
     private val wakePing = Channel<Unit>(Channel.CONFLATED)
 
@@ -549,6 +566,7 @@ object ForgeRepository {
     private fun queueNeedsServer() = ForgeQueueManager.isQueueActive.value && !ForgeQueueManager.isWaitingForSchedule.value
 
     private fun connectionFailed(failCount: Int) {
+        slowSince = 0L
         _isConnected.value = false
         _isServerBusy.value = false
         _serverMemory.value = null
@@ -612,6 +630,7 @@ object ForgeRepository {
                         val response = forgeApi?.getProgress(skipImage = !previewWanted())
 
                         if (response?.isSuccessful == true) {
+                            slowSince = 0L
                             _pingMs.value = System.currentTimeMillis() - start
                             _isConnected.value = true
                             _connection.value = ServerConnection.CONNECTED
@@ -673,7 +692,7 @@ object ForgeRepository {
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
-                    connectionFailed(++failCount)
+                    if (!serverTooBusy(e)) connectionFailed(++failCount)
                 }
                 pingRounds.update { it + 1 }
                 followRestart(_isConnected.value)

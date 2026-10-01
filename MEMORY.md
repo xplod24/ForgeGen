@@ -54,6 +54,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `releaseNotesMarkdown(notes, maxItems = 3)` -> `MarkdownText(textStyle = bodySmall)` (no heading left without an
   item), "Show All (releaseNoteCount)" -> `WhatsNewDialog(title = "What's New in <version>")`. Any text shown from the
   changelog goes through MarkdownText.
+  Since 3.5.3 (owner's design, previewed 2026-10-01 from Robolectric frames) the card is `UpdateCard` and sits in its
+  own section "New Version" (`NEW_VERSION`) below App Version / License / Install Updates Automatically / Check for
+  Updates, with the move card (3.5.2-1) and the "Installing" card. It stays while the update downloads: the notes stay,
+  the Dismiss/Download row folds away and `DownloadProgress` slides out below them (expandVertically from the top +
+  fade, 320 ms, the bar animated); once ready it folds back, "Update Ready" + "Downloaded and checked" and "Install"
+  come out. The separate "Downloading" card is gone (it replaced the notes in one frame).
 - **App lock:** state lives in `ForgeViewModel.isLocked` (on = `useNativeSecurity` and not unlocked since the activity last stopped; rotation does not lock). `MainActivity` draws the lock as a `Dialog` over the app and must never replace the UI tree (that recreated the NavController and restarted the app from "welcome"). Prompts go through `AppLock.authenticate` (phone PIN/pattern/password, plus BIOMETRIC_STRONG if allowed); a failure or cancel only closes the prompt. Changing the lock switches and wiping data require that check; without a phone lock the app unlocks instead of locking the user out. It hides the UI only, the data is not encrypted.
 - **Gallery:** `ForgeGalleryManager` browses the server through Infinite Image Browsing (IIB). The grid uses IIB thumbnails (`image-thumbnail`, 512 px); image URLs must always carry `t` (IIB answers 422 without it). The local index (`gallery_images`) covers the gallery root (`galleryPath`) and is filled with generation data IIB reads on the PC (`image_geninfo_batch`, 100 per request; fallback `image_geninfo`, then the start of the PNG). Do not call IIB's `db/update_image_data`: it blocks the whole Forge server while it runs. Search and filters work on the index (whole gallery), folder browsing on the live listing. Infotext is parsed only by `Infotext.parse`. Saving to the phone goes through `DeviceImages` (Pictures/ForgeGen, name `<folder>_<file>`, duplicates detected by name); sharing uses temporary copies in `cache/shared` via the FileProvider. "Save to Phone Automatically": off / favorites / all new images (newer than `autoSaveSince`, Wi-Fi only). Pins were merged into favorites in 1.1.0.
 - **Gallery key (3.5.0, owner's request: no key in the code):** IIB locked with `IIB_SECRET_KEY` (its `.env` or the
@@ -331,6 +337,17 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **ForgeRepository** only owns the database, the Retrofit client, the ping loop (connection, RAM/VRAM, external jobs) and the service toggle. Queue, gallery, models and prompts live in their managers; don't add delegating copies back.
 - **Prompt tag helpers** (`parseTags`, `splitTagWeight`, `withTagWeight`, `adjustTagStrength`) live in the Compose-free `ui/components/PromptTags.kt` (tested by `PromptTagsTest`). LoRA tags are parsed only by `parseActiveLoras` in `ForgeRepository.kt`.
 - **Notification modes:** the strings in `GenerationService` must match the options in `SetupScreen` ("Simple", "Verbose", "Disabled").
+- **Slow server (3.5.3, owner's report 2026-10-01):** Forge loads a job's checkpoint inside the job's own txt2img
+  (`process_images` -> `forge_model_reload`; `POST /sdapi/v1/options` only records it) and holds Python's GIL for
+  long stretches, so `/sdapi/v1/progress` timed out (the user's Connection Timeout, 10 s) and one failed ping showed
+  "Connecting…" + "Connection lost, waiting for the server..." until the model was in. `SlowServer`: a ping whose
+  answer timed out on a made connection (`isSlowAnswer`: SocketTimeoutException without "connect") while CONNECTED,
+  with the server's port still taking a TCP connection (`stillListening`, 3 s; the server's system accepts it however
+  busy Forge is), is a busy server: `ForgeRepository.serverTooBusy` keeps CONNECTED, sets `isServerBusy` and the
+  status `ForgeQueueManager.slowServerText()` ("Loading model <key>…" when the running job's checkpoint is not the one
+  of the last finished job, `lastJobModel`; else "The server is busy…"). A refused/unreachable port or more than
+  `maxSlowMs` (5 min) busy still goes to `connectionFailed`. Reproduced and covered by harness G48 (stall, control,
+  over the limit); `SlowServerTest`.
 - **Start and connection (2.0.0, owner's design):** no welcome screen. The Android 12+ splash (`Theme.ForgeGen.Starting`,
   `drawable/splash_anvil_animated.xml` over `splash_anvil.xml`) stays at least `SPLASH_MIN_MS` (1.3 s) and until `viewModel.isStarted` (= `ForgeSettingsManager.isInitialized`: the phone's part of the start)
   and the main screen's first frame, at most `SPLASH_MAX_MS` (then `StartupScreen` shows `initStatus`). It leaves by
@@ -499,7 +516,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   and TypeToken subclasses. The owner confirmed 3.4.1 works without faults; the rules for new code are "R8 rules" in
   section 1. Don't switch to the release build type or a new key without the owner.
 - **Live Updates beyond Samsung (3.5.0):** not seen on a non-Samsung phone yet (no emulator here); the checklist's
-  "Shown as a Live Update" line tells. The owner confirmed the Samsung Now Bar at 2.0.3.
+  "Shown as a Live Update" line tells. The owner confirmed the Samsung Now Bar at 2.0.3 and the Live Update on a
+  Samsung with the newest Android (16) at 3.5.x (2026-10-01).
 - `app/release/` build outputs and `ktlint.jar` (80 MB) are tracked in git on purpose (owner's choice for this hobby repo); don't untrack them without asking.
 
 ## 5. Ideas Backlog (numbered by the owner; not started until the owner says so)

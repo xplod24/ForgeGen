@@ -1,3 +1,12 @@
+## 3.5.3
+**Bugfix** · loading another checkpoint no longer looks like a lost connection, and an update downloads below its notes
+
+### Changed
+- **Settings > Updates:** a new version has its own section, "New Version", below the app's version and the update settings. "Download" no longer replaces the release notes: they stay, and the download's progress slides out below them; once the file is checked it folds away and "Install" comes out.
+
+### Fixed
+- **No false "Connection lost" when the checkpoint changes:** Forge loads a new checkpoint at the start of the next job and answers nothing else meanwhile, so the app showed "Connecting…" and "Connection lost" until the model was in. Now, as long as the server still takes connections, the queue says "Loading model …" and the app stays connected; a server that is really gone (or busy for more than 5 minutes) still counts as lost.
+
 ## 3.5.2-2
 **Polish** · "debug" is gone from the app's package name too, so this version is a new app next to the old one
 
