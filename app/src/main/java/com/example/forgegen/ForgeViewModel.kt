@@ -579,6 +579,12 @@ class ForgeViewModel(
 
     fun dismissGrouping() = ForgeQueueManager.dismissGrouping()
 
+    /** Unload After the Queue (3.6.0); switched off, an alarm already set is taken back. */
+    fun setUnloadAfterQueue(choice: Int) {
+        saveConfig(config.value.copy(unloadAfterQueue = choice))
+        if (choice == AutoUnload.OFF) AutoUnload.cancel(getApplication<Application>())
+    }
+
     /** What a cold start of [model] adds, from the job history (Unload After the Queue says it); null while not known. */
     fun coldStartMs(model: String): Long? = ForgeQueueManager.coldStartMs(model)
 

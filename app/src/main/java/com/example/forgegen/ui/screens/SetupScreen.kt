@@ -674,7 +674,7 @@ fun SetupScreen(
             add(SettingsPage.SERVER, "Control", "unload after the queue vram free model at once minutes") {
                 UnloadAfterQueueChoice(
                     choice = config.unloadAfterQueue,
-                    onChoice = { viewModel.saveConfig(config.copy(unloadAfterQueue = it)) },
+                    onChoice = viewModel::setUnloadAfterQueue,
                     coldStart = null,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )

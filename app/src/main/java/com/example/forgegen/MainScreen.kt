@@ -396,7 +396,7 @@ fun MainScreen(
                 restarting = restartingSince > 0,
                 onRestart = { confirmRestart = true },
                 unloadAfter = config.unloadAfterQueue,
-                onUnloadAfter = { viewModel.saveConfig(config.copy(unloadAfterQueue = it)) },
+                onUnloadAfter = viewModel::setUnloadAfterQueue,
                 coldStart = viewModel.coldStartMs(selectedModel)?.let { QueueEstimate.formatAbout(it) },
             )
             // Whether Forge can be restarted from here (/sdapi/v1/cmd-flags), read once per server; the memory now, as

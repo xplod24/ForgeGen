@@ -106,6 +106,8 @@ object AutoUnload {
     /** Unloads the server's model when nothing needs it; true when it did. */
     suspend fun unloadIfIdle(): Boolean {
         pendingAt = null
+        // Switched off after the alarm was set: the model stays.
+        if (ForgeRepository.config.value.unloadAfterQueue == OFF) return false
         val api = ForgeRepository.forgeApi ?: return false
         return withTimeoutOrNull(CHECK_TIMEOUT_MS) {
             try {
