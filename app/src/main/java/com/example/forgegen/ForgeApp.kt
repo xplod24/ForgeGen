@@ -17,6 +17,8 @@ class ForgeApp :
         super.onCreate()
         // New releases are looked for every 6 hours, also while the app is closed.
         SelfUpdate.scheduleChecks(this)
+        // The home screen widgets are drawn as RemoteViews (3.6.0).
+        ForgeWidgets.renderer = WidgetViews
     }
 
     override fun newImageLoader(): ImageLoader =

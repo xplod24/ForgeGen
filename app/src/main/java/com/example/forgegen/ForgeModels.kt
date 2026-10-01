@@ -667,6 +667,12 @@ data class JobRunEntity(
     val failureText: String?,
 )
 
+/** The images and GPU time of a stretch of the job history (JobRunDao.totalsSince). */
+data class JobTotals(
+    val images: Int,
+    val gpuMs: Long,
+)
+
 /** How one recorded job found its model (JobRunDao.getStartTimes). */
 data class JobStartTime(
     val model: String,
@@ -703,6 +709,13 @@ interface JobRunDao {
 
     @Query("SELECT * FROM job_runs ORDER BY startedAt DESC")
     suspend fun getAll(): List<JobRunEntity>
+
+    /** The images and GPU time of the jobs since [since] (the widgets' "today"); failed jobs give no images. */
+    @Query(
+        "SELECT COALESCE(SUM(CASE WHEN outcome = 'FAILED' THEN 0 ELSE images END), 0) AS images, " +
+            "COALESCE(SUM(totalMs), 0) AS gpuMs FROM job_runs WHERE startedAt >= :since",
+    )
+    suspend fun totalsSince(since: Long): JobTotals
 
     @Query("SELECT * FROM job_runs WHERE id = :id LIMIT 1")
     suspend fun get(id: String): JobRunEntity?

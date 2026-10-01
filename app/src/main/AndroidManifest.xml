@@ -114,6 +114,33 @@
             android:name=".AutoUnloadReceiver"
             android:exported="false" />
 
+        <!-- Home screen widgets (3.6.0): "Queue" (2x1) and "ForgeGen" (4x2), and the large one's Pause/Resume. -->
+        <receiver
+            android:name=".QueueWidget"
+            android:exported="false"
+            android:label="Queue">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_queue_info" />
+        </receiver>
+        <receiver
+            android:name=".ForgeGenWidget"
+            android:exported="false"
+            android:label="ForgeGen">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_forgegen_info" />
+        </receiver>
+        <receiver
+            android:name=".WidgetActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

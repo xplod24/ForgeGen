@@ -305,6 +305,7 @@ object ForgeQueueManager {
         loadScheduleAndSpeed()
         startChangeCostsWatcher()
         startAutoUnloadWatcher()
+        ForgeWidgets.start(application)
         startQueueWriter()
         startQueueWorker()
         startServiceWatcher()
