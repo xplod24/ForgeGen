@@ -567,6 +567,18 @@ class ForgeViewModel(
     val queueSecondsLeft: StateFlow<Long?> = ForgeQueueManager.queueSecondsLeft
     val queueJobEnds: StateFlow<List<Double?>> = ForgeQueueManager.queueJobEnds
 
+    /** The queue's timeline with the model changes it expects (3.6.0). */
+    val queueTimeline: StateFlow<QueueEstimate.Timeline> = ForgeQueueManager.queueTimeline
+
+    /** Group by Model, while it spares model changes and was not put off with "Not Now" (3.6.0). */
+    val groupingSuggestion: StateFlow<QueueGrouping.Plan?> = ForgeQueueManager.groupingSuggestion
+
+    fun groupQueueByModel(): List<String>? = ForgeQueueManager.groupByModel()
+
+    fun restoreQueueOrder(order: List<String>) = ForgeQueueManager.restoreQueueOrder(order)
+
+    fun dismissGrouping() = ForgeQueueManager.dismissGrouping()
+
     /** "Start at" [hour]:[minute]: today, or tomorrow when that time has passed. */
     fun scheduleQueueStart(
         hour: Int,

@@ -665,6 +665,15 @@ data class JobRunEntity(
     val failureText: String?,
 )
 
+/** How one recorded job found its model (JobRunDao.getStartTimes). */
+data class JobStartTime(
+    val model: String,
+    val previousModel: String?,
+    val startKind: String,
+    val firstHash: Boolean,
+    val firstStepMs: Long,
+)
+
 @Dao
 interface JobRunDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -682,6 +691,13 @@ interface JobRunDao {
             "failure, failureText FROM job_runs ORDER BY startedAt DESC",
     )
     suspend fun getAllWithoutCurves(): List<JobRunEntity>
+
+    /** How the newest [limit] jobs with a first step found their model, and how soon it came (ModelChangeCosts). */
+    @Query(
+        "SELECT model, previousModel, startKind, firstHash, firstStepMs FROM job_runs WHERE firstStepMs IS NOT NULL " +
+            "ORDER BY startedAt DESC LIMIT :limit",
+    )
+    suspend fun getStartTimes(limit: Int): List<JobStartTime>
 
     @Query("SELECT * FROM job_runs ORDER BY startedAt DESC")
     suspend fun getAll(): List<JobRunEntity>

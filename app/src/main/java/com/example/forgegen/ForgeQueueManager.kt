@@ -219,17 +219,56 @@ object ForgeQueueManager {
     // The job the user interrupted: its short run must not teach the estimate a wrong speed.
     @Volatile private var interruptedJobId: String? = null
 
+    // What a model change costs, from the job history (3.6.0; none while Generation History is off).
+    private val changeCosts = MutableStateFlow(ModelChangeCosts.none)
+
+    // The model in the current server's memory as far as the app knows (JobRecorder; unknown while the history is off).
+    private val loadedModel: Flow<LoadedModel> =
+        combine(JobRecorder.loadedState, ForgeSettingsManager.config, ::loadedOn).distinctUntilChanged()
+
+    private fun loadedOn(
+        state: Pair<String, LoadedModel>?,
+        config: AppConfig,
+    ): LoadedModel =
+        if (!config.generationHistory || state == null || state.first != GalleryKey.serverOf(config.apiUrl)) {
+            LoadedModel.unknown
+        } else {
+            state.second
+        }
+
+    /** The queue's timeline (QueueEstimate.timeline): when each job should be done and the model changes before them. */
+    val queueTimeline: StateFlow<QueueEstimate.Timeline> =
+        combine(_generationQueue, _currentEta, speedRates, loadedModel, changeCosts) { queue, eta, rates, loaded, costs ->
+            QueueEstimate.timeline(queue, rates, eta, loaded, costs)
+        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, QueueEstimate.Timeline())
+
     /** Seconds the queue still needs (QueueEstimate), or null before the first job has finished. */
     val queueSecondsLeft: StateFlow<Long?> =
-        combine(_generationQueue, _currentEta, speedRates) { queue, eta, rates ->
-            QueueEstimate.remaining(queue, rates, eta)?.toLong()
-        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, null)
+        queueTimeline
+            .map { it.remaining?.toLong() }
+            .stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, null)
 
     /** When each job of the queue should be done, in seconds from now (QueueEstimate.ends; the queue's timeline). */
     val queueJobEnds: StateFlow<List<Double?>> =
-        combine(_generationQueue, _currentEta, speedRates) { queue, eta, rates ->
-            QueueEstimate.ends(queue, rates, eta)
-        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, emptyList())
+        queueTimeline
+            .map { it.ends }
+            .stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, emptyList())
+
+    // The waiting jobs when the user answered "Not Now" to Group by Model; saved.
+    private val groupingDismissed = MutableStateFlow<Set<String>>(emptySet())
+
+    /**
+     * Group by Model (3.6.0), offered while it spares at least [QueueGrouping.MIN_SPARED] model changes and no job was
+     * added since "Not Now".
+     */
+    val groupingSuggestion: StateFlow<QueueGrouping.Plan?> =
+        combine(_generationQueue, loadedModel, changeCosts, groupingDismissed) { queue, loaded, costs, dismissed ->
+            if (QueueGrouping.waitingIds(queue).all { it in dismissed }) {
+                null
+            } else {
+                QueueGrouping.plan(queue, loaded, costs)?.takeIf { it.spared >= QueueGrouping.MIN_SPARED }
+            }
+        }.stateIn(CoroutineScope(SupervisorJob() + Dispatchers.Default), SharingStarted.Eagerly, null)
 
     private val _completedQueueItems = MutableStateFlow(0)
     val completedQueueItems: StateFlow<Int> = _completedQueueItems.asStateFlow()
@@ -264,6 +303,7 @@ object ForgeQueueManager {
     suspend fun start() {
         loadQueueState()
         loadScheduleAndSpeed()
+        startChangeCostsWatcher()
         startQueueWriter()
         startQueueWorker()
         startServiceWatcher()
@@ -274,6 +314,7 @@ object ForgeQueueManager {
 
     private const val SCHEDULE_KEY = "queue_scheduled_start"
     private const val SPEED_KEY = "queue_speed"
+    private const val GROUPING_DISMISSED_KEY = "queue_grouping_dismissed"
 
     private suspend fun loadScheduleAndSpeed() {
         withContext(Dispatchers.IO) {
@@ -284,6 +325,9 @@ object ForgeQueueManager {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load the queue speed", e)
+            }
+            settings.getSetting(GROUPING_DISMISSED_KEY)?.value?.let { ids ->
+                groupingDismissed.value = ids.split(',').filter { it.isNotEmpty() }.toSet()
             }
             // A start time that passed while the app was closed starts the queue now.
             val at = settings.getSetting(SCHEDULE_KEY)?.value?.toLongOrNull()
@@ -336,6 +380,67 @@ object ForgeQueueManager {
                 if (at == null) return@collectLatest
                 delay((at - System.currentTimeMillis()).coerceAtLeast(0))
                 onScheduledTime()
+            }
+        }
+    }
+
+    /**
+     * What a model change costs (3.6.0), read from the job history when the app starts, after every recorded job and
+     * when Generation History is switched on; with it off there are none. The model the server has is read too.
+     */
+    private fun startChangeCostsWatcher() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            combine(JobRecorder.recorded, ForgeRepository.config.map { it.generationHistory }.distinctUntilChanged()) { _, on -> on }
+                .collectLatest { on ->
+                    changeCosts.value =
+                        if (!on) {
+                            ModelChangeCosts.none
+                        } else {
+                            try {
+                                JobRecorder.loadedNow()
+                                ModelChangeCosts.of(ForgeRepository.db.jobRunDao().getStartTimes(ModelChangeCosts.HISTORY))
+                            } catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                Log.e(TAG, "Failed to read the model change times", e)
+                                ModelChangeCosts.none
+                            }
+                        }
+                }
+        }
+    }
+
+    /**
+     * Group by Model (3.6.0): each model's waiting jobs together. Returns the order before, for "Undo"; null when it
+     * spares no model change.
+     */
+    fun groupByModel(): List<String>? {
+        var before: List<String>? = null
+        val loaded = loadedOn(JobRecorder.loadedState.value, ForgeSettingsManager.config.value)
+        _generationQueue.update { q ->
+            val plan = QueueGrouping.plan(q, loaded, changeCosts.value) ?: return@update q
+            before = q.map { it.id }
+            QueueGrouping.reorder(q, plan.order)
+        }
+        if (before != null) saveQueueState()
+        return before
+    }
+
+    /** "Undo" for Group by Model: the jobs back in [order]; the suggestion stays hidden until a job is added. */
+    fun restoreQueueOrder(order: List<String>) {
+        _generationQueue.update { q -> QueueGrouping.reorder(q, order) }
+        saveQueueState()
+        dismissGrouping()
+    }
+
+    /** "Not Now": no Group by Model until a job is added. */
+    fun dismissGrouping() {
+        val ids = QueueGrouping.waitingIds(_generationQueue.value)
+        groupingDismissed.value = ids
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            try {
+                ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(GROUPING_DISMISSED_KEY, ids.joinToString(",")))
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save the dismissed grouping", e)
             }
         }
     }
@@ -712,6 +817,8 @@ object ForgeQueueManager {
         val startedAt = System.currentTimeMillis()
         // How the job went, for its record in the generation history (3.6.0; JobRecorder, only when switched on).
         var record: Triple<JobOutcome, JobFailure?, String?>? = null
+        // Seconds the job took, learned once its record says how much of it went to loading the model.
+        var tookSeconds: Double? = null
         JobRecorder.begin(job)
         try {
             val answer = requestWithWatchdog(job, shouldSaveToDevice)
@@ -730,7 +837,7 @@ object ForgeQueueManager {
                     record = Triple(if (interruptedJobId == job.id) JobOutcome.INTERRUPTED else JobOutcome.DONE, null, null)
                     lastJobModel = job.payload.override_settings.sdModelCheckpoint
                     _batchFinished.tryEmit(Unit)
-                    learnSpeed(job, (System.currentTimeMillis() - startedAt) / 1000.0)
+                    tookSeconds = (System.currentTimeMillis() - startedAt) / 1000.0
                 }
             } else if (answer is Answer.Failed) {
                 val errorBody = answer.body
@@ -815,7 +922,9 @@ object ForgeQueueManager {
                 errorReason = reason
             }
         } finally {
-            record?.let { (outcome, failure, text) -> withContext(NonCancellable) { JobRecorder.finish(outcome, failure, text) } }
+            val run = record?.let { (outcome, failure, text) -> withContext(NonCancellable) { JobRecorder.finish(outcome, failure, text) } }
+            // The speed without the model change, which the timeline adds on its own (3.6.0).
+            tookSeconds?.let { learnSpeed(job, it - (run?.let { r -> changeCosts.value.loadingMs(r) } ?: 0L) / 1000.0) }
             if (connectionLost) {
                 keepForRetry(job, errorReason ?: CONNECTION_LOST_REASON)
             } else {

@@ -358,6 +358,10 @@ object JobRecorder {
     private val _recorded = MutableStateFlow(0)
     val recorded: StateFlow<Int> = _recorded.asStateFlow()
 
+    // The last known model in a server's memory, with the server: the queue's timeline and Group by Model follow it.
+    private val _loadedState = MutableStateFlow<Pair<String, LoadedModel>?>(null)
+    val loadedState: StateFlow<Pair<String, LoadedModel>?> = _loadedState.asStateFlow()
+
     val isRecording: Boolean get() = current != null
 
     /** Whether the VRAM should be read at every ping: from sending a job until a reading after its first step. */
@@ -384,6 +388,7 @@ object JobRecorder {
         state: LoadedModel,
     ) {
         loaded[server] = state
+        _loadedState.value = server to state
         try {
             ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(LOADED_KEY + server, ForgeSettingsManager.gson.toJson(state)))
         } catch (e: Exception) {
@@ -393,7 +398,10 @@ object JobRecorder {
     }
 
     /** What the app knows about the model in the current server's memory (Group by Model starts from it). */
-    suspend fun loadedNow(): LoadedModel = loadedOn(GalleryKey.serverOf(ForgeRepository.config.value.apiUrl))
+    suspend fun loadedNow(): LoadedModel {
+        val server = GalleryKey.serverOf(ForgeRepository.config.value.apiUrl)
+        return loadedOn(server).also { _loadedState.value = server to it }
+    }
 
     /** The server's model left its memory: Unload Model, Restart Forge or Unload After the Queue. */
     suspend fun modelUnloaded() = setLoaded(GalleryKey.serverOf(ForgeRepository.config.value.apiUrl), LoadedModel.empty)
@@ -404,11 +412,7 @@ object JobRecorder {
         if (!enabled()) return
         val payload = job.payload
         val server = GalleryKey.serverOf(ForgeRepository.config.value.apiUrl)
-        val model = payload.override_settings.sdModelCheckpoint.orEmpty()
-        val modules =
-            payload.override_settings.forgeAdditionalModules
-                .orEmpty()
-                .joinToString(", ")
+        val (model, modules) = JobModel.of(payload)
         val (predicted, previous) = LoadedModel.predict(loadedOn(server), model, modules)
         val firstHash =
             model.isNotEmpty() &&
@@ -461,13 +465,13 @@ object JobRecorder {
         current?.onVram(System.currentTimeMillis(), memory.vramUsed.toFloat(), memory.vramTotal.toFloat())
     }
 
-    /** The job ended: saves its record and what the server has loaded now. */
+    /** The job ended: saves its record and what the server has loaded now; returns the record (null when not recording). */
     suspend fun finish(
         outcome: JobOutcome,
         failure: JobFailure? = null,
         failureText: String? = null,
-    ) {
-        val timeline = current ?: return
+    ): JobRunEntity? {
+        val timeline = current ?: return null
         current = null
         val run = timeline.finish(System.currentTimeMillis(), outcome, failure, failureText)
         setLoaded(timeline.server, LoadedModel.after(loadedOn(timeline.server), timeline.model, timeline.modules, outcome))
@@ -478,6 +482,7 @@ object JobRecorder {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e(TAG, "Could not save the job's record", e)
         }
+        return run
     }
 
     /** The job was cancelled (removed while running, or the app stopped it): nothing to record. */

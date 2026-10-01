@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,10 +36,13 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -88,7 +92,10 @@ import com.example.forgegen.ForgeQueueManager
 import com.example.forgegen.ForgeViewModel
 import com.example.forgegen.GenerationStatus
 import com.example.forgegen.MainSectionLabel
+import com.example.forgegen.ModelChange
 import com.example.forgegen.ModelSettingsRules
+import com.example.forgegen.QueueEstimate
+import com.example.forgegen.QueueGrouping
 import com.example.forgegen.QueueSchedule
 import com.example.forgegen.QueuedGeneration
 import com.example.forgegen.RowIcon
@@ -105,7 +112,9 @@ import kotlin.math.roundToLong
  * QUEUE SCREEN (3.0.0-1, the owner's pick "C" of three mockups)
  * The queue as a timeline: next to each job the time it should start (QueueEstimate.ends), the running job with its
  * progress, and "All done" with the end time; jobs set aside below. The chip on top sets "Start at". A tap opens a
- * job (its prompt and settings, Duplicate, Edit, Remove); its handle drags it to another place.
+ * job (its prompt and settings, Duplicate, Edit, Remove); its handle drags it to another place. Since 3.6.0 a mark
+ * before a job shows the model change Forge makes there (with its cost when the history knows it), and a card offers
+ * Group by Model when running each model's jobs together spares at least two changes.
  * ============================================================================ */
 
 // The time column fits "12:15 PM"; the rail's centre is after it, a gap (10 dp) and half the rail (10 dp).
@@ -114,6 +123,9 @@ private val RAIL_CENTER = TIME_WIDTH + 20.dp
 private val DOT_CENTER = 23.dp
 
 private const val TICK_MS = 30_000L
+
+// The model change marks (the mockup's amber).
+private val CHANGE_COLOR = Color(0xFFF5B94A)
 
 @Composable
 fun QueueScreen(
@@ -126,7 +138,9 @@ fun QueueScreen(
     val currentEta by viewModel.currentEta.collectAsStateWithLifecycle()
     // The server does other jobs before the running one (3.3.0, from its web UI or another app).
     val serverJobsAhead by viewModel.serverJobsAhead.collectAsStateWithLifecycle()
-    val ends by viewModel.queueJobEnds.collectAsStateWithLifecycle()
+    val timeline by viewModel.queueTimeline.collectAsStateWithLifecycle()
+    val ends = timeline.ends
+    val suggestion by viewModel.groupingSuggestion.collectAsStateWithLifecycle()
     val scheduledStart by viewModel.scheduledStart.collectAsStateWithLifecycle()
     val waitingForSchedule by viewModel.isWaitingForSchedule.collectAsStateWithLifecycle()
     val paused by viewModel.isQueuePaused.collectAsStateWithLifecycle()
@@ -156,6 +170,15 @@ fun QueueScreen(
             snackbar.currentSnackbarData?.dismiss()
             val result = snackbar.showSnackbar(message, actionLabel = "Undo", duration = SnackbarDuration.Short)
             if (result == SnackbarResult.ActionPerformed) viewModel.restoreJobs(removed)
+        }
+    }
+
+    fun group() {
+        val before = viewModel.groupQueueByModel() ?: return
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar("Jobs grouped by model", actionLabel = "Undo", duration = SnackbarDuration.Short)
+            if (result == SnackbarResult.ActionPerformed) viewModel.restoreQueueOrder(before)
         }
     }
 
@@ -248,6 +271,9 @@ fun QueueScreen(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
                 ) {
+                    item(key = "grouping") {
+                        GroupingCard(plan = suggestion, onGroup = ::group, onNotNow = viewModel::dismissGrouping)
+                    }
                     item(key = "start") {
                         StartRow(
                             scheduledAt = scheduledStart?.takeIf { waitingForSchedule },
@@ -255,6 +281,17 @@ fun QueueScreen(
                             onPick = { showStartTimePicker = true },
                             onStartNow = { viewModel.startScheduledQueueNow() },
                         )
+                        // How much of the time goes to model changes (3.6.0).
+                        val changes = timeline.changeSeconds
+                        if (changes > 0 && totalEnd != null) {
+                            Text(
+                                "Generating ${QueueEstimate.formatSpan((totalEnd - changes).roundToLong())} · " +
+                                    "model changes ${QueueEstimate.formatSpan(changes.roundToLong())}",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                modifier = Modifier.padding(start = 4.dp, bottom = 10.dp).offset(y = (-4).dp),
+                            )
+                        }
                     }
                     if (serverJobsAhead > 0) {
                         item(key = "server-first") { ServerJobsFirstNote(serverJobsAhead) }
@@ -270,10 +307,8 @@ fun QueueScreen(
                                 else -> at(startSeconds) ?: ""
                             }
                         val isDragged = item.id == draggedId
-                        TimelineRow(
-                            time = time,
-                            highlighted = running,
-                            first = position == 0,
+                        val modelChange = timeline.changes.getOrNull(index)
+                        Column(
                             modifier =
                                 if (isDragged) {
                                     Modifier.zIndex(1f).graphicsLayer {
@@ -284,66 +319,74 @@ fun QueueScreen(
                                     Modifier.animateItem()
                                 },
                         ) {
-                            JobCard(
-                                item = item,
-                                running = running,
-                                progressLine =
-                                    when {
-                                        running && serverJobsAhead > 0 -> "Waiting: ${ServerTasks.aheadText(serverJobsAhead)}"
-                                        running -> runningLine(progress, currentEta, at(ends.getOrNull(index)))
-                                        else -> null
-                                    },
-                                progress = if (running) progress else null,
-                                // A job of more than one image can go on with its next one (3.3.0).
-                                onSkip = if (running && serverJobsAhead == 0 && item.payload.n_iter > 1) viewModel::skipImage else null,
-                                onDuplicate = { newSeed -> viewModel.duplicateJob(item.id, newSeed) },
-                                onEdit = { edit(item) },
-                                onRemove = { offerUndo("Job removed", viewModel.removeFromQueue(item.id)) },
-                                dragHandle =
-                                    if (running) {
-                                        null
-                                    } else {
-                                        Modifier.pointerInput(item.id) {
-                                            detectDragGestures(
-                                                onDragStart = {
-                                                    draggedId = item.id
-                                                    dragOffset = 0f
-                                                    awaitedIndex = -1
-                                                },
-                                                onDragEnd = {
-                                                    draggedId = null
-                                                    dragOffset = 0f
-                                                },
-                                                onDragCancel = {
-                                                    draggedId = null
-                                                    dragOffset = 0f
-                                                },
-                                                onDrag = { change, amount ->
-                                                    change.consume()
-                                                    dragOffset += amount.y
-                                                    val visible = listState.layoutInfo.visibleItemsInfo
-                                                    val current = visible.firstOrNull { it.key == item.id } ?: return@detectDragGestures
-                                                    if (awaitedIndex >= 0 && current.index != awaitedIndex) return@detectDragGestures
-                                                    awaitedIndex = -1
-                                                    val middle = current.offset + dragOffset + current.size / 2f
-                                                    val target =
-                                                        visible.firstOrNull {
-                                                            it.key != item.id &&
-                                                                it.key in waitingIds &&
-                                                                middle > it.offset &&
-                                                                middle < it.offset + it.size
-                                                        } ?: return@detectDragGestures
-                                                    val targetIndex = currentQueue.indexOfFirst { it.id == target.key }
-                                                    val runningFirst = currentQueue.firstOrNull()?.status == GenerationStatus.GENERATING
-                                                    if (targetIndex < 0 || (targetIndex == 0 && runningFirst)) return@detectDragGestures
-                                                    viewModel.moveQueueItem(item.id, targetIndex)
-                                                    dragOffset += current.offset - target.offset
-                                                    awaitedIndex = target.index
-                                                },
-                                            )
-                                        }
-                                    },
-                            )
+                            // Inside the job's own item, so dragging counts the jobs alone.
+                            if (modelChange != null) ModelChangeMark(modelChange, rail = position > 0)
+                            TimelineRow(
+                                time = time,
+                                highlighted = running,
+                                first = position == 0,
+                            ) {
+                                JobCard(
+                                    item = item,
+                                    running = running,
+                                    progressLine =
+                                        when {
+                                            running && serverJobsAhead > 0 -> "Waiting: ${ServerTasks.aheadText(serverJobsAhead)}"
+                                            running -> runningLine(progress, currentEta, at(ends.getOrNull(index)))
+                                            else -> null
+                                        },
+                                    progress = if (running) progress else null,
+                                    // A job of more than one image can go on with its next one (3.3.0).
+                                    onSkip = if (running && serverJobsAhead == 0 && item.payload.n_iter > 1) viewModel::skipImage else null,
+                                    onDuplicate = { newSeed -> viewModel.duplicateJob(item.id, newSeed) },
+                                    onEdit = { edit(item) },
+                                    onRemove = { offerUndo("Job removed", viewModel.removeFromQueue(item.id)) },
+                                    dragHandle =
+                                        if (running) {
+                                            null
+                                        } else {
+                                            Modifier.pointerInput(item.id) {
+                                                detectDragGestures(
+                                                    onDragStart = {
+                                                        draggedId = item.id
+                                                        dragOffset = 0f
+                                                        awaitedIndex = -1
+                                                    },
+                                                    onDragEnd = {
+                                                        draggedId = null
+                                                        dragOffset = 0f
+                                                    },
+                                                    onDragCancel = {
+                                                        draggedId = null
+                                                        dragOffset = 0f
+                                                    },
+                                                    onDrag = { change, amount ->
+                                                        change.consume()
+                                                        dragOffset += amount.y
+                                                        val visible = listState.layoutInfo.visibleItemsInfo
+                                                        val current = visible.firstOrNull { it.key == item.id } ?: return@detectDragGestures
+                                                        if (awaitedIndex >= 0 && current.index != awaitedIndex) return@detectDragGestures
+                                                        awaitedIndex = -1
+                                                        val middle = current.offset + dragOffset + current.size / 2f
+                                                        val target =
+                                                            visible.firstOrNull {
+                                                                it.key != item.id &&
+                                                                    it.key in waitingIds &&
+                                                                    middle > it.offset &&
+                                                                    middle < it.offset + it.size
+                                                            } ?: return@detectDragGestures
+                                                        val targetIndex = currentQueue.indexOfFirst { it.id == target.key }
+                                                        val runningFirst = currentQueue.firstOrNull()?.status == GenerationStatus.GENERATING
+                                                        if (targetIndex < 0 || (targetIndex == 0 && runningFirst)) return@detectDragGestures
+                                                        viewModel.moveQueueItem(item.id, targetIndex)
+                                                        dragOffset += current.offset - target.offset
+                                                        awaitedIndex = target.index
+                                                    },
+                                                )
+                                            }
+                                        },
+                                )
+                            }
                         }
                     }
                     if (waiting.isNotEmpty()) {
@@ -451,6 +494,95 @@ private fun ServerJobsFirstNote(ahead: Int) {
                 lineHeight = 17.sp,
             )
         }
+    }
+}
+
+/**
+ * Group by Model (3.6.0, board 8): how many model changes it spares and how much sooner the queue ends. "Group" puts
+ * each model's jobs together ("Undo" in the snackbar), "Not Now" hides the card until a job is added.
+ */
+@Composable
+private fun GroupingCard(
+    plan: QueueGrouping.Plan?,
+    onGroup: () -> Unit,
+    onNotNow: () -> Unit,
+) {
+    // The last plan stays on the card while it leaves.
+    var shown by remember { mutableStateOf<QueueGrouping.Plan?>(null) }
+    if (plan != null && plan != shown) shown = plan
+    AnimatedVisibility(
+        visible = plan != null,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
+        val current = shown ?: return@AnimatedVisibility
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        ) {
+            Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)) {
+                Row {
+                    Icon(
+                        Icons.Default.Layers,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.padding(top = 1.dp).size(22.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Group by Model", fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(3.dp))
+                        Text(groupingText(current), fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                ) {
+                    TextButton(onClick = onNotNow) { Text("Not Now", color = MaterialTheme.colorScheme.secondary) }
+                    Button(onClick = onGroup) { Text("Group") }
+                }
+            }
+        }
+    }
+}
+
+/** "Running each model's jobs together means 2 model changes fewer: about 37 s sooner." */
+private fun groupingText(plan: QueueGrouping.Plan): String {
+    val fewer = "Running each model's jobs together means ${plan.spared} model changes fewer"
+    return plan.savedMs?.takeIf { it >= 1000 }?.let { "$fewer: ${QueueEstimate.formatAbout(it)} sooner." } ?: "$fewer."
+}
+
+/** The model change Forge makes before a job (3.6.0): a swap or a load into an empty server, with its usual cost. */
+@Composable
+private fun ModelChangeMark(
+    change: ModelChange,
+    rail: Boolean,
+) {
+    val railColor = MaterialTheme.colorScheme.surfaceVariant
+    Row(
+        modifier =
+            Modifier.fillMaxWidth().height(26.dp).drawBehind {
+                if (rail) {
+                    val x = RAIL_CENTER.toPx()
+                    drawLine(railColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = 2.dp.toPx())
+                }
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(RAIL_CENTER + 26.dp))
+        Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = CHANGE_COLOR, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        val what = if (change.cold) "Model load" else "Model change"
+        Text(
+            change.ms?.takeIf { it >= 1000 }?.let { "$what · ${QueueEstimate.formatAbout(it)}" } ?: what,
+            fontSize = 12.sp,
+            color = CHANGE_COLOR,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
