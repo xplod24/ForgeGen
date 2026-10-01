@@ -6,6 +6,7 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -348,7 +349,96 @@ data class GalleryImageEntity(
     val savedAt: Long,
     // The file's size in bytes (3.2.0, statistics); 0 until a sync lists it.
     @ColumnInfo(defaultValue = "0") val size: Long = 0,
+    // 3.6.0: the rest of the generation settings (IndexDetails), null where the infotext has none.
+    val width: Int? = null,
+    val height: Int? = null,
+    val steps: Int? = null,
+    val cfg: Float? = null,
+    val distilledCfg: Float? = null,
+    val scheduler: String? = null,
+    val hiresScale: Float? = null,
+    val hiresUpscaler: String? = null,
+    val hiresSteps: Int? = null,
+    val denoising: Float? = null,
+    val modules: String? = null,
+    val embeddings: String? = null,
+    val clipSkip: Int? = null,
+    val forgeVersion: String? = null,
+    // IndexDetails.VERSION the row was read with; 0 for rows indexed before 3.6.0, whose details are read once more.
+    @ColumnInfo(defaultValue = "0") val details: Int = 0,
 )
+
+/** [GalleryImageEntity] with [details] filled in. */
+fun GalleryImageEntity.withDetails(details: IndexDetails): GalleryImageEntity =
+    copy(
+        width = details.width,
+        height = details.height,
+        steps = details.steps,
+        cfg = details.cfg,
+        distilledCfg = details.distilledCfg,
+        scheduler = details.scheduler,
+        hiresScale = details.hiresScale,
+        hiresUpscaler = details.hiresUpscaler,
+        hiresSteps = details.hiresSteps,
+        denoising = details.denoising,
+        modules = details.modules,
+        embeddings = details.embeddings,
+        clipSkip = details.clipSkip,
+        forgeVersion = details.forgeVersion,
+        details = IndexDetails.VERSION,
+    )
+
+/** An indexed image whose details are still to be read (3.6.0): enough of it to ask the gallery extension. */
+data class GalleryDetailsBacklog(
+    val fullpath: String,
+    val name: String,
+    val date: String,
+    val size: Long,
+)
+
+/** The details of one image for [GalleryImageDao.updateDetails] (3.6.0). */
+data class GalleryImageDetails(
+    val fullpath: String,
+    val width: Int?,
+    val height: Int?,
+    val steps: Int?,
+    val cfg: Float?,
+    val distilledCfg: Float?,
+    val scheduler: String?,
+    val hiresScale: Float?,
+    val hiresUpscaler: String?,
+    val hiresSteps: Int?,
+    val denoising: Float?,
+    val modules: String?,
+    val embeddings: String?,
+    val clipSkip: Int?,
+    val forgeVersion: String?,
+    val details: Int,
+) {
+    companion object {
+        fun of(
+            fullpath: String,
+            d: IndexDetails,
+        ) = GalleryImageDetails(
+            fullpath = fullpath,
+            width = d.width,
+            height = d.height,
+            steps = d.steps,
+            cfg = d.cfg,
+            distilledCfg = d.distilledCfg,
+            scheduler = d.scheduler,
+            hiresScale = d.hiresScale,
+            hiresUpscaler = d.hiresUpscaler,
+            hiresSteps = d.hiresSteps,
+            denoising = d.denoising,
+            modules = d.modules,
+            embeddings = d.embeddings,
+            clipSkip = d.clipSkip,
+            forgeVersion = d.forgeVersion,
+            details = IndexDetails.VERSION,
+        )
+    }
+}
 
 /** A file's size for [GalleryImageDao.updateSizes]. */
 data class GalleryImageSize(
@@ -415,6 +505,20 @@ interface GalleryImageDao {
     /** Images whose positive or negative prompt matches the LIKE [pattern] (with '\' as the escape character). */
     @Query("SELECT fullpath FROM gallery_images WHERE positivePrompt LIKE :pattern ESCAPE '\\' OR negativePrompt LIKE :pattern ESCAPE '\\'")
     suspend fun findPathsByPrompt(pattern: String): List<String>
+
+    /** Up to [limit] images read before their details were kept (3.6.0); unread images wait for the sync instead. */
+    @Query("SELECT fullpath, name, date, size FROM gallery_images WHERE details < :version AND savedAt != 0 LIMIT :limit")
+    suspend fun getDetailsBacklog(
+        version: Int,
+        limit: Int,
+    ): List<GalleryDetailsBacklog>
+
+    /** How many images still wait for their details (3.6.0). */
+    @Query("SELECT COUNT(*) FROM gallery_images WHERE details < :version AND savedAt != 0")
+    suspend fun countDetailsBacklog(version: Int): Int
+
+    @Update(entity = GalleryImageEntity::class)
+    suspend fun updateDetails(details: List<GalleryImageDetails>)
 }
 
 /** A gallery image of the index as the app keeps it in memory: without its prompts. */
@@ -446,16 +550,98 @@ interface AppSettingDao {
     suspend fun removeSetting(key: String)
 }
 
+/**
+ * One job the app sent to the server, with how long its phases took as the app saw them (3.6.0, "Generation History";
+ * JobRecorder). Times are milliseconds from sending the job; a phase the app could not see is null.
+ */
+@Entity(tableName = "job_runs", indices = [Index("startedAt")])
+data class JobRunEntity(
+    @PrimaryKey val id: String,
+    // The server's address as GalleryKey.serverOf gives it.
+    val server: String,
+    val queueJobId: String?,
+    val startedAt: Long,
+    // The checkpoint and modules sent ("" = the server's own), and on a swap those of the job before.
+    val model: String,
+    val modules: String,
+    val previousModel: String?,
+    // JobStart: COLD, SWAP, SAME or UNKNOWN.
+    val startKind: String,
+    // The checkpoint's first load, when Forge also works out its hash.
+    val firstHash: Boolean,
+    val width: Int,
+    val height: Int,
+    val images: Int,
+    val steps: Int,
+    val sampler: String,
+    val scheduler: String,
+    val hiresScale: Float?,
+    val hiresSteps: Int?,
+    // Unload and load (the server too busy to answer), then into VRAM until the first step.
+    val loadMs: Long?,
+    val vramMs: Long?,
+    val firstStepMs: Long?,
+    val samplingMs: Long?,
+    val hiresMs: Long?,
+    // From the last step to the answer: decoding, saving and sending the images.
+    val sendMs: Long?,
+    val totalMs: Long,
+    val itPerSec: Float?,
+    val hiresItPerSec: Float?,
+    val vramBeforeGb: Float?,
+    val vramPeakGb: Float?,
+    val vramTotalGb: Float?,
+    // The VRAM readings: "ms:gb" pairs joined by ",", the gigabytes with one decimal.
+    val vramCurve: String?,
+    // JobOutcome: DONE, FAILED or INTERRUPTED; JobFailure and the server's message for a failed one.
+    val outcome: String,
+    val failure: String?,
+    val failureText: String?,
+)
+
+@Dao
+interface JobRunDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(run: JobRunEntity)
+
+    /** For a backup's import: jobs already here are kept as they are. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertMissing(runs: List<JobRunEntity>): List<Long>
+
+    /** Every job without its VRAM readings (the statistics need only the numbers), the newest first. */
+    @Query(
+        "SELECT id, server, queueJobId, startedAt, model, modules, previousModel, startKind, firstHash, width, height, " +
+            "images, steps, sampler, scheduler, hiresScale, hiresSteps, loadMs, vramMs, firstStepMs, samplingMs, hiresMs, " +
+            "sendMs, totalMs, itPerSec, hiresItPerSec, vramBeforeGb, vramPeakGb, vramTotalGb, NULL AS vramCurve, outcome, " +
+            "failure, failureText FROM job_runs ORDER BY startedAt DESC",
+    )
+    suspend fun getAllWithoutCurves(): List<JobRunEntity>
+
+    @Query("SELECT * FROM job_runs ORDER BY startedAt DESC")
+    suspend fun getAll(): List<JobRunEntity>
+
+    @Query("SELECT * FROM job_runs WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): JobRunEntity?
+
+    @Query("SELECT COUNT(*) FROM job_runs")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM job_runs")
+    suspend fun clearAll()
+}
+
 @Database(
     entities = [
-        FavoriteImageEntity::class, 
-        WildcardEntity::class, 
+        FavoriteImageEntity::class,
+        WildcardEntity::class,
         GalleryImageEntity::class,
-        AppSettingEntity::class
+        AppSettingEntity::class,
+        JobRunEntity::class,
     ],
     // 12 (1.6.1): the civitai_models table is gone (MIGRATION_11_12).
     // 13 (3.2.0): gallery_images.size (MIGRATION_12_13).
-    version = 13,
+    // 14 (3.6.0): gallery_images' details and the job_runs table (MIGRATION_13_14).
+    version = 14,
     exportSchema = false,
 )
 abstract class ForgeDatabase : RoomDatabase() {
@@ -466,6 +652,8 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun galleryImageDao(): GalleryImageDao
 
     abstract fun appSettingDao(): AppSettingDao
+
+    abstract fun jobRunDao(): JobRunDao
 }
 
 /* ============================================================================

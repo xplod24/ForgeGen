@@ -77,6 +77,9 @@ object ForgeGalleryManager {
     private const val FULL_SYNC_AT_KEY = "gallery_full_sync_at"
     private const val THUMBNAIL_SIZE = "512x512" // three columns on a 1440 px wide screen
     private const val INFO_BATCH_SIZE = 100
+
+    // Between two requests for older images' details (3.6.0).
+    private const val DETAILS_PAUSE_MS = 500L
     private const val MAX_FOLDER_DEPTH = 3
     private const val RECENT_FOLDER_MS = 48 * 60 * 60 * 1000L // re-listed on every sync, as new images land there
     private const val FULL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000L
@@ -1202,6 +1205,9 @@ object ForgeGalleryManager {
             _gallerySyncProgress.value = done to newFiles.size
         }
 
+        // The details of images indexed before 3.6.0, read once more (never IIB's own index under /db/).
+        fillDetails(dao, reader)
+
         // Sizes of images indexed before the index kept them (3.2.0): the listing tells them.
         val knownSizes = indexedImages.value.associate { it.fullpath to it.size }
         val sizes =
@@ -1299,7 +1305,40 @@ object ForgeGalleryManager {
             loras = info.loras.joinToString(","),
             savedAt = System.currentTimeMillis(),
             size = file.bytes ?: 0L,
-        )
+        ).withDetails(IndexDetails.of(info))
+    }
+
+    // Images whose details (IndexDetails, 3.6.0) are still to be read; the statistics show it while it is not 0.
+    private val _detailsBacklog = MutableStateFlow(0)
+    val detailsBacklog: StateFlow<Int> = _detailsBacklog.asStateFlow()
+
+    /**
+     * Reads the details of images indexed before 3.6.0 once more, 100 per request with a pause between requests, so the
+     * PC (which reads the files) is not kept busy. It stops while a job runs and goes on with the next sync. An image
+     * the extension cannot read any more keeps empty details: it is not asked for again.
+     */
+    private suspend fun fillDetails(
+        dao: GalleryImageDao,
+        reader: InfoReader,
+    ) {
+        var remaining = dao.countDetailsBacklog(IndexDetails.VERSION)
+        _detailsBacklog.value = remaining
+        while (remaining > 0 && !ForgeQueueManager.isGenerating.value) {
+            currentCoroutineContext().ensureActive()
+            val rows = dao.getDetailsBacklog(IndexDetails.VERSION, INFO_BATCH_SIZE)
+            if (rows.isEmpty()) break
+            val files = rows.map { GalleryItem(name = it.name, fullpath = it.fullpath, type = "file", date = it.date, bytes = it.size) }
+            val infos = reader.read(files)
+            dao.updateDetails(
+                rows.map { row ->
+                    val details = infos[row.fullpath]?.let { IndexDetails.of(Infotext.parse(it)) } ?: IndexDetails()
+                    GalleryImageDetails.of(row.fullpath, details)
+                },
+            )
+            remaining = dao.countDetailsBacklog(IndexDetails.VERSION)
+            _detailsBacklog.value = remaining
+            if (remaining > 0) delay(DETAILS_PAUSE_MS)
+        }
     }
 
     /** An image whose generation data could not be read: shown with its name and date, read again by later syncs. */

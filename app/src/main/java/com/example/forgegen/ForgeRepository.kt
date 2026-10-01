@@ -217,6 +217,31 @@ object ForgeRepository {
             }
         }
 
+    // 3.6.0: the rest of each image's generation settings (IndexDetails; old rows are read once more, details = 0) and
+    // the jobs the app sent with their phases (JobRunEntity).
+    val MIGRATION_13_14 =
+        object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                val columns =
+                    "width INTEGER, height INTEGER, steps INTEGER, cfg REAL, distilledCfg REAL, scheduler TEXT, hiresScale REAL, " +
+                        "hiresUpscaler TEXT, hiresSteps INTEGER, denoising REAL, modules TEXT, embeddings TEXT, clipSkip INTEGER, " +
+                        "forgeVersion TEXT, details INTEGER NOT NULL DEFAULT 0"
+                columns.split(", ").forEach { column -> db.execSQL("ALTER TABLE `gallery_images` ADD COLUMN $column") }
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `job_runs` (`id` TEXT NOT NULL, `server` TEXT NOT NULL, `queueJobId` TEXT, " +
+                        "`startedAt` INTEGER NOT NULL, `model` TEXT NOT NULL, `modules` TEXT NOT NULL, `previousModel` TEXT, " +
+                        "`startKind` TEXT NOT NULL, `firstHash` INTEGER NOT NULL, `width` INTEGER NOT NULL, " +
+                        "`height` INTEGER NOT NULL, `images` INTEGER NOT NULL, `steps` INTEGER NOT NULL, `sampler` TEXT NOT NULL, " +
+                        "`scheduler` TEXT NOT NULL, `hiresScale` REAL, `hiresSteps` INTEGER, `loadMs` INTEGER, `vramMs` INTEGER, " +
+                        "`firstStepMs` INTEGER, `samplingMs` INTEGER, `hiresMs` INTEGER, `sendMs` INTEGER, " +
+                        "`totalMs` INTEGER NOT NULL, `itPerSec` REAL, `hiresItPerSec` REAL, `vramBeforeGb` REAL, " +
+                        "`vramPeakGb` REAL, `vramTotalGb` REAL, `vramCurve` TEXT, `outcome` TEXT NOT NULL, `failure` TEXT, " +
+                        "`failureText` TEXT, PRIMARY KEY(`id`))",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_job_runs_startedAt` ON `job_runs` (`startedAt`)")
+            }
+        }
+
     val MIGRATION_9_10 = object : Migration(9, 10) {
         override fun migrate(db: SupportSQLiteDatabase) {
             db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
@@ -230,7 +255,7 @@ object ForgeRepository {
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 
