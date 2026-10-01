@@ -710,9 +710,13 @@ object ForgeQueueManager {
 
         var connectionLost = false
         val startedAt = System.currentTimeMillis()
+        // How the job went, for its record in the generation history (3.6.0; JobRecorder, only when switched on).
+        var record: Triple<JobOutcome, JobFailure?, String?>? = null
+        JobRecorder.begin(job)
         try {
             val answer = requestWithWatchdog(job, shouldSaveToDevice)
             if (answer is Answer.Images) {
+                if (answer.files.isEmpty()) record = Triple(JobOutcome.FAILED, JobFailure.OTHER, "The server sent no images.")
                 if (answer.files.isNotEmpty()) {
                     addSessionBatch(answer.files.map { it.absolutePath })
                     _statusText.value = "Generation Complete"
@@ -723,6 +727,7 @@ object ForgeQueueManager {
                     }
 
                     succeeded = true
+                    record = Triple(if (interruptedJobId == job.id) JobOutcome.INTERRUPTED else JobOutcome.DONE, null, null)
                     lastJobModel = job.payload.override_settings.sdModelCheckpoint
                     _batchFinished.tryEmit(Unit)
                     learnSpeed(job, (System.currentTimeMillis() - startedAt) / 1000.0)
@@ -738,6 +743,7 @@ object ForgeQueueManager {
                     _statusText.value = PROMPT_REFUSED
                     ForgeRepository.showToast(reason)
                     setAsideReason = reason
+                    record = Triple(JobOutcome.FAILED, JobFailure.REFUSED, reason)
                 } else if (errorBody.contains("OutOfMemoryError", true) ||
                     errorBody.contains("out of memory", true)
                 ) {
@@ -746,6 +752,7 @@ object ForgeQueueManager {
                     _oomAlert.value = true
                     errorReason = "Server out of memory (OOM)."
                     isOom = true
+                    record = Triple(JobOutcome.FAILED, JobFailure.OUT_OF_VRAM, serverError(errorBody) ?: errorReason)
                     OomLogs.report(
                         reason = "The server ran out of memory.",
                         details = "${describeForReport(job)}\n\nServer answer (HTTP ${answer.code}):\n$errorBody",
@@ -755,6 +762,7 @@ object ForgeQueueManager {
                     _statusText.value = "Error: HTTP ${answer.code}"
                     // With the server's own explanation, when it gives one (2.4.1).
                     val reason = "The server returned HTTP ${answer.code}." + (serverError(errorBody)?.let { " $it" } ?: "")
+                    record = Triple(JobOutcome.FAILED, JobFailure.SERVER_ERROR, reason)
                     if (config.overnightMode) {
                         setAsideReason = reason
                     } else {
@@ -765,11 +773,13 @@ object ForgeQueueManager {
             }
         } catch (e: CancellationException) {
             Log.d(TAG, "Generation cancelled")
+            JobRecorder.abandon()
             throw e
         } catch (e: ConnectionLost) {
             // The connection broke (refused, reset, timed out): the job stays, also in overnight mode, where every
             // following job used to fail at once and the whole queue was thrown away.
             connectionLost = true
+            record = Triple(JobOutcome.FAILED, JobFailure.SERVER_GONE, e.cause?.message)
             val losses = connectionLosses.merge(job.id, 1, Int::plus) ?: 1
             if (losses <= MAX_AUTO_RETRIES || ForgeRepository.config.value.overnightMode) {
                 pauseQueue(CONNECTION_LOST_REASON)
@@ -783,6 +793,7 @@ object ForgeQueueManager {
             // The images are on the server anyway; the app (and the queue) must survive a batch too big to decode.
             _statusText.value = "The images are too large for the phone's memory"
             val reason = "The images were too large for the phone's memory. They are saved on the server."
+            record = Triple(JobOutcome.FAILED, JobFailure.PHONE_MEMORY, reason)
             if (ForgeRepository.config.value.overnightMode) {
                 setAsideReason = reason
             } else {
@@ -796,6 +807,7 @@ object ForgeQueueManager {
         } catch (e: Exception) {
             _statusText.value = "Failed: ${e.localizedMessage}"
             val reason = "Generation failed: ${e.localizedMessage}"
+            record = Triple(JobOutcome.FAILED, JobFailure.OTHER, reason)
             if (ForgeRepository.config.value.overnightMode) {
                 setAsideReason = reason
             } else {
@@ -803,6 +815,7 @@ object ForgeQueueManager {
                 errorReason = reason
             }
         } finally {
+            record?.let { (outcome, failure, text) -> withContext(NonCancellable) { JobRecorder.finish(outcome, failure, text) } }
             if (connectionLost) {
                 keepForRetry(job, errorReason ?: CONNECTION_LOST_REASON)
             } else {

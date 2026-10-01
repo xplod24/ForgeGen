@@ -101,6 +101,8 @@ data class AppConfig(
     var favoritesCheck: Boolean = true,
     var imageJobs: Boolean = true,
     var serverQueue: Boolean = true,
+    // 3.6.0: each job's phases are recorded for the statistics, the queue's estimate and Group by Model (JobRecorder).
+    var generationHistory: Boolean = true,
     // The image cache's size on the phone in MB (ImageCache.SIZES_MB, 3.4.0); used from the next start.
     var imageCacheMb: Int = ImageCache.DEFAULT_MB,
     // The gallery key's fingerprint for each server that asks for one (GalleryKey, 3.5.0): server address -> hash.
@@ -126,10 +128,11 @@ object FeatureSwitches {
                 favoritesCheck,
                 imageJobs,
                 serverQueue,
+                generationHistory,
             )
         }
 
-    /** "9 of 11 on". */
+    /** "10 of 12 on". */
     fun summary(config: AppConfig): String {
         val switches = of(config)
         return "${switches.count { it }} of ${switches.size} on"
@@ -827,6 +830,8 @@ data class SdModelItemDto(
     val title: String?,
     val filename: String?,
     @SerializedName("model_name") val modelName: String?,
+    // Null until Forge first loads the checkpoint and works out its hash (3.6.0: that load takes longer).
+    val sha256: String? = null,
 )
 
 data class LoraItemDto(
@@ -1089,7 +1094,7 @@ fun SdModelItemDto.toDomain() =
         title = this.title ?: "Unknown Model",
         path = this.filename ?: "",
         name = this.modelName ?: "Unknown",
-        hash = null,
+        hash = this.sha256?.takeIf { it.isNotEmpty() },
     )
 
 fun LoraItemDto.toDomain() =

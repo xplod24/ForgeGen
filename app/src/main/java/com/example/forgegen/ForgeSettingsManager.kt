@@ -365,6 +365,7 @@ object ForgeSettingsManager {
             favoritesCheck = parsed?.favoritesCheck ?: true,
             imageJobs = parsed?.imageJobs ?: true,
             serverQueue = parsed?.serverQueue ?: true,
+            generationHistory = parsed?.generationHistory ?: true,
             imageCacheMb = ImageCache.sizeOf(parsed?.imageCacheMb),
             galleryKeys = parsed?.galleryKeys.orEmpty(),
             modelSettings = parsed?.modelSettings.orEmpty(),

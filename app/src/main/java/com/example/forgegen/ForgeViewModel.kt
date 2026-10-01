@@ -212,6 +212,7 @@ class ForgeViewModel(
 
         ForgeGalleryManager.init(getApplication(), { ForgeRepository.db }, networkManager)
         ForgeQueueManager.init(getApplication())
+        JobRecorder.models = networkManager.models
 
         updateManager =
             ForgeUpdateManager(
@@ -938,6 +939,7 @@ class ForgeViewModel(
             try {
                 val response = ForgeRepository.forgeApi?.unloadCheckpoint()
                 if (response?.isSuccessful == true) {
+                    JobRecorder.modelUnloaded() // the next job starts cold (3.6.0)
                     ForgeRepository.refreshServerMemory()
                     showToast("Model unloaded")
                 } else {

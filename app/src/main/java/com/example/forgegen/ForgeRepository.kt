@@ -501,6 +501,7 @@ object ForgeRepository {
         restartOutageSeen = false
         _restartingSince.value = System.currentTimeMillis()
         _serverInfo.value = null // read again once it is back
+        JobRecorder.modelUnloaded() // Forge starts without a model: the next job starts cold (3.6.0)
         pingNow()
         return null
     }
@@ -609,12 +610,19 @@ object ForgeRepository {
 
     /** Reads the server's RAM and VRAM now (3.0.0-4: right after Unload Model, not up to 10 s later). */
     suspend fun refreshServerMemory() {
+        val start = System.currentTimeMillis()
         try {
             val response = forgeApi?.getMemoryStats()
-            if (response?.isSuccessful == true) _serverMemory.value = ServerMemory.of(response.body())
+            val answeredAt = System.currentTimeMillis()
+            if (answeredAt - start >= JobTimeline.BUSY_ANSWER_MS) JobRecorder.onBusy(start, answeredAt)
+            if (response?.isSuccessful == true) {
+                _serverMemory.value = ServerMemory.of(response.body())
+                JobRecorder.onVram(_serverMemory.value)
+            }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            _serverMemory.value = null
+            // A server too busy to answer keeps its last reading; a gone one shows none.
+            if (SlowServer.isSlowAnswer(e)) JobRecorder.onBusy(start, System.currentTimeMillis()) else _serverMemory.value = null
         }
     }
 
@@ -647,16 +655,20 @@ object ForgeRepository {
             var memoryReadAt = 0L
             while (isActive) {
                 awaitPingNeeded()
+                var start = 0L
                 try {
                     if (forgeApi != null) {
-                        val start = System.currentTimeMillis()
+                        start = System.currentTimeMillis()
                         // The live preview (a base64 image, sent with every answer while generating) is asked for only
                         // while it can be seen: not in the background, the gallery, the queue or the settings.
                         val response = forgeApi?.getProgress(skipImage = !previewWanted())
 
                         if (response?.isSuccessful == true) {
                             slowSince = 0L
-                            _pingMs.value = System.currentTimeMillis() - start
+                            val answeredAt = System.currentTimeMillis()
+                            _pingMs.value = answeredAt - start
+                            // A running job's record (3.6.0): an answer this slow means the server is busy loading.
+                            if (answeredAt - start >= JobTimeline.BUSY_ANSWER_MS) JobRecorder.onBusy(start, answeredAt)
                             _isConnected.value = true
                             _connection.value = ServerConnection.CONNECTED
                             failCount = 0
@@ -676,8 +688,10 @@ object ForgeRepository {
                             if (ahead > 0) {
                                 ForgeQueueManager.updateExternalProgress(0f, 0.0, null)
                                 ForgeQueueManager.setLivePreviewImage(null)
+                                JobRecorder.onJobsAhead()
                             } else {
                                 ForgeQueueManager.updateExternalProgress(progressVal, etaVal, currentImageStr.ifEmpty { null })
+                                progressData.state?.let { JobRecorder.onProgress(answeredAt, it) }
                             }
                             if (currentImageStr.isEmpty() && !ForgeQueueManager.isGenerating.value) {
                                 ForgeQueueManager.setLivePreviewImage(null)
@@ -708,15 +722,24 @@ object ForgeRepository {
                             connectionFailed(++failCount)
                         }
 
-                        val memoryEvery = if (ForgeQueueManager.isGenerating.value) MEMORY_EVERY_GENERATING_MS else MEMORY_EVERY_IDLE_MS
+                        // A job's record reads the VRAM at every ping until a reading after its first step (3.6.0), then
+                        // only as the meters do (3.4.0: on screen with the meters shown).
+                        val memoryEvery =
+                            when {
+                                JobRecorder.wantsVram() -> 0L
+                                ForgeQueueManager.isGenerating.value -> MEMORY_EVERY_GENERATING_MS
+                                else -> MEMORY_EVERY_IDLE_MS
+                            }
                         val now = System.currentTimeMillis()
-                        if (failCount == 0 && _isConnected.value && memoryWanted() && now - memoryReadAt >= memoryEvery) {
+                        val wanted = memoryWanted() || JobRecorder.wantsVram()
+                        if (failCount == 0 && _isConnected.value && wanted && now - memoryReadAt >= memoryEvery) {
                             memoryReadAt = now
                             refreshServerMemory()
                         }
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (SlowServer.isSlowAnswer(e) && start > 0) JobRecorder.onBusy(start, System.currentTimeMillis())
                     if (!serverTooBusy(e)) connectionFailed(++failCount)
                 }
                 pingRounds.update { it + 1 }
