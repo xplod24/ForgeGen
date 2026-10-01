@@ -56,6 +56,8 @@ class ForgeSettingsManagerConfigTest {
                 favoritesCheck = false,
                 imageJobs = false,
                 serverQueue = false,
+                generationHistory = false,
+                unloadAfterQueue = 30,
                 imageCacheMb = 1024,
                 galleryKeys = mapOf("http://192.168.1.90:7860" to GalleryKey.fingerprint("key")),
                 modelSettings =
@@ -91,6 +93,11 @@ class ForgeSettingsManagerConfigTest {
         assertEquals(AppConfig(timeout = 10, tagSuggestions = false), old)
         assertEquals(ImageCache.DEFAULT_MB, ForgeSettingsManager.loadConfig("""{"imageCacheMb":123}""").imageCacheMb)
         assertEquals(512, ForgeSettingsManager.loadConfig("""{"imageCacheMb":512}""").imageCacheMb)
+        // 3.6.0: the history is on and the model stays after the queue in a config from before.
+        assertEquals(true, old.generationHistory)
+        assertEquals(AutoUnload.OFF, old.unloadAfterQueue)
+        assertEquals(AutoUnload.OFF, ForgeSettingsManager.loadConfig("""{"unloadAfterQueue":7}""").unloadAfterQueue)
+        assertEquals(AutoUnload.AT_ONCE, ForgeSettingsManager.loadConfig("""{"unloadAfterQueue":-1}""").unloadAfterQueue)
     }
 
     @Test

@@ -56,7 +56,7 @@ class ServerTasksTest {
     }
 }
 
-/** 3.3.0: what the server page reads from Forge. */
+/** 3.3.0: what the server page reads from Forge (its report since 3.6.0 on "Check Now", ServerCheckTest). */
 class ServerInfoParserTest {
     @Test
     fun `version, system and GPU from Forge's report`() {
@@ -64,7 +64,7 @@ class ServerInfoParserTest {
             """{"Platform": "Windows-10-10.0.22631-SP0", "Python": "3.11.9", "Version": "neo-2.1",
                "Torch env info": {"torch_version": "2.3.1+cu121", "os": "Microsoft Windows 11 Pro",
                "nvidia_gpu_models": "GPU 0: NVIDIA GeForce RTX 4070 (UUID: GPU-1234)"}}"""
-        val info = ServerInfoParser.fromReport(report)
+        val info = ServerInfoParser.check(report, null, 0L)
         assertEquals("neo-2.1", info.version)
         assertEquals("Microsoft Windows 11 Pro · Python 3.11.9 · torch 2.3.1+cu121", info.system)
         assertEquals("NVIDIA GeForce RTX 4070", info.gpu)
@@ -76,14 +76,14 @@ class ServerInfoParserTest {
         val lines =
             """{"Platform": "Linux-6.8.0-x86_64", "Python": "3.10.14",
                "Torch env info": {"nvidia_gpu_models": ["GPU 0: NVIDIA A100", "GPU 1: NVIDIA A100"]}}"""
-        val info = ServerInfoParser.fromReport(lines)
+        val info = ServerInfoParser.check(lines, null, 0L)
         assertEquals("Linux · Python 3.10.14", info.system)
         assertEquals("NVIDIA A100", info.gpu)
         assertNull(info.version)
-        val broken = ServerInfoParser.fromReport("not json")
+        val broken = ServerInfoParser.check("not json", null, 0L)
         assertNull(broken.version)
         assertEquals("not json", broken.report)
-        assertNull(ServerInfoParser.fromReport("""{"Torch env info": {"nvidia_gpu_models": "None"}}""").gpu)
+        assertNull(ServerInfoParser.check("""{"Torch env info": {"nvidia_gpu_models": "None"}}""", null, 0L).gpu)
     }
 
     @Test

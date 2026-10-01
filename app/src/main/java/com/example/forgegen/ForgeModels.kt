@@ -103,6 +103,8 @@ data class AppConfig(
     var serverQueue: Boolean = true,
     // 3.6.0: each job's phases are recorded for the statistics, the queue's estimate and Group by Model (JobRecorder).
     var generationHistory: Boolean = true,
+    // 3.6.0: the server's model leaves VRAM when the queue is done (AutoUnload: OFF, AT_ONCE or minutes); off by default.
+    var unloadAfterQueue: Int = AutoUnload.OFF,
     // The image cache's size on the phone in MB (ImageCache.SIZES_MB, 3.4.0); used from the next start.
     var imageCacheMb: Int = ImageCache.DEFAULT_MB,
     // The gallery key's fingerprint for each server that asks for one (GalleryKey, 3.5.0): server address -> hash.
@@ -976,6 +978,20 @@ data class MemoryResponseDto(
 
 data class CudaStatDto(
     val system: MemoryStatDto?,
+    // What PyTorch has held (its peak since Forge started) and how often the card ran short (3.6.0, "Check Now").
+    val reserved: PeakStatDto? = null,
+    val events: CudaEventsDto? = null,
+)
+
+data class PeakStatDto(
+    val current: Double?,
+    val peak: Double?,
+)
+
+// num_alloc_retries (memory had to be freed before an allocation could go on) and num_ooms.
+data class CudaEventsDto(
+    val retries: Int?,
+    val oom: Int?,
 )
 
 data class MemoryStatDto(

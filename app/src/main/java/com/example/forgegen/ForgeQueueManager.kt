@@ -304,6 +304,7 @@ object ForgeQueueManager {
         loadQueueState()
         loadScheduleAndSpeed()
         startChangeCostsWatcher()
+        startAutoUnloadWatcher()
         startQueueWriter()
         startQueueWorker()
         startServiceWatcher()
@@ -409,6 +410,16 @@ object ForgeQueueManager {
         }
     }
 
+    /** A job added after the queue was done takes back the alarm of Unload After the Queue (3.6.0). */
+    private fun startAutoUnloadWatcher() {
+        ForgeRepository.repositoryScope.launch(Dispatchers.Default) {
+            _generationQueue
+                .map { q -> q.any { it.isRunnable() } }
+                .distinctUntilChanged()
+                .collect { waiting -> if (waiting && ::application.isInitialized) AutoUnload.cancel(application) }
+        }
+    }
+
     /**
      * Group by Model (3.6.0): each model's waiting jobs together. Returns the order before, for "Undo"; null when it
      * spares no model change.
@@ -431,6 +442,9 @@ object ForgeQueueManager {
         saveQueueState()
         dismissGrouping()
     }
+
+    /** What a cold start of [model] adds (the history's median), or null while none was recorded. */
+    fun coldStartMs(model: String): Long? = changeCosts.value.coldMs(model)
 
     /** "Not Now": no Group by Model until a job is added. */
     fun dismissGrouping() {
@@ -1152,6 +1166,8 @@ object ForgeQueueManager {
             // Nothing left to hold back: a paused empty queue would silently swallow the next job.
             _isQueuePaused.value = false
             _queuePauseReason.value = null
+            // The server's model can leave VRAM now or later (3.6.0, off unless chosen).
+            if (::application.isInitialized) AutoUnload.onQueueDone(application, ForgeRepository.config.value.unloadAfterQueue)
         }
 
         // One notification per job: "queue completed" replaces "batch completed" for the last job, and a

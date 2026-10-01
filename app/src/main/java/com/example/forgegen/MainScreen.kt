@@ -395,6 +395,9 @@ fun MainScreen(
                 canRestart = serverInfo?.canRestart,
                 restarting = restartingSince > 0,
                 onRestart = { confirmRestart = true },
+                unloadAfter = config.unloadAfterQueue,
+                onUnloadAfter = { viewModel.saveConfig(config.copy(unloadAfterQueue = it)) },
+                coldStart = viewModel.coldStartMs(selectedModel)?.let { QueueEstimate.formatAbout(it) },
             )
             // Whether Forge can be restarted from here (/sdapi/v1/cmd-flags), read once per server; the memory now, as
             // it is read only while the meters show (3.4.0).

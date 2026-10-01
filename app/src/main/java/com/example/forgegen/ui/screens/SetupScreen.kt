@@ -7,6 +7,7 @@ import com.example.forgegen.ui.components.LicenseDialog
 import com.example.forgegen.ui.components.MarkdownText
 import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
 import com.example.forgegen.ui.components.RestartForgeDialog
+import com.example.forgegen.ui.components.UnloadAfterQueueChoice
 import com.example.forgegen.ui.components.UpdateCard
 import com.example.forgegen.ui.components.UpdateMoveCard
 import com.example.forgegen.ui.components.WhatsNewDialog
@@ -66,6 +67,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.*
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /* ============================================================================
  * SETTINGS ROWS
@@ -235,6 +237,11 @@ fun SetupScreen(
     val serverMemory by viewModel.serverMemory.collectAsStateWithLifecycle()
     var confirmRestart by remember { mutableStateOf(false) }
     var showAllExtensions by remember { mutableStateOf(false) }
+    // Check Now (3.6.0): Forge's report on demand, kept for each server.
+    val serverCheck by viewModel.lastServerCheck.collectAsStateWithLifecycle()
+    val checkingSince by viewModel.checkingSince.collectAsStateWithLifecycle()
+    val checkProblem by viewModel.checkProblem.collectAsStateWithLifecycle()
+    var showPackages by remember { mutableStateOf(false) }
 
     // --- DIALOG VISIBILITY STATES ---
     var showUrlDialog by remember { mutableStateOf(false) }
@@ -498,42 +505,146 @@ fun SetupScreen(
                 ) { showGalleryKeyDialog = true }
             }
 
-            // What Forge tells about itself (3.3.0, board 2C): read once per server when the page shows.
+            // What Forge tells about itself (3.3.0, board 2C). Its flags and extensions are read when the page shows;
+            // its report only on "Check Now" (3.6.0, boards 4 and 5), and the last check is kept for each server.
             val info = serverInfo
-            add(SettingsPage.SERVER, "Server Info", "forge version server info commit ${info?.version.orEmpty()}") {
+            val check = serverCheck
+            add(SettingsPage.SERVER, "Server Info", "check now server info forge report last check sysinfo ${check?.version.orEmpty()}") {
                 LaunchedEffect(connection) { if (connection == ServerConnection.CONNECTED) viewModel.loadServerInfo() }
-                TextPreference(
-                    title = "Forge",
-                    subtitle =
-                        when {
-                            info?.version != null -> "Version ${info.version}"
-                            info?.reportProblem != null -> info.reportProblem
-                            connection != ServerConnection.CONNECTED -> "Shown when the app is connected"
-                            else -> "Reading the server's report..."
-                        },
-                    trailing = {
-                        Icon(Icons.Default.Refresh, contentDescription = "Read Again", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                ) { viewModel.loadServerInfo(again = true) }
+                LaunchedEffect(config.apiUrl) { viewModel.loadServerCheck() }
+                ServerCheckRow(
+                    check = check,
+                    checkingSince = checkingSince,
+                    problem = checkProblem,
+                    connected = connection == ServerConnection.CONNECTED,
+                    onCheck = viewModel::checkServer,
+                )
             }
-            if (info?.gpu != null || info?.system != null) {
-                add(SettingsPage.SERVER, "Server Info", "gpu graphics card vram cuda ${info.gpu.orEmpty()}") {
-                    val vram = serverMemory?.takeIf { it.hasVram }?.let { " · ${"%.0f".format(it.vramTotal)} GB" }.orEmpty()
-                    TextPreference(title = "GPU", subtitle = (info.gpu ?: "Not reported") + vram, trailing = null) {}
-                }
-                add(SettingsPage.SERVER, "Server Info", "system windows linux python torch ${info.system.orEmpty()}") {
-                    TextPreference(title = "System", subtitle = info.system ?: "Not reported", trailing = null) {}
-                }
-            }
-            if (info?.report != null) {
-                add(SettingsPage.SERVER, "Server Info", "share server report sysinfo bug report file") {
+            if (check != null) {
+                add(SettingsPage.SERVER, "Server Info", "forge version startup ${check.version.orEmpty()}") {
+                    val started = check.startupSeconds?.let { " · started in ${"%.1f".format(Locale.US, it)} s" }.orEmpty()
                     TextPreference(
-                        title = "Share Server Report",
-                        subtitle = "The server's details as a file, for a bug report (its settings and folders included)",
-                        trailing = {
-                            Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        },
-                    ) { viewModel.serverReportIntent()?.let { context.startActivity(it) } }
+                        title = "Forge",
+                        subtitle = (check.version?.let { "Version $it" } ?: "Not reported") + started,
+                        trailing = null,
+                    ) {}
+                }
+                add(SettingsPage.SERVER, "Server Info", "gpu graphics card vram cuda ${check.gpu.orEmpty()}") {
+                    val vram = check.vramTotalGb?.let { " · ${"%.0f".format(Locale.US, it)} GB" }.orEmpty()
+                    TextPreference(title = "GPU", subtitle = (check.gpu ?: "Not reported") + vram, trailing = null) {}
+                }
+                check.cpu?.let { cpu ->
+                    add(SettingsPage.SERVER, "Server Info", "processor cpu cores threads $cpu") {
+                        TextPreference(title = "Processor", subtitle = cpu, trailing = null) {}
+                    }
+                }
+                if (check.ramTotalGb != null) {
+                    add(SettingsPage.SERVER, "Server Info", "computer memory ram whole") {
+                        val used = check.ramUsedGb?.let { "${ServerMemory.gb(it)} of " }.orEmpty()
+                        TextPreference(
+                            title = "Computer Memory",
+                            subtitle =
+                                "$used${ServerMemory.gb(check.ramTotalGb)} GB\n" +
+                                    "The whole computer; the meter on the main screen shows Forge's share",
+                            trailing = null,
+                        ) {}
+                    }
+                }
+                add(SettingsPage.SERVER, "Server Info", "system windows linux python torch ${check.system.orEmpty()}") {
+                    TextPreference(title = "System", subtitle = check.system ?: "Not reported", trailing = null) {}
+                }
+                if (check.report != null) {
+                    add(SettingsPage.SERVER, "Server Info", "share server report sysinfo bug report file") {
+                        TextPreference(
+                            title = "Share Server Report",
+                            subtitle = "The report of the last check as a file, for a bug report (its settings and folders included)",
+                            trailing = {
+                                Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            },
+                        ) { viewModel.serverReportIntent()?.let { context.startActivity(it) } }
+                    }
+                }
+                // How the VRAM has held up since Forge started (/sdapi/v1/memory's counters).
+                check.outOfVram?.let { ooms ->
+                    add(SettingsPage.SERVER, "Server Health", "out of vram oom memory health") {
+                        TextPreference(
+                            title = "Out of VRAM",
+                            subtitle = if (ooms == 0) "Never since Forge started" else "${times(ooms)} since Forge started",
+                            titleColor = if (ooms > 0) MaterialTheme.colorScheme.error else Color.Unspecified,
+                            trailing = null,
+                        ) {}
+                    }
+                }
+                check.vramShort?.let { retries ->
+                    add(SettingsPage.SERVER, "Server Health", "vram short retries alloc slow health") {
+                        TextPreference(
+                            title = if (retries == 0) "VRAM Was Never Short" else "VRAM Was Short ${times(retries)}",
+                            subtitle =
+                                if (retries == 0) {
+                                    "Since Forge started the card never had to free memory before it could go on"
+                                } else {
+                                    "Since Forge started the card had to free memory before it could go on, which slows images down"
+                                },
+                            trailing = null,
+                        ) {}
+                    }
+                }
+                check.vramPeakGb?.let { peak ->
+                    add(SettingsPage.SERVER, "Server Health", "vram peak most held health") {
+                        val total = check.vramTotalGb?.let { " of ${ServerMemory.gb(it)}" }.orEmpty()
+                        TextPreference(
+                            title = "VRAM Peak",
+                            subtitle = "${ServerMemory.gb(peak)}$total GB\nThe most Forge has held since it started",
+                            trailing = null,
+                        ) {}
+                    }
+                }
+                val errorsGroup = if (check.errors.isEmpty()) "Forge Errors" else "Forge Errors · ${check.errors.size}"
+                if (check.errors.isEmpty()) {
+                    add(SettingsPage.SERVER, errorsGroup, "forge errors exceptions none") {
+                        TextPreference(title = "No Errors", subtitle = "Forge has kept none since it started", trailing = null) {}
+                    }
+                } else {
+                    check.errors.forEach { error ->
+                        add(SettingsPage.SERVER, errorsGroup, "forge errors exceptions ${error.message}") {
+                            TextPreference(title = error.message, subtitle = error.place, trailing = null) {}
+                        }
+                    }
+                    add(SettingsPage.SERVER, errorsGroup, "forge errors last five restart") {
+                        Text(
+                            "Forge keeps its last 5 errors, newest first, until it restarts",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                check.launchFlags?.let { flags ->
+                    add(SettingsPage.SERVER, "Start and Packages", "launch flags command line arguments $flags") {
+                        TextPreference(title = "Launch Flags", subtitle = flags, trailing = null) {}
+                    }
+                }
+                check.keyPackages?.let { packages ->
+                    add(SettingsPage.SERVER, "Start and Packages", "key packages torch xformers gradio $packages") {
+                        TextPreference(title = "Key Packages", subtitle = packages, trailing = null) {}
+                    }
+                }
+                if (check.packages.isNotEmpty()) {
+                    add(SettingsPage.SERVER, "Start and Packages", "all packages pip list") {
+                        TextPreference(
+                            title = "All Packages · ${check.packages.size}",
+                            subtitle = "Every Python package Forge runs with",
+                        ) { showPackages = true }
+                    }
+                }
+                if (check.turnedOffExtensions.isNotEmpty()) {
+                    add(SettingsPage.SERVER, "Start and Packages", "turned off extensions disabled inactive") {
+                        TextPreference(
+                            title = "Turned Off Extensions · ${check.turnedOffExtensions.size}",
+                            subtitle = check.turnedOffExtensions.joinToString(", "),
+                            trailing = null,
+                        ) {}
+                    }
                 }
             }
             info?.extensions?.let { extensions ->
@@ -559,6 +670,14 @@ fun SetupScreen(
                         }
                     }
                 }
+            }
+            add(SettingsPage.SERVER, "Control", "unload after the queue vram free model at once minutes") {
+                UnloadAfterQueueChoice(
+                    choice = config.unloadAfterQueue,
+                    onChoice = { viewModel.saveConfig(config.copy(unloadAfterQueue = it)) },
+                    coldStart = null,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
             }
             add(SettingsPage.SERVER, "Control", "restart forge server reboot api-server-stop") {
                 val restarting = restartingSince > 0
@@ -1535,6 +1654,9 @@ fun SetupScreen(
         }
 
 
+        if (showPackages) {
+            PackagesDialog(serverCheck?.packages.orEmpty()) { showPackages = false }
+        }
         if (confirmRestart) {
             RestartForgeDialog(viewModel, generating = generating, onDismiss = { confirmRestart = false })
         }
@@ -2055,6 +2177,137 @@ private fun tagListText(status: ForgeTagManager.Status): String {
                 if (status.count > 0) ". Using the saved $saved" else ". Wildcards and LoRAs are still suggested"
         ForgeTagManager.Source.FAILED -> (status.message ?: "The tag list could not be loaded") + ". Tap to try again"
     }
+}
+
+/** "once", "twice", "3 times". */
+private fun times(count: Int): String =
+    when (count) {
+        1 -> "once"
+        2 -> "twice"
+        else -> "$count times"
+    }
+
+/** "Today 14:32 · 2 hours ago", "Yesterday 9:05 · 1 day ago", "12/09/2026 18:00 · 19 days ago". */
+fun checkedText(
+    at: Long,
+    now: Long,
+): String {
+    val today =
+        java.util.Calendar
+            .getInstance()
+            .apply { timeInMillis = now }
+    val then =
+        java.util.Calendar
+            .getInstance()
+            .apply { timeInMillis = at }
+    val days =
+        (
+            (today.get(java.util.Calendar.YEAR) - then.get(java.util.Calendar.YEAR)) * 366 +
+                today.get(java.util.Calendar.DAY_OF_YEAR) - then.get(java.util.Calendar.DAY_OF_YEAR)
+        ).coerceAtLeast(0)
+    val day =
+        when (days) {
+            0 -> "Today"
+            1 -> "Yesterday"
+            else ->
+                java.text.DateFormat
+                    .getDateInstance(java.text.DateFormat.SHORT)
+                    .format(java.util.Date(at))
+        }
+    val minutes = ((now - at) / 60_000).coerceAtLeast(0)
+    val ago =
+        when {
+            minutes < 1 -> "just now"
+            minutes < 60 -> "$minutes min ago"
+            minutes < 24 * 60 -> (minutes / 60).let { if (it == 1L) "1 hour ago" else "$it hours ago" }
+            else -> (minutes / (24 * 60)).let { if (it == 1L) "1 day ago" else "$it days ago" }
+        }
+    return "$day ${QueueSchedule.formatTime(at)} · $ago"
+}
+
+/**
+ * "Check Now" (3.6.0, boards 4 and 5): when the last check was, or why there is none yet; while Forge writes its
+ * report, how long it has taken. The last check stays on the page until the new one is in.
+ */
+@Composable
+private fun ServerCheckRow(
+    check: ServerCheck?,
+    checkingSince: Long,
+    problem: String?,
+    connected: Boolean,
+    onCheck: () -> Unit,
+) {
+    // The seconds of a running check, and "2 hours ago", move with the clock.
+    val now by produceState(System.currentTimeMillis(), checkingSince) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(if (checkingSince != 0L) 1_000L else 30_000L)
+        }
+    }
+    val checking = checkingSince != 0L
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                when {
+                    checking -> "Reading Forge's report..."
+                    check != null -> "Last Check"
+                    else -> "Not Checked Yet"
+                },
+                fontSize = 16.sp,
+            )
+            Text(
+                when {
+                    checking ->
+                        "${(now - checkingSince).coerceAtLeast(0) / 1000} s" +
+                            if (check != null) " · the last check stays until the new one is in" else ""
+                    problem != null -> problem
+                    check != null -> checkedText(check.checkedAt, now)
+                    !connected -> "Shown when the app is connected"
+                    else ->
+                        "Forge's report tells its version, the GPU, the computer's memory, the last errors and how the VRAM " +
+                            "has held up. Reading it takes a few seconds, so the app does it only when you ask, and keeps what " +
+                            "it found until the next check."
+                },
+                fontSize = 13.sp,
+                lineHeight = 17.sp,
+                color =
+                    if (problem != null && !checking) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                    },
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        if (checking) {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
+        } else {
+            FilledTonalButton(onClick = onCheck, enabled = connected) { Text("Check Now") }
+        }
+    }
+}
+
+/** Every Python package of the last check ("All Packages"). */
+@Composable
+private fun PackagesDialog(
+    packages: List<String>,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("All Packages · ${packages.size}") },
+        text = {
+            androidx.compose.foundation.lazy.LazyColumn(modifier = Modifier.heightIn(max = 480.dp)) {
+                items(packages.size) { i ->
+                    Text(packages[i], fontSize = 13.sp, modifier = Modifier.padding(vertical = 3.dp))
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 /** An extension of the server: the ones the app uses with a tick and what for, the others with their version. */

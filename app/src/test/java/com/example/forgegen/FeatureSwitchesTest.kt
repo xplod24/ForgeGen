@@ -9,10 +9,11 @@ import org.junit.Test
 class FeatureSwitchesTest {
     @Test
     fun `the Features page says how many switches are on`() {
-        // Server Styles is off unless turned on (3.1.0), the others are on.
-        assertEquals("10 of 11 on", FeatureSwitches.summary(AppConfig()))
-        assertEquals("8 of 11 on", FeatureSwitches.summary(AppConfig(livePreview = false, folderCovers = false, serverStyles = false)))
-        assertEquals(11, FeatureSwitches.of(AppConfig()).size)
+        // Server Styles is off unless turned on (3.1.0), the others are on; Generation History since 3.6.0.
+        assertEquals("11 of 12 on", FeatureSwitches.summary(AppConfig()))
+        assertEquals("9 of 12 on", FeatureSwitches.summary(AppConfig(livePreview = false, folderCovers = false, serverStyles = false)))
+        assertEquals("10 of 12 on", FeatureSwitches.summary(AppConfig(generationHistory = false)))
+        assertEquals(12, FeatureSwitches.of(AppConfig()).size)
     }
 
     @Test

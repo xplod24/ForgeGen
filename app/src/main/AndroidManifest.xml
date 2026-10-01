@@ -109,6 +109,11 @@
             android:name=".QueueScheduleReceiver"
             android:exported="false" />
 
+        <!-- The alarm of "Unload After the Queue" (3.6.0). -->
+        <receiver
+            android:name=".AutoUnloadReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

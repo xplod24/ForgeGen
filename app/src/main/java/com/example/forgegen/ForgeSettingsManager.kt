@@ -366,6 +366,7 @@ object ForgeSettingsManager {
             imageJobs = parsed?.imageJobs ?: true,
             serverQueue = parsed?.serverQueue ?: true,
             generationHistory = parsed?.generationHistory ?: true,
+            unloadAfterQueue = AutoUnload.of(parsed?.unloadAfterQueue),
             imageCacheMb = ImageCache.sizeOf(parsed?.imageCacheMb),
             galleryKeys = parsed?.galleryKeys.orEmpty(),
             modelSettings = parsed?.modelSettings.orEmpty(),

@@ -263,6 +263,15 @@ object ForgeRepository {
         ForgeSettingsManager.init(app, db)
     }
 
+    /**
+     * For an alarm that wakes a closed app (Unload After the Queue, 3.6.0): the settings and the API client, without
+     * the ping or the service; nothing changes when the app runs.
+     */
+    suspend fun prepareApi(app: Application) {
+        initializeDatabaseAndSettings(app)
+        if (forgeApi == null) rebuildForgeApi(config.value.apiUrl)
+    }
+
     suspend fun initializeApiClientAndData() {
         ForgeSettingsManager.updateInitStatus("Preparing API Clients...")
         rebuildForgeApi(config.value.apiUrl)
@@ -537,8 +546,8 @@ object ForgeRepository {
     private var serverInfoJob: Job? = null
 
     /**
-     * Reads what the server page shows, once per server ([again]: anew): how it was started and its extensions
-     * first, then its report, which takes the server a few seconds (it lists its Python packages for it).
+     * Reads the light part of the server page, once per server ([again]: anew): how Forge was started and its
+     * extensions. Its report waits for "Check Now" (3.6.0, [checkServer]).
      */
     fun loadServerInfo(again: Boolean = false) {
         if (!again && (_serverInfo.value != null || serverInfoJob?.isActive == true)) return
@@ -546,33 +555,95 @@ object ForgeRepository {
         serverInfoJob?.cancel()
         serverInfoJob =
             repositoryScope.launch(Dispatchers.IO) {
-                var info = ServerInfo()
-                _serverInfo.value = info
+                _serverInfo.value = ServerInfo()
                 val flags = answer { api.getCmdFlags() }
                 val extensions = answer { api.getExtensions() }
-                info =
-                    info.copy(
+                _serverInfo.value =
+                    ServerInfo(
                         canRestart = flags?.body()?.let { ServerInfoParser.canRestart(it) },
                         extensions = extensions?.takeIf { it.isSuccessful }?.body()?.let { ServerInfoParser.extensions(it) },
                     )
-                _serverInfo.value = info
-                val report = answer { api.getSysinfo() }
-                info =
-                    when {
-                        report == null -> info.copy(reportProblem = "The server did not answer.")
-                        report.isSuccessful -> {
-                            val text = report.body()?.string().orEmpty()
-                            val read = ServerInfoParser.fromReport(text)
-                            info.copy(version = read.version, system = read.system, gpu = read.gpu, report = text)
-                        }
-                        report.code() == 404 ->
-                            info.copy(reportProblem = "Forge runs without its web UI (--nowebui), which gives the report.")
-                        report.code() == 401 || report.code() == 403 ->
-                            info.copy(reportProblem = "Forge's web UI asks for a login, so its report cannot be read.")
-                        else -> info.copy(reportProblem = "The report could not be read (HTTP ${report.code()}).")
-                    }
-                _serverInfo.value = info
             }
+    }
+
+    private const val SERVER_CHECK_KEY = "server_check:"
+
+    private val _serverCheck = MutableStateFlow<ServerCheck?>(null)
+
+    /** The last "Check Now" of the current server (3.6.0), kept until the next one; null before the first. */
+    val serverCheck: StateFlow<ServerCheck?> = _serverCheck.asStateFlow()
+
+    private val _checkingSince = MutableStateFlow(0L)
+
+    /** When the running "Check Now" began (0: none runs); Forge takes a few seconds for its report. */
+    val checkingSince: StateFlow<Long> = _checkingSince.asStateFlow()
+
+    private val _checkProblem = MutableStateFlow<String?>(null)
+
+    /** Why the last "Check Now" found nothing (e.g. a server without its web UI); null when it worked. */
+    val checkProblem: StateFlow<String?> = _checkProblem.asStateFlow()
+
+    // The server whose check [serverCheck] holds.
+    @Volatile private var checkedServer: String? = null
+
+    /** Reads the current server's last check from the settings, when the server page shows. */
+    fun loadServerCheck() {
+        val server = GalleryKey.serverOf(config.value.apiUrl)
+        if (server == checkedServer) return
+        checkedServer = server
+        _serverCheck.value = null
+        _checkProblem.value = null
+        repositoryScope.launch(Dispatchers.IO) {
+            val saved =
+                try {
+                    db.appSettingDao().getSetting(SERVER_CHECK_KEY + server)?.value?.let {
+                        ForgeSettingsManager.gson.fromJson(it, ServerCheck::class.java)
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "Could not read the last server check", e)
+                    null
+                }
+            if (checkedServer == server) _serverCheck.value = saved
+        }
+    }
+
+    /**
+     * "Check Now" (3.6.0): Forge's report and its VRAM counters, kept for this server. The last check stays on the
+     * page until the new one is in.
+     */
+    fun checkServer() {
+        val api = forgeApi ?: return
+        if (_checkingSince.value != 0L) return
+        val server = GalleryKey.serverOf(config.value.apiUrl)
+        _checkingSince.value = System.currentTimeMillis()
+        repositoryScope.launch(Dispatchers.IO) {
+            try {
+                val report = answer { api.getSysinfo() }
+                val memory = answer { api.getMemoryStats() }?.takeIf { it.isSuccessful }?.body()
+                ServerMemory.of(memory)?.let { _serverMemory.value = it }
+                val problem =
+                    when {
+                        report == null -> "The server did not answer."
+                        report.isSuccessful -> null
+                        report.code() == 404 -> "Forge runs without its web UI (--nowebui), which gives the report."
+                        report.code() == 401 || report.code() == 403 -> "Forge's web UI asks for a login, so its report cannot be read."
+                        else -> "The report could not be read (HTTP ${report.code()})."
+                    }
+                _checkProblem.value = problem
+                if (problem != null || report == null) return@launch
+                val check = ServerInfoParser.check(report.body()?.string().orEmpty(), memory, System.currentTimeMillis())
+                checkedServer = server
+                _serverCheck.value = check
+                db.appSettingDao().putSetting(AppSettingEntity(SERVER_CHECK_KEY + server, ForgeSettingsManager.gson.toJson(check)))
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.e(TAG, "Server check failed", e)
+                _checkProblem.value = "The report could not be read."
+            } finally {
+                _checkingSince.value = 0L
+            }
+        }
     }
 
     /** [call]'s answer, or null when the server could not be reached. */

@@ -579,6 +579,9 @@ class ForgeViewModel(
 
     fun dismissGrouping() = ForgeQueueManager.dismissGrouping()
 
+    /** What a cold start of [model] adds, from the job history (Unload After the Queue says it); null while not known. */
+    fun coldStartMs(model: String): Long? = ForgeQueueManager.coldStartMs(model)
+
     /** "Start at" [hour]:[minute]: today, or tomorrow when that time has passed. */
     fun scheduleQueueStart(
         hour: Int,
@@ -697,12 +700,23 @@ class ForgeViewModel(
     /** Null when Forge is restarting; else why it cannot (shown to the user). */
     suspend fun restartServer(): String? = ForgeRepository.restartServer()
 
-    /** A share sheet for the server's report (for a bug report); null while there is none. */
-    fun serverReportIntent(): android.content.Intent? =
-        serverInfo.value?.report?.let { text ->
-            val stamp = java.text.SimpleDateFormat("yyyy-MM-dd-HH-mm", java.util.Locale.US).format(java.util.Date())
-            DeviceImages.shareTextIntent(getApplication(), "sysinfo-$stamp.json", text)
-        }
+    /** A share sheet for the last checked report (for a bug report), named by the check's time; null without one. */
+    fun serverReportIntent(): android.content.Intent? {
+        val check = lastServerCheck.value ?: return null
+        val text = check.report ?: return null
+        val stamp = java.text.SimpleDateFormat("yyyy-MM-dd-HH-mm", java.util.Locale.US).format(java.util.Date(check.checkedAt))
+        return DeviceImages.shareTextIntent(getApplication(), "sysinfo-$stamp.json", text)
+    }
+
+    // --- CHECK NOW (3.6.0) ---
+
+    val lastServerCheck: StateFlow<ServerCheck?> = ForgeRepository.serverCheck
+    val checkingSince: StateFlow<Long> = ForgeRepository.checkingSince
+    val checkProblem: StateFlow<String?> = ForgeRepository.checkProblem
+
+    fun loadServerCheck() = ForgeRepository.loadServerCheck()
+
+    fun checkServer() = ForgeRepository.checkServer()
 
     fun queueGeneration() = ForgeQueueManager.queueGeneration()
 

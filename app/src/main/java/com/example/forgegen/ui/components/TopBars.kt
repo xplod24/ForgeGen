@@ -34,6 +34,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.forgegen.AutoUnload
 import com.example.forgegen.ServerConnection
 import com.example.forgegen.ServerMemory
 
@@ -240,6 +244,10 @@ fun ServerMemorySheet(
     canRestart: Boolean? = null,
     restarting: Boolean = false,
     onRestart: (() -> Unit)? = null,
+    // Unload After the Queue (3.6.0) and what a cold start of the selected model takes ("about 24 s"; null: not known).
+    unloadAfter: Int = AutoUnload.OFF,
+    onUnloadAfter: ((Int) -> Unit)? = null,
+    coldStart: String? = null,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(
@@ -292,12 +300,58 @@ fun ServerMemorySheet(
                 lineHeight = 16.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (onUnloadAfter != null) {
+                UnloadAfterQueueChoice(unloadAfter, onUnloadAfter, coldStart?.let { "$it for $modelName" })
+            }
             if (onRestart != null) {
                 RestartForgeButton(canRestart = canRestart, restarting = restarting, onClick = onRestart)
                 if (canRestart == false) {
                     Text(RESTART_NEEDS_FLAG_HINT, fontSize = 12.sp, lineHeight = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+    }
+}
+
+/**
+ * Unload After the Queue (3.6.0, board 9): off, at once, or 10 or 30 minutes after the queue is done; [coldStart] says
+ * what the next job's cold start takes ("about 24 s for animagineXL31").
+ */
+@Composable
+fun UnloadAfterQueueChoice(
+    choice: Int,
+    onChoice: (Int) -> Unit,
+    coldStart: String?,
+    modifier: Modifier = Modifier,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = modifier) {
+        Column {
+            Text("Unload After the Queue", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "When your queue is done and nobody else is generating, the model leaves VRAM so the computer has it back.",
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+            AutoUnload.CHOICES.forEachIndexed { index, value ->
+                SegmentedButton(
+                    selected = choice == value,
+                    onClick = { onChoice(value) },
+                    shape = SegmentedButtonDefaults.itemShape(index, AutoUnload.CHOICES.size),
+                    icon = {},
+                    label = { Text(AutoUnload.label(value), maxLines = 1, fontSize = 13.sp) },
+                )
+            }
+        }
+        if (choice != AutoUnload.OFF && coldStart != null) {
+            Text(
+                "The next job then starts cold: $coldStart.",
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
