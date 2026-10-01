@@ -417,6 +417,42 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `findPathsByPrompt` (SQL LIKE, escaped); sync reads `getAllPaths`. Grid and list: `GalleryThumbnail` (AsyncImage) +
   `Modifier.shimmer()` (draw phase). Models/LoRAs: `ResourcePickerSheet` (lazy, searchable). Undo history: 100 steps,
   typing grouped (800 ms). `PromptHighlighting` is an object. Tests: G32 (session, debounce, answer order).
+- **3.6.0 (minor "Feature", plan approved by the owner 2026-10-01; mockups "ForgeGen Statistics Proposal", boards
+  1-10):**
+  - **Extended index:** database 14 (`MIGRATION_13_14`): `gallery_images` gets `IndexDetails` columns (size, steps,
+    CFG, distilled CFG, scheduler, hires fix, modules, embeddings, clip skip, Forge version) and `details` (0 = to read).
+    New images get them from their infotext at once; older ones are read again by `fillDetails` through
+    `image_geninfo_batch`, 100 a request with pauses, never while generating, **never through IIB's `/db/*`**.
+  - **Generation history** (`JobRecorder`, table `job_runs`, switch "Generation History" on by default, no limit):
+    each job's phases measured from outside (Forge only prints its timer): a progress or memory answer slower than
+    1.5 s means Forge holds the GIL loading the model; until the first step the VRAM is read every ping (then the
+    3.4.0 battery rule again); step times are refined from the speed. `LoadedModel` per server (`loaded_model:<server>`)
+    predicts COLD/SWAP/SAME; a job predicted SAME that waited for a load is UNKNOWN and stays out of the medians.
+    Unload Model, Restart Forge and Unload After the Queue mark the next start cold.
+  - **Statistics:** `GalleryInsights` (Gallery tab, What You Like from favorites), `GenerationStatistics` (Generation
+    tab, job details with the VRAM chart). A row opens All Images with `GalleryFilters.detail` (`GalleryDetailFilter`,
+    a chip with a cross); every kind has its own DAO query.
+  - **Model changes** (`ModelChanges.kt`): `ModelChangeCosts` from the newest 1000 starts (median for the pair, else
+    for the model swapped in, else any swap; cold starts likewise; minus the same model's start). The queue's timeline
+    (`QueueEstimate.timeline`) adds them and marks each change; the speed is learned without the loading time
+    (`loadingMs`). `QueueGrouping.plan` is only a suggestion card (at least 2 changes spared, Undo, "Not Now" until a
+    job is added, `queue_grouping_dismissed`); the running or suspended job stays first, failed jobs stay put, and a
+    queue with a job without a checkpoint gets no suggestion.
+  - **Check Now:** `/internal/sysinfo` (slow: pip freeze) and `/sdapi/v1/memory` (num_ooms, num_alloc_retries,
+    reserved peak) only on the button; `ServerCheck` kept per server (`server_check:<server>`, Gson). Flags and
+    extensions still load by themselves. Share Server Report sends the kept report. Backups never carry it.
+  - **Unload After the Queue** (`AutoUnload`, `unloadAfterQueue`: OFF 0, AT_ONCE -1, 10, 30; off by default): checks
+    the app's queue, the server's progress and pending tasks and the loaded state first; a new job cancels the alarm
+    (only when one is pending, so other alarms' tests stay quiet); the alarm can wake a closed app (`prepareApi`).
+  - **Widgets** (`Widgets.kt` logic and `WidgetThrottle`, `WidgetViews.kt` RemoteViews): pushed by the app only while a
+    widget is on the home screen, progress at most every 10 % or 10 s. RemoteViews allow only some views: **no
+    `Space` or plain `View`** (a widget with one fails to load; gaps are margins, `setViewLayoutMargin`).
+  - **Backup format 3** adds `jobs` (read one by one; import `insertMissing`); formats 1 and 2 still read. "Generation
+    History" is in the wipe choice.
+  - **Tests:** unit `IndexDetailsTest`, `JobTimelineTest`, `StatisticsTest`, `QueueGroupingTest`, `ServerCheckTest`,
+    `WidgetsTest`, `BackupTest`; harness G49 (job phases on a stand-in that loads like Forge Neo), G50 (Group by Model),
+    G51 (Unload After the Queue), G52 (no report without Check Now), G53 (details, no `/db/*`), G54 (widget pushes);
+    Robolectric `MigrationTest` 12/13 -> 14 and screenshots s1-s8.
 - **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
   `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
   `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run

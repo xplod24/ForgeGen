@@ -485,6 +485,9 @@ object JobRecorder {
         return run
     }
 
+    /** Jobs were added from a backup or the history was wiped: what reads it reads it again. */
+    fun historyChanged() = _recorded.update { it + 1 }
+
     /** The job was cancelled (removed while running, or the app stopped it): nothing to record. */
     fun abandon() {
         current = null

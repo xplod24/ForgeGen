@@ -1408,6 +1408,8 @@ fun SetupScreen(
             var wipeHistory by remember { mutableStateOf(false) }
             var wipeWildcards by remember { mutableStateOf(false) }
             var wipeImages by remember { mutableStateOf(false) }
+            var wipeJobs by remember { mutableStateOf(false) }
+            val jobCount by produceState(0) { value = viewModel.jobHistoryCount() }
 
             val promptHistory by viewModel.promptHistory.collectAsStateWithLifecycle()
             val wildcards by viewModel.wildcards.collectAsStateWithLifecycle()
@@ -1447,11 +1449,15 @@ fun SetupScreen(
                             Checkbox(checked = wipeImages, onCheckedChange = { wipeImages = it })
                             Text("Images Index (Re-fetch later)", fontSize = 14.sp)
                         }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = wipeJobs, onCheckedChange = { wipeJobs = it })
+                            Text("Generation History ($jobCount jobs)", fontSize = 14.sp)
+                        }
                     }
                 },
                 confirmButton = {
                     // With nothing ticked the button used to silently wipe settings and history anyway.
-                    val anySelected = wipeSettings || wipePresets || wipeProfiles || wipeHistory || wipeWildcards || wipeImages
+                    val anySelected = wipeSettings || wipePresets || wipeProfiles || wipeHistory || wipeWildcards || wipeImages || wipeJobs
                     TextButton(
                         enabled = anySelected,
                         onClick = {
@@ -1462,6 +1468,7 @@ fun SetupScreen(
                                 if (wipeHistory) viewModel.wipePromptHistory()
                                 if (wipeWildcards) viewModel.wipeWildcards()
                                 if (wipeImages) viewModel.wipeGalleryIndex()
+                                if (wipeJobs) viewModel.wipeGenerationHistory()
                                 viewModel.showToast("Selected data wiped")
                                 showWipeDataDialog = false
                             }

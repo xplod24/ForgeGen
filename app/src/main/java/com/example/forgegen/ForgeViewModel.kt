@@ -677,6 +677,17 @@ class ForgeViewModel(
 
     fun wipeWildcards() = ForgePromptManager.deleteAllWildcards()
 
+    /** How many jobs the generation history holds (3.6.0, for the wipe choice). */
+    suspend fun jobHistoryCount(): Int = withContext(Dispatchers.IO) { ForgeRepository.db.jobRunDao().count() }
+
+    /** Wipes the generation history (3.6.0): the statistics, the queue's model changes and the widgets read it again. */
+    fun wipeGenerationHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            ForgeRepository.db.jobRunDao().clearAll()
+            JobRecorder.historyChanged()
+        }
+    }
+
     // --- DELEGATION OF ACTIONS TO QUEUE MANAGER ---
     fun resumeQueue() = ForgeQueueManager.resumeQueue()
 
@@ -756,6 +767,7 @@ class ForgeViewModel(
                         AppVersion.currentVersion,
                         favorites = ForgeGalleryManager.favoritesForBackup(),
                         queue = ForgeQueueManager.jobsForBackup(),
+                        jobs = ForgeRepository.db.jobRunDao().getAll(),
                     )
                 getApplication<Application>().contentResolver.openOutputStream(uri, "wt")?.use { it.write(json.toByteArray()) }
                     ?: throw java.io.IOException("The file cannot be written")
@@ -786,11 +798,19 @@ class ForgeViewModel(
                 ForgePromptManager.saveWildcards(backup.wildcards)
                 val favorites = ForgeGalleryManager.importFavorites(backup.favorites)
                 val jobs = ForgeQueueManager.importJobs(backup.queue)
+                // The generation history (3.6.0): the jobs this phone does not have yet.
+                val history =
+                    ForgeRepository.db
+                        .jobRunDao()
+                        .insertMissing(backup.jobs)
+                        .count { it != -1L }
+                if (history > 0) JobRecorder.historyChanged()
                 showToast(
                     "Settings imported: ${backup.config.presets.size} presets, ${backup.config.serverProfiles.size} server profiles, " +
                         "${backup.wildcards.size} wildcards" +
                         (if (favorites > 0) ", $favorites favorites" else "") +
-                        (if (jobs > 0) ", $jobs queued jobs (the queue is paused)" else ""),
+                        (if (jobs > 0) ", $jobs queued jobs (the queue is paused)" else "") +
+                        (if (history > 0) ", $history jobs of the generation history" else ""),
                 )
             } catch (e: Exception) {
                 showToast("Import failed: ${e.message}")

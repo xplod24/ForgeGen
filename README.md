@@ -82,7 +82,10 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 
 - A queue that runs in the background with its own notification, also with the screen off.
 - **Timeline:** the start time of each job, the progress and remaining time of the running one, and when the whole
-  queue should be done. Drag to reorder, Duplicate, Edit, Remove, Undo and **Skip Image**.
+  queue should be done, with the **model changes** it will need and their usual time. Drag to reorder, Duplicate,
+  Edit, Remove, Undo and **Skip Image**.
+- **Group by Model:** when running each model's jobs together saves at least two model changes, the queue offers it
+  with the time it saves (Undo, or "Not Now" until a job is added). The app never reorders the queue by itself.
 - **Start at** a chosen time of day.
 - **Overnight Batch Mode:** a failed job is set aside with its reason (Retry is one tap) and the queue goes on. A lost
   connection is retried; a server busy loading a checkpoint shows "Loading model …", not a lost connection.
@@ -90,6 +93,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 - Notifications for finished batches and queues, a vibration, a Quick Settings tile, launcher shortcuts (Generate
   Again, Queue, Gallery) and the progress as a **Live Update** on Android 16 or newer: a chip in the status bar, the
   lock screen, and the Now Bar on Samsung phones.
+- **Home screen widgets:** "Queue" (2×1) with the running job's progress and the queue's end, and "ForgeGen" (4×2)
+  with the connection, today's images and GPU time, the VRAM, Pause/Resume and Generate Again. The app pushes their
+  state only while a widget is on the home screen; they never ask the server and show no prompts or images.
 
 ### Gallery
 
@@ -101,15 +107,23 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   to the favorites, delete with Undo, or move and copy to a folder.
 - **Jobs from images:** Upscale Selected, More Like This (similar images or neighbouring seeds) and Variance on Seed
   (LoRA weights, CFG and steps varied over a range).
-- All Images in newest-first or random order, and **statistics**: images per day, and the models, LoRAs and tags
-  used most.
+- All Images in newest-first or random order, and **statistics** in two tabs. Gallery: images per day and month, the
+  models, LoRAs, tags, samplers, sizes, steps, CFG, hires fix, VAE and text encoders used most, embeddings and
+  negative tags, and **What You Like** (how often each one ends up in the favorites); tap a row to see its images.
+  Generation: from the **generation history** the app keeps on the phone, the GPU time, how long a cold start, a model
+  swap and the same model take to the first step, the speed by model and size, recent and failed jobs, and each job's
+  phases with its VRAM.
 
 ### Server
 
 - A top bar with the connection, the ping and **VRAM and RAM meters**. The Server Memory panel unloads the model or
   **restarts Forge**.
-- A server page with Forge's version, the GPU, the system, the extensions, a speed test of the server's endpoints and
-  **Share Server Report** for bug reports.
+- A server page with the extensions, a speed test of the server's endpoints and **Check Now**, which reads Forge's
+  report on demand and keeps the last one for each server: its version and start time, the GPU, the processor, the
+  computer's memory, the system, how the VRAM held up (out of memory, short, peak), Forge's last errors, launch flags
+  and packages, and **Share Server Report** for bug reports.
+- **Unload After the Queue:** the model leaves VRAM when your queue is done (at once, or after 10 or 30 minutes), only
+  when nobody else is generating. Off unless chosen.
 - Server profiles to switch between servers. When the server does not answer, the app keeps working offline and
   tries again when you come back, when the network returns or when you queue a job.
 
@@ -119,9 +133,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   switched off leaves the screen and the app stops asking the server for its data.
 - **Privacy and security:** App Lock (the phone's PIN or biometrics), hide the app in Recents, block screenshots, hide
   prompts in notifications, save images privately and share them without generation data.
-- **Backup and data:** export and import the settings, presets, server profiles, wildcards, gallery favorites and
-  queue; the image cache size (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log; and a choice of
-  what to wipe.
+- **Backup and data:** export and import the settings, presets, server profiles, wildcards, gallery favorites, queue
+  and generation history; the image cache size (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log;
+  and a choice of what to wipe.
 - **Updates from GitHub:** the app looks for a new release every 6 hours on Wi-Fi, checks the download's SHA-256 and
   installs it in the background where Android allows it, never while the queue works or while you use the app. In
   Settings > Updates a new version has its own section, with its notes and its download's progress. After an update
@@ -146,7 +160,7 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 | [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) extension | The gallery | Deleting, moving and copying need write access (not `IIB_ACCESS_CONTROL_PERMISSION=read-only`). With `IIB_SECRET_KEY` set, the app asks for the key once; with Forge's login on, the extension needs such a key. |
 | [tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete) extension | Tag suggestions | Optional. |
 | `--api-server-stop`, Forge started by `webui.bat` or `webui.sh` | Restart Forge | Optional. Without it the button is greyed out. |
-| Forge's web UI without a login (not `--nowebui`) | Seeing other jobs on the server | Optional. Without it the progress works as before. |
+| Forge's web UI without a login (not `--nowebui`) | Seeing other jobs on the server, Check Now | Optional. Without it the progress works as before and the server page says why there is no report. |
 
 For example, in `webui-user.bat` (Windows):
 
@@ -221,6 +235,10 @@ ForgeGen/
 │   ├── ForgeTagManager.kt        tag list for the suggestions
 │   ├── ForgeUpdateManager.kt     updates from GitHub (with SelfUpdate.kt)
 │   ├── GenerationService.kt      foreground service while the queue works
+│   ├── JobRecorder.kt            the generation history: each job's phases, VRAM and start kind
+│   ├── ModelChanges.kt           model change costs and Group by Model
+│   ├── AutoUnload.kt             Unload After the Queue
+│   ├── Widgets.kt                home screen widgets (state; WidgetViews.kt draws them)
 │   ├── ForgeApi.kt               the server's API (Retrofit)
 │   ├── ForgeModels.kt            data classes and the Room database
 │   └── ui/

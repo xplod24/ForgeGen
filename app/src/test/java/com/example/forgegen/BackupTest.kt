@@ -5,7 +5,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** 3.5.2-1: the backup (format 2) carries the gallery favorites and the queue, for the move to the app without ".debug". */
+/**
+ * 3.5.2-1: the backup (format 2) carries the gallery favorites and the queue, for the move to the app without ".debug";
+ * 3.6.0 (format 3) the generation history too.
+ */
 class BackupTest {
     private val payload =
         Txt2ImgPayloadDto(
@@ -47,7 +50,7 @@ class BackupTest {
                 ),
             )
         val json = Backup.write(AppConfig(), emptyList(), "3.5.2-1", favorites, queue)
-        assertTrue(json.contains("\"format\": 2"))
+        assertTrue(json.contains("\"format\": 3"))
         val read = Backup.read(json)!!
         assertEquals(favorites, read.favorites)
         assertEquals(queue, read.queue)
@@ -83,5 +86,66 @@ class BackupTest {
         val read = Backup.read(json)!!
         assertTrue(read.favorites.isEmpty())
         assertTrue(read.queue.isEmpty())
+    }
+
+    private fun run(
+        id: String,
+        curve: String? = "0:7.6,1000:9.0",
+    ) = JobRunEntity(
+        id,
+        "http://pc:7860",
+        "q-$id",
+        1_000L,
+        "animagineXL31.safetensors [abc]",
+        "",
+        null,
+        "SAME",
+        false,
+        832,
+        1216,
+        2,
+        28,
+        "Euler a",
+        "Karras",
+        null,
+        null,
+        null,
+        null,
+        700L,
+        9_000L,
+        null,
+        800L,
+        10_500L,
+        7.4f,
+        null,
+        7.6f,
+        9.0f,
+        12f,
+        curve,
+        "DONE",
+        null,
+        null,
+    )
+
+    @Test
+    fun `3_6_0 - the generation history comes back from a backup, VRAM readings and all`() {
+        val jobs =
+            listOf(run("a"), run("b", curve = null).copy(outcome = "FAILED", failure = "OUT_OF_VRAM", failureText = "CUDA out of memory"))
+        val json = Backup.write(AppConfig(), emptyList(), "3.6.0", jobs = jobs)
+        assertEquals(jobs, Backup.read(json)!!.jobs)
+    }
+
+    @Test
+    fun `3_6_0 - a format 2 backup reads without a history, and a broken job is left out`() {
+        val two = """{"app":"ForgeGen","format":2,"version":"3.5.3","config":{},"wildcards":[],"favorites":[],"queue":[]}"""
+        assertTrue(Backup.read(two)!!.jobs.isEmpty())
+        val broken =
+            """{"app":"ForgeGen","format":3,"config":{},"wildcards":[],"jobs":[{"id":"x"},""" +
+                com.google.gson
+                    .Gson()
+                    .toJson(run("ok")) + """,7]}"""
+        assertEquals(listOf("ok"), Backup.read(broken)!!.jobs.map { it.id })
+        val notList = """{"app":"ForgeGen","format":3,"config":{},"wildcards":[],"jobs":{"id":"x"}}"""
+        assertTrue(Backup.read(notList)!!.jobs.isEmpty())
     }
 }

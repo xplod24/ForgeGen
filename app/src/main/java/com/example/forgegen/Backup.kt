@@ -13,10 +13,12 @@ import com.google.gson.reflect.TypeToken
  * of it (3.5.0): they open the server's gallery like a password, so an import keeps the phone's own.
  * Since 3.5.2-1 (format 2) it also carries the gallery favorites and the queue, so everything moves to the app without
  * ".debug" in its package (3.5.2-2), which Android treats as another app. Older versions ignore those two parts.
+ * Since 3.6.0 (format 3) it also carries the generation history (job_runs); an import adds the jobs it does not have
+ * yet and keeps the ones it has. Formats 1 and 2 still read, without a history.
  * ============================================================================ */
 object Backup {
     private const val APP = "ForgeGen"
-    private const val FORMAT = 2
+    private const val FORMAT = 3
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
     class Contents(
@@ -24,6 +26,7 @@ object Backup {
         val wildcards: List<WildcardEntity>,
         val favorites: List<FavoriteImageEntity> = emptyList(),
         val queue: List<QueuedGeneration> = emptyList(),
+        val jobs: List<JobRunEntity> = emptyList(),
     )
 
     fun write(
@@ -32,6 +35,7 @@ object Backup {
         appVersion: String,
         favorites: List<FavoriteImageEntity> = emptyList(),
         queue: List<QueuedGeneration> = emptyList(),
+        jobs: List<JobRunEntity> = emptyList(),
     ): String =
         gson.toJson(
             linkedMapOf(
@@ -42,6 +46,7 @@ object Backup {
                 "wildcards" to wildcards,
                 "favorites" to favorites,
                 "queue" to queue,
+                "jobs" to jobs,
             ),
         )
 
@@ -66,7 +71,31 @@ object Backup {
             wildcards.filter { !it.name.isNullOrBlank() && it.content != null },
             favoritesOf(root.get("favorites")),
             queueOf(root.get("queue")),
+            jobsOf(root.get("jobs")),
         )
+    }
+
+    /**
+     * The recorded jobs of a backup (3.6.0), read one by one: a job Gson could not fill (no id, start kind or outcome)
+     * is left out, the others are kept.
+     */
+    private fun jobsOf(element: JsonElement?): List<JobRunEntity> {
+        val list = element?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptyList()
+        return list.mapNotNull { entry ->
+            runCatching {
+                // Gson leaves missing fields null even where Kotlin says they cannot be: reading them throws then.
+                gson.fromJson(entry, JobRunEntity::class.java)?.takeIf { job ->
+                    job.id.isNotBlank() &&
+                        job.server.length >= 0 &&
+                        job.model.length >= 0 &&
+                        job.modules.length >= 0 &&
+                        job.startKind.isNotEmpty() &&
+                        job.sampler.length >= 0 &&
+                        job.scheduler.length >= 0 &&
+                        job.outcome.isNotEmpty()
+                }
+            }.getOrNull()
+        }
     }
 
     /** The favorites of a backup, read field by field: an entry without its path is left out. */

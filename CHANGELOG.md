@@ -1,3 +1,19 @@
+## 3.6.0
+**Feature** · statistics that show where the time goes, a queue that groups jobs by model, home screen widgets and a server check on demand
+
+### New
+- **Statistics in two tabs:** Gallery adds images per month, samplers and schedulers, image sizes, steps and CFG, hires fix, VAE and text encoders, embeddings and negative tags, and What You Like: how often each model or setting ends up in your favorites. Tap a model, LoRA, tag, size or sampler to see its images in the gallery.
+- **Generation history:** the app keeps a record of your jobs on the phone. The Generation tab shows the GPU time, how long a cold start, a model swap and the same model take to the first step, the speed by model and size, the swaps you make most, recent and failed jobs, and each job's phases with its VRAM. Switch it off in Settings > Features.
+- **Group by Model:** when running each model's jobs together saves at least two model changes, the queue offers it with the time it saves. "Group" can be undone; "Not Now" hides it until you add a job.
+- **Unload After the Queue:** the server's model leaves VRAM when your queue is done, at once or after 10 or 30 minutes, only when nobody else is generating. Off unless you choose it in Server Memory or Settings > Server.
+- **Home screen widgets:** "Queue" shows the running job's progress and when the queue ends; "ForgeGen" adds the connection, today's images and GPU time, the VRAM, Pause and Generate Again. No prompts or images on the home screen.
+- **Server health:** after Check Now the server page shows how often the VRAM ran short or out since Forge started, its VRAM peak, the computer's memory and processor, Forge's last errors, its launch flags and packages.
+
+### Changed
+- The queue's end time counts the model changes it will need, and each one shows on the timeline with its usual time.
+- Forge's report is read only when you tap Check Now, and the last check is kept for each server; the launch flags and extensions still load by themselves.
+- Backups carry the generation history, and Wipe Application Data can clear it.
+
 ## 3.5.3
 **Bugfix** · loading another checkpoint no longer looks like a lost connection, and an update downloads below its notes
 
