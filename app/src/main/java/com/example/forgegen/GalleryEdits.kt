@@ -116,6 +116,50 @@ object GalleryFolders {
     }
 }
 
+/**
+ * The index in memory after a sync (3.6.0-1): the sync's changes go into the list the app holds, which used to be read
+ * whole from the database again after every new image. It keeps the database's order ([GalleryImageDao.getIndexedImages]).
+ */
+object GalleryIndex {
+    /** The newest first: by date, then by name, both descending, compared as SQLite compares text. */
+    val NEWEST_FIRST: Comparator<IndexedImage> =
+        Comparator { a, b ->
+            val byDate = byCodePoint(b.date, a.date)
+            if (byDate != 0) byDate else byCodePoint(b.name, a.name)
+        }
+
+    /** [index] without the [removed] paths, with [added] in (replacing an image of the same path) and [sizes] set. */
+    fun merge(
+        index: List<IndexedImage>,
+        removed: Collection<String>,
+        added: List<IndexedImage>,
+        sizes: Map<String, Long>,
+    ): List<IndexedImage> {
+        val fresh = added.associateBy { it.fullpath } // the last of a path wins, as the database's REPLACE does
+        val gone = HashSet<String>(removed).apply { addAll(fresh.keys) }
+        return (index.filter { it.fullpath !in gone } + fresh.values)
+            .map { image -> sizes[image.fullpath]?.let { image.copy(size = it) } ?: image }
+            .sortedWith(NEWEST_FIRST)
+    }
+
+    fun of(image: GalleryImageEntity) = IndexedImage(image.fullpath, image.name, image.date, image.model, image.loras, image.size)
+
+    /** SQLite compares text by its UTF-8 bytes, which sort as code points do (Kotlin compares UTF-16 units). */
+    fun byCodePoint(
+        a: String,
+        b: String,
+    ): Int {
+        var i = 0
+        while (i < a.length && i < b.length) {
+            val x = a.codePointAt(i)
+            val y = b.codePointAt(i)
+            if (x != y) return x.compareTo(y)
+            i += Character.charCount(x)
+        }
+        return (a.length - i).compareTo(b.length - i)
+    }
+}
+
 /** What the statistics show, worked out from the index on the phone. */
 data class GalleryStats(
     val images: Int,

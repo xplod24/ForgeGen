@@ -1,3 +1,12 @@
+## 3.6.0-1
+**Polish** · the gallery index and the connection do the same work with less: fewer database reads, folder listings and requests
+
+### Changed
+- **Gallery index:** new and deleted images go straight into the index the app holds, instead of the whole index being read from the phone's database again after every new image. Large galleries gain the most.
+- **Every folder is listed once a week** instead of once a day. The folders where images come and go are still listed at every update.
+- **An image whose generation data cannot be read** is tried three times, then left as it is until the app starts again, instead of its folder being listed again at every update.
+- **On screen with nothing to do** the app asks the server every 4 seconds instead of every 2. While generating or with jobs waiting nothing changes.
+
 ## 3.6.0
 **Feature** · statistics that show where the time goes, a queue that groups jobs by model, home screen widgets and a server check on demand
 

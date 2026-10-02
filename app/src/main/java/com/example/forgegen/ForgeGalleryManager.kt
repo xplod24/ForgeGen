@@ -46,6 +46,7 @@ import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -82,7 +83,12 @@ object ForgeGalleryManager {
     private const val DETAILS_PAUSE_MS = 500L
     private const val MAX_FOLDER_DEPTH = 3
     private const val RECENT_FOLDER_MS = 48 * 60 * 60 * 1000L // re-listed on every sync, as new images land there
-    private const val FULL_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000L
+
+    // Every folder listed once a week (3.6.0-1; daily before): a folder's date already shows images removed from it.
+    private const val FULL_SYNC_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000L
+
+    // How often one run of the app tries to read an image's generation data before it leaves the image as it is (3.6.0-1).
+    private const val MAX_INFO_TRIES = 3
     private const val AUTO_SYNC_INTERVAL_MS = 30_000L
     private const val NEW_IMAGE_SYNC_DELAY_MS = 2_000L
     private const val PROMPT_CACHE_SIZE = 300
@@ -225,6 +231,9 @@ object ForgeGalleryManager {
     @Volatile private var resyncRequested = false
 
     @Volatile private var lastAutoSyncAt = 0L
+
+    // The images whose generation data could not be read, with how many times this run of the app tried (3.6.0-1).
+    private val infoTries = ConcurrentHashMap<String, Int>()
 
     // --- Changing files (3.2.0) ---
 
@@ -587,6 +596,20 @@ object ForgeGalleryManager {
         }
     }
 
+    /** A sync's changes put into the index in memory (3.6.0-1), as [reloadIndex] would read them from the database. */
+    private fun mergeIndex(
+        removed: List<String>,
+        added: List<GalleryImageEntity>,
+        sizes: List<GalleryImageSize>,
+    ) {
+        synchronized(promptCache) {
+            removed.forEach { promptCache.remove(it) }
+            added.forEach { promptCache.remove(it.fullpath) } // an image read again may have its prompt now
+        }
+        val bytes = sizes.associate { it.fullpath to it.size }
+        indexedImages.update { GalleryIndex.merge(it, removed, added.map(GalleryIndex::of), bytes) }
+    }
+
     fun toggleGalleryMetadata() {
         val newVal = !_showGalleryMetadata.value
         _showGalleryMetadata.value = newVal
@@ -656,6 +679,7 @@ object ForgeGalleryManager {
             syncJob?.cancelAndJoin()
             getDb().galleryImageDao().clearAll()
             getDb().appSettingDao().removeSetting(FOLDER_DATES_KEY) // the next sync lists every folder again
+            infoTries.clear() // and tries every image anew
             reloadIndex() // empties the model/LoRA filter lists built from the index
             lastAutoSyncAt = 0L // opening the gallery builds it again at once
             ForgeRepository.showToast("Gallery Index Wiped")
@@ -1157,7 +1181,7 @@ object ForgeGalleryManager {
         _gallerySyncProgress.value = 0 to 0
         val result =
             try {
-                // Once a day every folder is listed, which also forgets images deleted in folders that look unchanged.
+                // Once a week every folder is listed, which also forgets images deleted in folders that look unchanged.
                 val lastFull = getDb().appSettingDao().getSetting(FULL_SYNC_AT_KEY)?.value?.toLongOrNull() ?: 0L
                 val full = System.currentTimeMillis() - lastFull >= FULL_SYNC_INTERVAL_MS
                 doSync(root, full).also {
@@ -1194,7 +1218,9 @@ object ForgeGalleryManager {
         full: Boolean,
     ): SyncResult {
         val dao = getDb().galleryImageDao()
-        val indexed = dao.getAllPaths() // only the paths: the whole index used to be read here, prompts included
+        // The paths from the index in memory once it is loaded (3.6.0-1), else only the paths from the database (the
+        // whole index used to be read here, prompts included).
+        val indexed = if (_indexLoaded.value) indexedImages.value.map { it.fullpath } else dao.getAllPaths()
         val indexedPaths = indexed.toHashSet()
         val unread = dao.getUnreadPaths().toHashSet()
 
@@ -1215,11 +1241,16 @@ object ForgeGalleryManager {
             }
         stale.chunked(500).forEach { dao.deleteImages(it) } // SQLite limits the number of parameters
 
-        // 3. Read the generation data of the new images (and of those it could not be read for before), 100 per
-        // request. An image whose data cannot be read is indexed anyway, so "All Images" shows every image.
-        val newFiles = listing.files.filter { it.fullpath !in indexedPaths || it.fullpath in unread }
+        // 3. Read the generation data of the new images (and of those it could not be read for before, at most
+        // MAX_INFO_TRIES times in a run of the app), 100 per request. An image whose data cannot be read is indexed
+        // anyway, so "All Images" shows every image.
+        val newFiles =
+            listing.files.filter {
+                it.fullpath !in indexedPaths || (it.fullpath in unread && (infoTries[it.fullpath] ?: 0) < MAX_INFO_TRIES)
+            }
         val reader = InfoReader()
         val failedFolders = HashSet<String>()
+        val inserted = ArrayList<GalleryImageEntity>()
         var failed = 0
         var done = 0
         _gallerySyncProgress.value = 0 to newFiles.size
@@ -1230,11 +1261,15 @@ object ForgeGalleryManager {
                 chunk.map { file ->
                     infos[file.fullpath]?.let { toEntity(file, it) } ?: run {
                         failed++
-                        failedFolders += parentOf(file.fullpath)
+                        // Its folder is listed again next time, for another try, until the tries run out.
+                        val tries = (infoTries[file.fullpath] ?: 0) + 1
+                        infoTries[file.fullpath] = tries
+                        if (tries < MAX_INFO_TRIES) failedFolders += parentOf(file.fullpath)
                         unreadEntity(file)
                     }
                 }
             dao.insertImages(entities)
+            inserted += entities
             done += chunk.size
             _gallerySyncProgress.value = done to newFiles.size
         }
@@ -1253,8 +1288,11 @@ object ForgeGalleryManager {
 
         // Folders with unreadable images are listed again next time, so those images get another try.
         saveFolderDates(listing.folderDates.filterKeys { it !in failedFolders })
-        // Read again only when something changed (3.4.0): each quiet sync used to read the whole index again.
-        if (stale.isNotEmpty() || newFiles.isNotEmpty() || sizes.isNotEmpty()) reloadIndex()
+        // Only when something changed (3.4.0): each quiet sync used to read the whole index again. 3.6.0-1: the changes
+        // go into the index in memory; it is read from the database only while it has not been loaded yet.
+        if (stale.isNotEmpty() || inserted.isNotEmpty() || sizes.isNotEmpty()) {
+            if (_indexLoaded.value) mergeIndex(stale, inserted, sizes) else reloadIndex()
+        }
 
         val saved = if (isAutoSavingAll()) autoSaveNewImages(root) else 0
         val added = newFiles.count { it.fullpath !in indexedPaths }

@@ -823,6 +823,7 @@ object ForgeRepository {
                         generating = ForgeQueueManager.isGenerating.value || _isServerBusy.value,
                         searching = System.currentTimeMillis() < _searchEndsAt.value,
                         failCount = failCount,
+                        jobsWaiting = ForgeQueueManager.generationQueue.value.any { it.status != GenerationStatus.FAILED },
                     )
                 withTimeoutOrNull(delayMs) { wakePing.receive() }
             }
@@ -832,7 +833,8 @@ object ForgeRepository {
     /**
      * The wait before the next ping. Connected: every second while images are generated on screen (progress and
      * preview), every 2 s while they are generated in the background (3.4.0: the notification shows no more than that)
-     * and on screen, every 10 s in the background (only while the queue works). Not connected: every
+     * and on screen while [jobsWaiting], every 4 s on screen with nothing to do (3.6.0-1; 2 s before: a job started
+     * asks at once, ForgeQueueManager), every 10 s in the background (only while the queue works). Not connected: every
      * [searchPingMs] during the minute of tries, then (only an active queue keeps trying) 5 s, 10 s, 30 s, 1 min.
      */
     internal fun pingDelay(
@@ -841,10 +843,11 @@ object ForgeRepository {
         generating: Boolean,
         searching: Boolean,
         failCount: Int,
+        jobsWaiting: Boolean,
     ): Long =
         when {
             connected && generating -> if (foreground) 1_000L else 2_000L
-            connected && foreground -> 2_000L
+            connected && foreground -> if (jobsWaiting) 2_000L else 4_000L
             connected -> 10_000L
             searching -> searchPingMs
             else ->
