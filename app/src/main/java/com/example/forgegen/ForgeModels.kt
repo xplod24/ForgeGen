@@ -453,9 +453,6 @@ data class GalleryImageSize(
 
 @Dao
 interface GalleryImageDao {
-    @Query("SELECT * FROM gallery_images WHERE fullpath = :path LIMIT 1")
-    suspend fun getImageByPath(path: String): GalleryImageEntity?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertImages(images: List<GalleryImageEntity>)
 
@@ -735,8 +732,7 @@ interface JobRunDao {
         AppSettingEntity::class,
         JobRunEntity::class,
     ],
-    // 12 (1.6.1): the civitai_models table is gone (MIGRATION_11_12).
-    // 13 (3.2.0): gallery_images.size (MIGRATION_12_13).
+    // 13 (3.2.0): where this app (io.github.xplod24.forgegen, 3.5.2-2) started, so the steps before it are gone.
     // 14 (3.6.0): gallery_images' details and the job_runs table (MIGRATION_13_14).
     version = 14,
     exportSchema = false,
@@ -926,16 +922,6 @@ data class SdModelItemDto(
     @SerializedName("model_name") val modelName: String?,
     // Null until Forge first loads the checkpoint and works out its hash (3.6.0: that load takes longer).
     val sha256: String? = null,
-)
-
-data class LoraItemDto(
-    val name: String?,
-    val path: String?,
-    val metadata: LoraMetadataDto?,
-)
-
-data class LoraMetadataDto(
-    @SerializedName("sshs_model_hash") val sshsModelHash: String?,
 )
 
 data class GitHubReleaseDto(
@@ -1203,14 +1189,6 @@ fun SdModelItemDto.toDomain() =
         path = this.filename ?: "",
         name = this.modelName ?: "Unknown",
         hash = this.sha256?.takeIf { it.isNotEmpty() },
-    )
-
-fun LoraItemDto.toDomain() =
-    ApiResource(
-        title = this.name ?: "Unknown LoRA",
-        path = this.path ?: "",
-        name = this.name ?: "Unknown",
-        hash = this.metadata?.sshsModelHash?.takeIf { it.isNotEmpty() } ?: this.name,
     )
 
 @Entity(tableName = "wildcards")

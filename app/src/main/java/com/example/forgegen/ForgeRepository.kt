@@ -190,32 +190,8 @@ object ForgeRepository {
         }
     }
 
-    // 1.3.0: Civitai's image ratings and the model's NSFW and real-person flags.
-    val MIGRATION_10_11 =
-        object : Migration(10, 11) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `previewImages` TEXT")
-                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `nsfw` INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE `civitai_models` ADD COLUMN `realPerson` INTEGER NOT NULL DEFAULT 0")
-            }
-        }
-
-    // 1.6.1: Civitai sync removed (model data comes from the server).
-    val MIGRATION_11_12 =
-        object : Migration(11, 12) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("DROP TABLE IF EXISTS `civitai_models`")
-            }
-        }
-
-    // 3.2.0: the files' sizes in the gallery index (statistics). The next sync lists every folder, which fills them in.
-    val MIGRATION_12_13 =
-        object : Migration(12, 13) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `gallery_images` ADD COLUMN `size` INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("DELETE FROM `app_settings` WHERE `key` = 'gallery_full_sync_at'")
-            }
-        }
+    // This app (io.github.xplod24.forgegen) started at 3.5.2-2 with database 13, so only the steps from 13 on are here;
+    // a database older than that (never this app's) is built anew by the fallback below.
 
     // 3.6.0: the rest of each image's generation settings (IndexDetails; old rows are read once more, details = 0) and
     // the jobs the app sent with their phases (JobRunEntity).
@@ -242,12 +218,6 @@ object ForgeRepository {
             }
         }
 
-    val MIGRATION_9_10 = object : Migration(9, 10) {
-        override fun migrate(db: SupportSQLiteDatabase) {
-            db.execSQL("CREATE TABLE IF NOT EXISTS `app_settings` (`key` TEXT NOT NULL, `value` TEXT NOT NULL, PRIMARY KEY(`key`))")
-        }
-    }
-
     suspend fun initializeDatabaseAndSettings(app: Application) {
         if (ForgeSettingsManager.isInitialized.value) return
 
@@ -255,7 +225,7 @@ object ForgeRepository {
         db =
             Room
                 .databaseBuilder(app, ForgeDatabase::class.java, "forge_db")
-                .addMigrations(MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+                .addMigrations(MIGRATION_13_14)
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
 

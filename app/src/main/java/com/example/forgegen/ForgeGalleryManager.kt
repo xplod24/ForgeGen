@@ -525,7 +525,6 @@ object ForgeGalleryManager {
         withContext(Dispatchers.IO) {
             DeviceImages.clearSharedCopies(application)
             _showGalleryMetadata.value = getDb().appSettingDao().getSetting(SHOW_META_KEY)?.value?.toBoolean() ?: false
-            migratePinnedToFavorites()
             loadFavoritePaths()
             _lastFolder.value =
                 getDb()
@@ -640,22 +639,6 @@ object ForgeGalleryManager {
         for (favorite in added) dao.insertFavorite(favorite)
         loadFavoritePaths()
         return added.size
-    }
-
-    /** Up to 1.0.2 images could also be "pinned", a second list of bookmarks; they become favorites. */
-    private suspend fun migratePinnedToFavorites() {
-        val pinned = ForgeSettingsManager.pinnedImages.value
-        if (pinned.isEmpty()) return
-        val favorites = getDb().favoriteImageDao()
-        val index = getDb().galleryImageDao()
-        for (path in pinned) {
-            if (!favorites.isFavorite(path)) {
-                favorites.insertFavorite(
-                    FavoriteImageEntity(fullpath = path, name = fileName(path), date = index.getImageByPath(path)?.date ?: ""),
-                )
-            }
-        }
-        ForgeSettingsManager.clearPinnedImages()
     }
 
     fun toggleFavorite(item: GalleryItem) {
@@ -898,8 +881,6 @@ object ForgeGalleryManager {
     }
 
     private fun parentOf(path: String) = norm(path).substringBeforeLast('/', "")
-
-    private fun fileName(path: String) = path.replace('\\', '/').trimEnd('/').substringAfterLast('/')
 
     private fun isImage(name: String) = name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
 

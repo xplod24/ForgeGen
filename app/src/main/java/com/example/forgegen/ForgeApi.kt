@@ -116,9 +116,6 @@ interface ForgeApi {
     @GET("sdapi/v1/sd-models")
     suspend fun getSdModels(): Response<List<SdModelItemDto>>
 
-    @GET("sdapi/v1/loras")
-    suspend fun getLoras(): Response<List<LoraItemDto>>
-
     /** The LoRAs with their whole metadata, read as it streams by LoraMetadata (3.1.0). */
     @Streaming
     @GET("sdapi/v1/loras")

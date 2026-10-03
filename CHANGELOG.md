@@ -1,3 +1,9 @@
+## 3.6.0-2
+**Polish** · a lighter app inside: the code left over from the move to this app and from long-gone versions is out
+
+### Changed
+- **Leftovers removed:** the steps that moved your data from the old app (3.5.2-1) to this one, the database upgrades from versions this app never had, and the move of 1.0.2's "pinned" images to the favorites. Nothing changes in use, and backups from older versions still import.
+
 ## 3.6.0-1
 **Polish** · the gallery index and the connection do the same work with less: fewer database reads, folder listings and requests
 

@@ -125,9 +125,7 @@ class UpdateDownloadService : Service() {
             }
             // Checked: "Install" in Settings > Updates takes it from here. Off screen, a notification says so.
             SelfUpdate.markReady(this, manifest, file)
-            if (!SelfUpdate.isAppOnScreen()) {
-                if (SelfUpdate.readyUpdate.value?.movesTo != null) SelfUpdate.notifyMove(this, name) else SelfUpdate.notifyReady(this, name)
-            }
+            if (!SelfUpdate.isAppOnScreen()) SelfUpdate.notifyReady(this, name)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

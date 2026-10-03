@@ -45,7 +45,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   22c6e6ad alone and that `apksigner lineage` finds none; remove `app/signing/forgegen-lineage.bin`), and updates
   build.gradle.kts comments, README (package, "Coming from 3.5.2-1 or older?" steps, signing) and this file; the
   manifest's `<queries>` went away with it (it named the app itself). Released after the owner confirmed 3.5.2-1
-  (2026-09-30); the owner then moved to the new app through the card without any trouble (confirmed 2026-09-30). The move code stays for a later move; the new app's first self-update asks for a confirmation once
+  (2026-09-30); the owner then moved to the new app through the card without any trouble (confirmed 2026-09-30). The move code was removed in 3.6.0-2 (owner's command: the bridge had done its work; it is in git up to v3.6.0-1 for a later move); the new app's first self-update asks for a confirmation once
   (the old app or the system's installer is its installer of record).
 - **Releasing:** raise the version in `gradle.properties`, add a `## <version>` section at the top of `CHANGELOG.md` (the release notes, also shown in the app's "What's New" dialog) and push to master. `.github/workflows/release.yml` tests, builds, signs (`tools/sign-apk.sh`, 3.5.1) and publishes `v<version>` with `ForgeGen.apk` (`app-debug.apk` up to 3.5.2; the updater takes any `.apk` of a release) and, since 3.5.0, R8's `mapping.zip` only if that tag does not exist yet and is newer than the last `v*` tag; other pushes just test and build. `ci.yml` tests and builds pull requests and pushes to work branches (so a change is known to compile before master) and must never publish a release (it would become "latest"). AGP 9 creates unit tests only for the debug variant (`testDebugUnitTest`). The session cannot push tags, the workflow creates them.
 - **What's New:** the build copies `CHANGELOG.md` into the assets (`copyAppAssets` in `app/build.gradle.kts`, which since 3.4.2 also copies `LICENSE`). After an update `ForgeViewModel.checkWhatsNew` takes the sections newer than the last version seen (`whats_new_last_version` setting; without it only the current version, and nothing after a fresh install) into `whatsNew` and sets `whatsNewBar`. Since 3.0.0 (owner's request) `WhatsNewBar` (MainActivity's overlay, top centre, once unlocked and past the start) floats half-transparent at the top: slides in, bobs (infinite transition, ±3 dp), shakes lightly every 5 s (`Animatable` in a `LaunchedEffect`), and after `WHATS_NEW_BAR_MS` = 30 s flies up off the screen (`hideWhatsNewBar`, which also drops the notes). The version counts as seen when the bar shows (`markWhatsNewSeen`). "Show" = `openWhatsNew` (`whatsNewOpen`) -> `WhatsNewDialog`, rendered by `Markdown.parse` + `MarkdownText`; OK = `dismissWhatsNew`. Debug "Show What's New" shows the bar again. Keep the changelog in simple Markdown (`## version`, `- ` items, **bold**, `code`, [links](url)). Since 3.0.0-4 (owner's rule, see CLAUDE.md) every section starts with `**<Kind>** · summary` (Bugfix, Polish, Feature, Overhaul) and has `### New` / `### Changed` / `### Fixed`; MarkdownTest checks it. Tests: G18.
@@ -56,7 +56,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   changelog goes through MarkdownText.
   Since 3.5.3 (owner's design, previewed 2026-10-01 from Robolectric frames) the card is `UpdateCard` and sits in its
   own section "New Version" (`NEW_VERSION`) below App Version / License / Install Updates Automatically / Check for
-  Updates, with the move card (3.5.2-1) and the "Installing" card. It stays while the update downloads: the notes stay,
+  Updates, with the "Installing" card (and the 3.5.2-1 move card until 3.6.0-2). It stays while the update downloads: the notes stay,
   the Dismiss/Download row folds away and `DownloadProgress` slides out below them (expandVertically from the top +
   fade, 320 ms, the bar animated); once ready it folds back, "Update Ready" + "Downloaded and checked" and "Install"
   come out. The separate "Downloading" card is gone (it replaced the notes in one frame).
@@ -224,8 +224,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   (`GalleryFolders.imageCounts`, subfolders included). Favorites check when the Favorites tab shows (every 5 min at
   most). All Images order `AllImagesOrder` (seeded shuffle). Statistics screen (route `gallery_stats`, `GalleryStatsScreen`)
   from `indexedImages` + prompts read 2000 at a time (`getPrompts`), `GalleryStatistics` (pure). DB 13:
-  `gallery_images.size` (bytes, from the listing's `bytes`), `MIGRATION_12_13` also deletes `gallery_full_sync_at` so
-  the first sync after the update lists every folder and `updateSizes` fills old rows. UI: `SelectionMoreMenu`,
+  `gallery_images.size` (bytes, from the listing's `bytes`), `MIGRATION_12_13` (removed in 3.6.0-2) also deleted `gallery_full_sync_at` so
+  the first sync after the update listed every folder and `updateSizes` filled old rows. UI: `SelectionMoreMenu`,
   `UndoDeleteBar` (gallery and viewer), `FolderPickerSheet`, `FolderCover`, `MissingFavoritesNote`,
   `AllImagesOrderRow` (ui/components/GalleryActions.kt). Tests: `GalleryEditsTest`, harness G43 (13), Robolectric rig
   `MigrationTest` (real Room, 12 -> 13).
@@ -469,6 +469,15 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
     once through `pingNow`).
   - **Tests:** unit `GalleryIndexTest`; harness G55 (no index or path reads after a sync, three tries, weekly full
     sync, ping cadence), G53 reloads the index after writing old rows.
+- **3.6.0-2 (micro-patch "Polish" on the owner's command; group 1 of the code review 2026-10-03):** code for users
+  this app can never have, removed: the 3.5.2-1 move bridge (`UpdateMoveCard`, `ReadyUpdate.movesTo`, `notifyMove`,
+  `isInstalled`, `appInfoIntent`; `installerIntent` stays for `offerInstallerScreen`), the database steps 9->13 (this
+  app started at 3.5.2-2 with database 13; only `MIGRATION_13_14` is left, an older database is rebuilt by
+  `fallbackToDestructiveMigration`), the 1.0.2 "pinned images" (`pinned_images` setting, `migratePinnedToFavorites`,
+  `getImageByPath`) and the unused `getLoras`/`LoraItemDto`/`LoraMetadataDto` (LoRAs come from
+  `getLorasWithMetadata` since 3.1.0). Backup formats 1 and 2 are still read. The review's group 2 (splitting
+  `SetupScreen` per page and `ForgeGalleryManager` per area) waits for the owner; group 3 (dropping the ViewModel's
+  pass-throughs, a helper for the 74 cancellation re-throws, merging the two sets of path helpers) was advised against.
 - **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
   `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
   `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run

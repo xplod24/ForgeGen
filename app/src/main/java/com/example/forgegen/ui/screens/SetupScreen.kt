@@ -9,7 +9,6 @@ import com.example.forgegen.ui.components.RESTART_NEEDS_FLAG_HINT
 import com.example.forgegen.ui.components.RestartForgeDialog
 import com.example.forgegen.ui.components.UnloadAfterQueueChoice
 import com.example.forgegen.ui.components.UpdateCard
-import com.example.forgegen.ui.components.UpdateMoveCard
 import com.example.forgegen.ui.components.WhatsNewDialog
 import android.content.Context
 import android.content.Intent
@@ -328,10 +327,6 @@ fun SetupScreen(
     var isLiveUpdateAllowed by remember { mutableStateOf(LiveUpdates.isAllowedBySystem(context)) }
     var areNotificationsAllowed by remember { mutableStateOf(LiveUpdates.areNotificationsAllowed(context)) }
     var promotedLastTime by remember { mutableStateOf(LiveUpdates.promotedLastTime(context)) }
-    // The latest release is another app (3.5.2-1): whether it is installed yet, read again when the app comes back.
-    val movesTo = readyUpdate?.takeIf { it.versionCode == updateManifest?.versionCode }?.movesTo
-    var moveTargetInstalled by remember { mutableStateOf(false) }
-    LaunchedEffect(movesTo) { moveTargetInstalled = movesTo != null && SelfUpdate.isInstalled(context, movesTo) }
 
     // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION AND LIVE NOTIFICATION REFRESH ---
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -343,7 +338,6 @@ fun SetupScreen(
                     isLiveUpdateAllowed = LiveUpdates.isAllowedBySystem(context)
                     areNotificationsAllowed = LiveUpdates.areNotificationsAllowed(context)
                     promotedLastTime = LiveUpdates.promotedLastTime(context)
-                    readyUpdate?.movesTo?.let { moveTargetInstalled = SelfUpdate.isInstalled(context, it) }
                 }
             }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -1117,41 +1111,8 @@ fun SetupScreen(
                 }
             }
             val manifest = updateManifest
-            if (download == null && installing == null && manifest != null && movesTo != null) {
-                // Another app (3.5.2-1): no "Install", no "Dismiss"; the steps move the data to it.
-                add(SettingsPage.UPDATES, NEW_VERSION, "update new app move data export import uninstall ${manifest.versionName}") {
-                    UpdateMoveCard(
-                        versionName = manifest.versionName,
-                        newPackage = movesTo,
-                        newAppInstalled = moveTargetInstalled,
-                        onExport = {
-                            val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-                            exportLauncher.launch("forgegen-backup-$date.json")
-                        },
-                        onInstall = {
-                            try {
-                                context.startActivity(SelfUpdate.installerIntent(context, SelfUpdate.apkFile(context)))
-                            } catch (e: Exception) {
-                                viewModel.showToast("Cannot open the installer: ${e.message}")
-                            }
-                        },
-                        onOpen = {
-                            context.packageManager.getLaunchIntentForPackage(movesTo)?.let {
-                                context.startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                            } ?: viewModel.showToast("The new app is not installed yet")
-                        },
-                        onUninstall = {
-                            try {
-                                context.startActivity(SelfUpdate.appInfoIntent(context))
-                            } catch (e: Exception) {
-                                viewModel.showToast("Cannot open the app info: ${e.message}")
-                            }
-                        },
-                    )
-                }
-            }
             // Also while it downloads: the notes stay and the progress slides out below them (UpdateCard).
-            val offerUpdate = installing == null && manifest != null && movesTo == null
+            val offerUpdate = installing == null && manifest != null
             if (offerUpdate && manifest != null && (manifest.versionCode != dismissedUpdateVersion || download != null)) {
                 val ready = readyUpdate?.takeIf { it.versionCode == manifest.versionCode }
                 add(SettingsPage.UPDATES, NEW_VERSION, "update available download install new version ${manifest.versionName}") {
@@ -1273,13 +1234,9 @@ fun SetupScreen(
                 (
                     installingUpdate?.let { "Installing $it" }
                         ?: updateDownload?.let { d -> "Downloading ${d.versionName} · ${(d.fraction * 100).toInt()}%" }
-                        ?: readyUpdate?.takeIf { it.versionCode == updateManifest?.versionCode }?.let {
-                            if (it.movesTo != null) {
-                                "${it.versionName} is a new app: move your data"
-                            } else {
-                                "${it.versionName} ready to install"
-                            }
-                        }
+                        ?: readyUpdate
+                            ?.takeIf { it.versionCode == updateManifest?.versionCode }
+                            ?.let { "${it.versionName} ready to install" }
                         ?: ("${BuildConfig.VERSION_NAME} · " + if (config.autoInstallUpdates) "installs automatically" else "notifies only")
                 ),
             SettingsPage.DATA to "Export, import, logs, image cache, wipe",

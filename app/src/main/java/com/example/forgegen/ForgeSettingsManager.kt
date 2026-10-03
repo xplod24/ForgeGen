@@ -53,7 +53,6 @@ object ForgeSettingsManager {
     const val CONFIG_KEY = "config"
     const val STATE_KEY = "last_state"
     const val HISTORY_KEY = "prompt_history"
-    const val PINNED_IMAGES_KEY = "pinned_images"
 
     // 0 would mean "no timeout" in OkHttp and a negative value throws, so user input is clamped.
     private const val MIN_TIMEOUT_SECONDS = 1
@@ -109,19 +108,6 @@ object ForgeSettingsManager {
     private val _promptHistory = MutableStateFlow<List<PromptHistoryItem>>(emptyList())
     val promptHistory: StateFlow<List<PromptHistoryItem>> = _promptHistory.asStateFlow()
 
-    // --- Pinned Images (up to 1.0.2) ---
-    // Pins were a second list of bookmarks next to the favorites. ForgeGalleryManager moves them into the
-    // favorites once and then clears them here.
-    private val _pinnedImages = MutableStateFlow<Set<String>>(emptySet())
-    val pinnedImages: StateFlow<Set<String>> = _pinnedImages.asStateFlow()
-
-    fun clearPinnedImages() {
-        _pinnedImages.value = emptySet()
-        settingsScope.launch(dbWriteDispatcher) {
-            db.appSettingDao().removeSetting(PINNED_IMAGES_KEY)
-        }
-    }
-
     /**
      * Callback invoked when the API URL changes, so ForgeRepository can rebuild the ForgeApi.
      * Set by ForgeRepository during its init().
@@ -142,16 +128,6 @@ object ForgeSettingsManager {
         val loadedConfig = loadConfig(dao.getSetting("config")?.value)
         val loadedState = loadState(dao.getSetting("last_state")?.value, loadedConfig)
         val loadedHistory = loadPromptHistory(dao.getSetting("prompt_history")?.value)
-        
-        val pinnedJson = dao.getSetting("pinned_images")?.value
-        val loadedPinnedImages = if (!pinnedJson.isNullOrEmpty()) {
-            try {
-                val type = object : TypeToken<Set<String>>() {}.type
-                gson.fromJson<Set<String>>(pinnedJson, type)
-            } catch (e: Exception) { emptySet() }
-        } else {
-            emptySet()
-        }
 
         _config.value = loadedConfig
         cacheThemeMode(loadedConfig.themeMode)
@@ -159,7 +135,6 @@ object ForgeSettingsManager {
         SelfUpdate.setAutoInstall(app, loadedConfig.autoInstallUpdates)
         _appState.value = loadedState
         _promptHistory.value = loadedHistory
-        _pinnedImages.value = loadedPinnedImages
 
         client = createClient(loadedConfig.timeout)
         startStateWriter()

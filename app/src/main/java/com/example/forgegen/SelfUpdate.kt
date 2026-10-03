@@ -11,11 +11,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
-import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.Settings
 import android.util.Log
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CoroutineScope
@@ -44,10 +41,6 @@ import java.security.MessageDigest
  *   its SHA-256 matches the release (readyUpdate), and only then "Install" sends the app to the background and hands
  *   the file to PackageInstaller (installing until the app is replaced or the system says why not). One tap used to
  *   do both, and the card offered it again while the install waited, so each tap started another install.
- * - A release of another package (3.5.2-1: 3.5.2-2 drops ".debug" from it) is a new app, not an update: PackageInstaller
- *   refuses it for this app's session. ReadyUpdate.movesTo names it; nothing installs it by itself, one notification
- *   says so, and Settings > Updates shows the move: export, install the new app (the system's installer), import there,
- *   uninstall this one.
  * ============================================================================ */
 object SelfUpdate {
     private const val TAG = "SelfUpdate"
@@ -62,7 +55,6 @@ object SelfUpdate {
     private const val KEY_AUTO_INSTALL = "auto_install"
     private const val KEY_INSTALLING = "installing_version"
     private const val KEY_NOTIFIED = "notified_version"
-    private const val KEY_MOVE_NOTIFIED = "move_notified_version"
 
     // "<versionCode>:<file length>" of the downloaded update whose SHA-256 matched the release.
     private const val KEY_READY = "ready_update"
@@ -89,15 +81,11 @@ object SelfUpdate {
         _downloadProgress.value = progress
     }
 
-    /**
-     * A downloaded update whose file matched the release: "Install" can take it (3.0.0-3). [movesTo]: the file is
-     * another app, this package name (3.5.2-1).
-     */
+    /** A downloaded update whose file matched the release: "Install" can take it (3.0.0-3). */
     data class ReadyUpdate(
         val versionCode: Int,
         val versionName: String,
         val size: Long,
-        val movesTo: String? = null,
     )
 
     private val _readyUpdate = MutableStateFlow<ReadyUpdate?>(null)
@@ -127,36 +115,8 @@ object SelfUpdate {
         file: File,
     ) {
         prefs(context).edit().putString(KEY_READY, "${manifest.versionCode}:${file.length()}").apply()
-        _readyUpdate.value = ReadyUpdate(manifest.versionCode, manifest.versionName, file.length(), movesTo(context, file))
+        _readyUpdate.value = ReadyUpdate(manifest.versionCode, manifest.versionName, file.length())
     }
-
-    /** The package of the app in [file], when it is not this one (3.5.2-1); null for an update of this app. */
-    fun movesTo(
-        context: Context,
-        file: File,
-    ): String? {
-        val info =
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    context.packageManager.getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(0))
-                } else {
-                    @Suppress("DEPRECATION")
-                    context.packageManager.getPackageArchiveInfo(file.path, 0)
-                }
-            } catch (e: Exception) {
-                null
-            }
-        return info?.packageName?.takeIf { it != context.packageName }
-    }
-
-    /**
-     * Whether the app [packageName] is installed. Android 11+ shows another app only when the manifest's <queries>
-     * names it: 3.5.2-1 named the app without ".debug"; since 3.5.2-2 that is this app, so the list is gone.
-     */
-    fun isInstalled(
-        context: Context,
-        packageName: String,
-    ): Boolean = runCatching { context.packageManager.getPackageInfo(packageName, 0) }.isSuccess
 
     fun clearReady(context: Context) {
         prefs(context).edit().remove(KEY_READY).apply()
@@ -172,7 +132,7 @@ object SelfUpdate {
         val saved = prefs(context).getString(KEY_READY, null)
         _readyUpdate.value =
             if (manifest != null && file.exists() && saved == "${manifest.versionCode}:${file.length()}") {
-                ReadyUpdate(manifest.versionCode, manifest.versionName, file.length(), movesTo(context, file))
+                ReadyUpdate(manifest.versionCode, manifest.versionName, file.length())
             } else {
                 null
             }
@@ -364,11 +324,6 @@ object SelfUpdate {
                     return
                 }
                 markReady(context, manifest, file)
-                // Another app (3.5.2-1): only the user can move the data, so it is said once and not installed.
-                if (_readyUpdate.value?.movesTo != null) {
-                    notifyMove(context, manifest.versionName)
-                    return
-                }
                 // The user may have opened the app or started the queue during the download.
                 if (isAppOnScreen() || ForgeQueueManager.isQueueActive.value || ForgeQueueManager.isGenerating.value) return
                 install(context, file, manifest.versionName)
@@ -387,21 +342,6 @@ object SelfUpdate {
         if (prefs(context).getString(KEY_NOTIFIED, null) == versionName) return
         prefs(context).edit().putString(KEY_NOTIFIED, versionName).apply()
         post(context, "ForgeGen $versionName is available", text, ForgeNotifications.openAppIntent(context))
-    }
-
-    /** A release that is another app (3.5.2-1), once per version. */
-    fun notifyMove(
-        context: Context,
-        versionName: String,
-    ) {
-        if (prefs(context).getString(KEY_MOVE_NOTIFIED, null) == versionName) return
-        prefs(context).edit().putString(KEY_MOVE_NOTIFIED, versionName).apply()
-        post(
-            context,
-            "ForgeGen $versionName is a new app",
-            "Open ForgeGen, Settings > Updates, to move your data to it.",
-            ForgeNotifications.openAppIntent(context),
-        )
     }
 
     fun notifyConfirm(
@@ -430,7 +370,7 @@ object SelfUpdate {
         versionName: String,
     ) = post(context, "ForgeGen $versionName is downloaded", "Tap to open ForgeGen and install it.", ForgeNotifications.openAppIntent(context))
 
-    /** The system's installer screen for [file]: for an update PackageInstaller refused, or a new app (3.5.2-1). */
+    /** The system's installer screen for [file], for an update PackageInstaller refused. */
     fun installerIntent(
         context: Context,
         file: File,
@@ -440,11 +380,6 @@ object SelfUpdate {
             .setDataAndType(uri, "application/vnd.android.package-archive")
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-
-    /** This app's page in the system settings, where it is uninstalled (no permission needed, unlike ACTION_DELETE). */
-    fun appInfoIntent(context: Context): Intent =
-        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
     /** PackageInstaller could not be used: the system's installer screen, one tap away in a notification. */
     fun offerInstallerScreen(
