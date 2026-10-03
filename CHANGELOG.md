@@ -1,3 +1,12 @@
+## 3.6.1
+**Polish** · updates ask before installing, the app looks for them once a day, and each new version gets one notification
+
+### Changed
+- **Install Updates Automatically is off on a new install:** a new version then shows as one notification and in Settings > Updates, and installs only when you tap "Install". A choice you saved before stays as it is: switch it off in Settings > Updates if you want it off.
+- **One automatic check a day** instead of every 6 hours in the background plus at every start: whichever comes first that day, the app's start or the daily check on Wi-Fi, asks GitHub. Without a connection the next try waits for the next day. A version found earlier stays offered in Settings > Updates without asking again, and "Check for Updates" still asks at once.
+- **One notification for each new version,** whichever check finds it.
+- The settings screen and the gallery's code are split into smaller files, with notes on how they work. Nothing changes in use.
+
 ## 3.6.0-2
 **Polish** · a lighter app inside: the code left over from the move to this app and from long-gone versions is out
 

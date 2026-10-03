@@ -33,12 +33,15 @@ import com.example.forgegen.ui.components.UpdateCard
  * Co tu jest: wersja aplikacji (8 szybkich stuknięć + hasło włącza tryb debugowania), licencja, automatyczna
  * instalacja aktualizacji, "Check for Updates" oraz sekcja "New Version" z wydaniem do pobrania i zainstalowania.
  *
- * Jak to działa: aktualizacja ma dwa kroki: "Download" (pobiera plik w tle i sprawdza jego sumę SHA-256),
- * potem "Install" (aplikacja schodzi na bok, a Android ją podmienia). W trakcie instalacji karta pokazuje
- * "Installing" bez przycisku, żeby nie dało się uruchomić instalacji dwa razy.
+ * Jak to działa: aplikacja sama pyta GitHuba raz dziennie (przy starcie albo w tle, co pierwsze; bez połączenia
+ * następna próba jest dopiero nazajutrz) i o każdej nowej wersji daje jedno powiadomienie. Aktualizacja ma dwa
+ * kroki: "Download" (pobiera plik w tle i sprawdza jego sumę SHA-256), potem "Install" (aplikacja schodzi na bok,
+ * a Android ją podmienia). W trakcie instalacji karta pokazuje "Installing" bez przycisku, żeby nie dało się
+ * uruchomić instalacji dwa razy.
  *
  * Do poczytania: PackageInstaller w Androidzie (instalacja aplikacji przez samą aplikację), suma kontrolna SHA-256,
- * GitHub Releases (skąd przychodzą wydania), android.os.SystemClock.elapsedRealtime (zegar do mierzenia odstępów).
+ * GitHub Releases (skąd przychodzą wydania), android.os.SystemClock.elapsedRealtime (zegar do mierzenia odstępów),
+ * JobScheduler (zadania w tle według harmonogramu), SharedPreferences (małe dane zapisane w telefonie).
  * ============================================================================ */
 
 // Pozycje strony Updates, w kolejności wyświetlania.
@@ -79,22 +82,24 @@ internal fun SettingsUiState.updatesSettings(): List<SettingItem> {
                 subtitle = "${AppLicense.NAME} · © 2026 ${AppLicense.AUTHOR}",
             ) { showLicenseDialog = true }
         }
-        // Automatyczna instalacja aktualizacji w tle (wyłączona: tylko powiadomienie).
-        add(SettingsPage.UPDATES, null, "install updates automatically background wi-fi") {
+        // Automatyczna instalacja aktualizacji w tle. Od 3.6.1 domyślnie wyłączona: wtedy tylko jedno powiadomienie
+        // o każdej nowej wersji.
+        add(SettingsPage.UPDATES, null, "install updates automatically background wi-fi notification") {
             SwitchPreference(
                 title = "Install Updates Automatically",
                 subtitle =
-                    "Looks for new releases every 6 hours on Wi-Fi and installs them in the background " +
-                        "(never while the queue works); off: only a notification",
+                    "Installs a new release in the background on Wi-Fi (never while the queue works); " +
+                        "off: one notification for each new version",
                 checked = config.autoInstallUpdates,
                 onCheckedChange = { viewModel.saveConfig(config.copy(autoInstallUpdates = it)) },
             )
         }
         // Ręczne sprawdzenie, czy na GitHubie jest nowsze wydanie (pokazuje też zamkniętą wcześniej kartę).
-        add(SettingsPage.UPDATES, null, "check for updates github release") {
+        // Samo z siebie aplikacja sprawdza raz dziennie (SelfUpdate.claimDailyCheck); to sprawdzenie jest dodatkowe.
+        add(SettingsPage.UPDATES, null, "check for updates github release daily") {
             TextPreference(
                 title = "Check for Updates",
-                subtitle = "Look for a newer release on GitHub",
+                subtitle = "Look for a newer release on GitHub now; the app also looks once a day by itself",
                 trailing = { Icon(Icons.Default.Refresh, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
             ) {
                 dismissedUpdateVersion = -1

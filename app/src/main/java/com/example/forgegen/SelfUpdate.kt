@@ -29,13 +29,16 @@ import java.security.MessageDigest
 /* ============================================================================
  * SELF UPDATE (2.0.2)
  * GitHub releases reach the phone without the app being opened:
- * - UpdateCheckJob asks GitHub every 6 hours on Wi-Fi (JobScheduler, kept across restarts of the phone).
+ * - UpdateCheckJob asks GitHub once a day on Wi-Fi (JobScheduler, kept across restarts of the phone; every 6 hours up
+ *   to 3.6.0-2). The app's start and this job share one automatic check a day (3.6.1, the owner's request,
+ *   claimDailyCheck): whichever comes first that day asks, and a check without a connection leaves the next one to
+ *   the next day. The release it finds is kept (saveOffer), so the app offers it on a later start that day.
  * - A newer release is downloaded (SHA-256 checked) and installed with PackageInstaller. On Android 12+ an app may
  *   update itself without asking (USER_ACTION_NOT_REQUIRED + UPDATE_PACKAGES_WITHOUT_USER_ACTION); where the system
  *   still wants a confirmation (the first time, some phones), a notification or the open app asks for it.
  * - Never while the queue works (installing ends the app's process) or while the app is on screen (Settings > Updates
  *   offers the update there; "Install Update" downloads it in UpdateDownloadService). "Install Updates
- *   Automatically" off: only a notification.
+ *   Automatically" off (the default since 3.6.1): one notification for each new version.
  * - After a silent update UpdatedReceiver says so in a notification (the app itself is not restarted).
  * - From the app (3.0.0-3, the owner's request) it is two steps: "Download" (UpdateDownloadService) keeps the file once
  *   its SHA-256 matches the release (readyUpdate), and only then "Install" sends the app to the background and hands
@@ -46,7 +49,10 @@ object SelfUpdate {
     private const val TAG = "SelfUpdate"
 
     const val ACTION_INSTALL_STATUS = "com.example.forgegen.UPDATE_INSTALL_STATUS"
-    const val CHECK_EVERY_MS = 6 * 60 * 60 * 1000L
+    const val CHECK_EVERY_MS = 24 * 60 * 60 * 1000L
+
+    // The window inside each day in which the system may run the check, when it suits the battery.
+    private const val CHECK_FLEX_MS = 6 * 60 * 60 * 1000L
     private const val JOB_ID = 4_201
     const val ID_UPDATE_NOTIFICATION = 1_003
 
@@ -55,6 +61,11 @@ object SelfUpdate {
     private const val KEY_AUTO_INSTALL = "auto_install"
     private const val KEY_INSTALLING = "installing_version"
     private const val KEY_NOTIFIED = "notified_version"
+
+    // The day ("2026-10-03") of the last automatic check, and the newest release it found (3.6.1).
+    private const val KEY_AUTO_CHECK_DAY = "auto_check_day"
+    private const val KEY_OFFER = "offered_update"
+    private val gson = com.google.gson.Gson()
 
     // "<versionCode>:<file length>" of the downloaded update whose SHA-256 matched the release.
     private const val KEY_READY = "ready_update"
@@ -162,7 +173,8 @@ object SelfUpdate {
         on: Boolean,
     ) = prefs(context).edit().putBoolean(KEY_AUTO_INSTALL, on).apply()
 
-    private fun isAutoInstall(context: Context) = prefs(context).getBoolean(KEY_AUTO_INSTALL, true)
+    // Off unless the user turns it on (3.6.1, the owner's request; on before).
+    private fun isAutoInstall(context: Context) = prefs(context).getBoolean(KEY_AUTO_INSTALL, false)
 
     /** One of the app's screens is visible (a foreground service alone does not count). */
     fun isAppOnScreen(): Boolean {
@@ -172,22 +184,79 @@ object SelfUpdate {
             info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
     }
 
-    /** The periodic check; scheduling it again keeps the one already planned. */
+    /** Whether the daily job must be (re)planned: none is, or one with another period (3.6.0-2 and older: 6 hours). */
+    fun needsScheduling(pendingIntervalMs: Long?): Boolean = pendingIntervalMs != CHECK_EVERY_MS
+
+    /** The periodic check; scheduling it again keeps the one already planned, and replaces one of an older period. */
     fun scheduleChecks(context: Context) {
         try {
             val scheduler = context.getSystemService(JobScheduler::class.java) ?: return
-            if (scheduler.getPendingJob(JOB_ID) != null) return
+            val pending = scheduler.getPendingJob(JOB_ID)
+            if (!needsScheduling(pending?.intervalMillis)) return
+            if (pending != null) scheduler.cancel(JOB_ID)
             scheduler.schedule(
                 JobInfo
                     .Builder(JOB_ID, ComponentName(context, UpdateCheckJob::class.java))
-                    .setPeriodic(CHECK_EVERY_MS, 60 * 60 * 1000L)
-                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED) // the APK is about 70 MB
+                    .setPeriodic(CHECK_EVERY_MS, CHECK_FLEX_MS)
+                    // Only on Wi-Fi: with "Install Updates Automatically" on it downloads the APK (about 7 MB).
+                    .setRequiredNetworkType(JobInfo.NETWORK_TYPE_UNMETERED)
                     .setPersisted(true)
                     .build(),
             )
         } catch (e: Exception) {
             Log.w(TAG, "Could not schedule the update check", e)
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------- once a day
+
+    /** The day of [now] in the phone's time zone, e.g. "2026-10-03". */
+    fun dayOf(
+        now: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+    ): String =
+        java.time.Instant
+            .ofEpochMilli(now)
+            .atZone(zone)
+            .toLocalDate()
+            .toString()
+
+    /** Whether an automatic check is due on [today]: none ran that day yet ([lastDay]: the day of the last one). */
+    fun autoCheckDue(
+        lastDay: String?,
+        today: String,
+    ): Boolean = lastDay != today
+
+    /**
+     * Takes today's automatic check (3.6.1): true for the first caller of the day, the app's start or the background
+     * job, false after. It is taken before GitHub is asked, so a check without a connection leaves the next to tomorrow.
+     */
+    @Synchronized
+    fun claimDailyCheck(
+        context: Context,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
+        val today = dayOf(now)
+        if (!autoCheckDue(prefs(context).getString(KEY_AUTO_CHECK_DAY, null), today)) return false
+        prefs(context).edit().putString(KEY_AUTO_CHECK_DAY, today).apply()
+        return true
+    }
+
+    /** Keeps [manifest], a newer release a check found, for the app's later starts on a day without a check. */
+    fun saveOffer(
+        context: Context,
+        manifest: UpdateManifest,
+    ) = prefs(context).edit().putString(KEY_OFFER, gson.toJson(manifest)).apply()
+
+    /** The release a check found last, when it is newer than [installedCode]; null otherwise. */
+    fun savedOffer(
+        context: Context,
+        installedCode: Int,
+    ): UpdateManifest? {
+        val json = prefs(context).getString(KEY_OFFER, null) ?: return null
+        return runCatching { gson.fromJson(json, UpdateManifest::class.java) }
+            .getOrNull()
+            ?.takeIf { it.versionCode > installedCode }
     }
 
     // ---------------------------------------------------------------------------------------------- download
@@ -299,8 +368,9 @@ object SelfUpdate {
 
     // ---------------------------------------------------------------------------------------------- background check
 
-    /** The periodic check: what [decide] says, done. */
+    /** The periodic check: what [decide] says, done; at most once a day together with the app's start (3.6.1). */
     suspend fun checkInBackground(context: Context) {
+        if (!claimDailyCheck(context)) return
         val api = GitHubApi.create()
         val response = api.getLatestRelease(ForgeUpdateManager.UPDATE_REPOSITORY)
         if (!response.isSuccessful) return
@@ -310,6 +380,7 @@ object SelfUpdate {
                 .getPackageInfo(context.packageName, 0)
                 .longVersionCode
                 .toInt()
+        if (manifest.versionCode > installedCode) saveOffer(context, manifest)
         val queueWorking = ForgeQueueManager.isQueueActive.value || ForgeQueueManager.isGenerating.value
         val action = decide(installedCode, manifest.versionCode, isAutoInstall(context), isAppOnScreen(), queueWorking)
         Log.i(TAG, "Latest ${manifest.versionName} (${manifest.versionCode}), installed $installedCode: $action")
@@ -333,12 +404,13 @@ object SelfUpdate {
 
     // ---------------------------------------------------------------------------------------------- notifications
 
-    private fun notifyAvailable(
+    /** "A new version is available": once per version, from whichever check finds it first (3.6.1). */
+    fun notifyAvailable(
         context: Context,
         versionName: String,
         text: String,
     ) {
-        // Once per version.
+        // Once per version: one notification for each new version, whichever check finds it.
         if (prefs(context).getString(KEY_NOTIFIED, null) == versionName) return
         prefs(context).edit().putString(KEY_NOTIFIED, versionName).apply()
         post(context, "ForgeGen $versionName is available", text, ForgeNotifications.openAppIntent(context))

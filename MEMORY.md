@@ -372,7 +372,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   timeout (`isPingPath`). UI: `ConnectionStatus` in `MainTopBar` (tap = `openServerDialog`), `ServerConnectionDialog`
   (address, profiles, Test = `testServer`, Connect/Retry = `connectTo`, Settings, Close) shown by MainActivity when
   OFFLINE (closable, `offlineDialogClosed`) or asked for. Tests: G31 (window shortened), G21/G22 (start).
-- **Self update (2.0.2, owner's request):** `SelfUpdate`: `UpdateCheckJob` (JobScheduler, every 6 h, unmetered, persisted:
+- **Self update (2.0.2, owner's request):** `SelfUpdate`: `UpdateCheckJob` (JobScheduler, daily since 3.6.1 with a 6 h
+  flex, every 6 h before; `scheduleChecks` replaces a pending job of another period, `needsScheduling`; unmetered, persisted:
   RECEIVE_BOOT_COMPLETED; scheduled by `ForgeApp.onCreate`) runs `checkInBackground`: `decide(installed, latest,
   autoInstall, appOnScreen, queueWorking)` -> NONE (nothing newer, or the app is on screen: its own dialog offers it) /
   NOTIFY ("Install Updates Automatically" off) / WAIT (queue active or generating: installing kills the process) /
@@ -381,8 +382,14 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   for an app updating itself) and `setRequestUpdateOwnership` (14+); `UpdateStatusReceiver` shows the system's
   confirmation when it still wants one (at once if the app is on screen, else a notification) or a failure;
   `UpdatedReceiver` (MY_PACKAGE_REPLACED) posts "ForgeGen updated to X" when `installing_version` was set by us.
-  The setting is mirrored to SharedPreferences `updates`/`auto_install` (the job has no database). The in-app check
-  runs at every start, throttled to 15 min (`updates`/`last_check_ms`; `lastUpdateCheckDate` is no longer used), and
+  The setting is mirrored to SharedPreferences `updates`/`auto_install` (the job has no database; default false since
+  3.6.1). One automatic check a day (3.6.1, owner's request): the app's start (`ForgeUpdateManager.checkForUpdates`,
+  not manual) and the job share `SelfUpdate.claimDailyCheck` (`updates`/`auto_check_day`, the phone's calendar day,
+  taken before GitHub is asked, so a check without a connection leaves the next to the next day); a newer release
+  found is kept in `updates`/`offered_update` (Gson `UpdateManifest`, `saveOffer`/`savedOffer`) and offered on the
+  day's later starts without a request. `notifyAvailable` is once per version (`notified_version`), also from the
+  start's check ("Open Settings > Updates to download it."). "Check for Updates" always asks. `last_check_ms` and
+  `lastUpdateCheckDate` are no longer used. Tests: harness G34 (12), unit `SelfUpdateTest`. And
   "Install Update" goes through `SelfUpdate.install` (the old ACTION_VIEW screen only if a session cannot be opened).
   Tested by the owner with 2.0.3 (an empty release) on the Samsung phone: the silent update works; only Google Play
   Protect shows its prompt (sideloaded, debug-signed, debuggable app). Since 3.4.0 the published APK is not
@@ -476,8 +483,25 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   `fallbackToDestructiveMigration`), the 1.0.2 "pinned images" (`pinned_images` setting, `migratePinnedToFavorites`,
   `getImageByPath`) and the unused `getLoras`/`LoraItemDto`/`LoraMetadataDto` (LoRAs come from
   `getLorasWithMetadata` since 3.1.0). Backup formats 1 and 2 are still read. The review's group 2 (splitting
-  `SetupScreen` per page and `ForgeGalleryManager` per area) waits for the owner; group 3 (dropping the ViewModel's
+  `SetupScreen` per page and `ForgeGalleryManager` per area) was done in 3.6.1; group 3 (dropping the ViewModel's
   pass-throughs, a helper for the 74 cancellation re-throws, merging the two sets of path helpers) was advised against.
+- **3.6.1 (patch "Polish"; the review's group 2 and the owner's update wishes, 2026-10-03):**
+  - **Settings split** (`app/src/main/java/com/example/forgegen/ui/screens/settings/`, package still
+    `com.example.forgegen`): `SetupScreen.kt` (the screen: joins the pages' lists, summaries, Back, AnimatedContent),
+    `SettingsUiState.kt` (`SettingsUiState`: the dialogs' flags as `mutableStateOf`, launchers, phone-lock
+    confirmation, diagnostics; `rememberSettingsUiState` with the ON_RESUME refresh), `SettingsParts.kt` (rows,
+    `SettingsPage`, `SettingItem`, `settingsOf { add(...) }`), `SettingsLayout.kt` (main page and category page),
+    one `Settings<Page>Page.kt` per page (`@Composable internal fun SettingsUiState.<page>Settings(): List<SettingItem>`,
+    joined in search order: server, appearance, features, notifications, queue, privacy, updates, data+debug) and
+    `SettingsDialogs.kt`. Verified: every item and dialog moved unchanged, 10 rig screenshots pixel-identical.
+  - **Gallery split:** `ForgeGalleryManager.kt` keeps the state (now `internal`, so
+    `@file:Suppress("ktlint:standard:backing-property-naming")`), nested classes, start, favorites, prompt cache and
+    paths/URLs; `app/src/main/java/com/example/forgegen/gallery/` holds extension functions on it:
+    `GalleryFiltering`, `GalleryExtensionCheck`, `GalleryBrowsing`, `GallerySync` (`SyncResult`, `Listing`,
+    `InfoReader`), `GalleryImageActions`, `GalleryFileChanges`, `GalleryPromptRecovery`. Nested types need explicit
+    imports there (`import com.example.forgegen.ForgeGalleryManager.Extension`). All 240 members moved unchanged.
+  - **Updates:** auto install off by default (`AppConfig`, `loadConfig`, `SelfUpdate.isAutoInstall`; a saved choice
+    stays), one automatic check a day, one notification per version (see "Self update").
 - **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
   `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
   `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run
@@ -554,6 +578,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Animations:** every enter animation needs a matching exit. Full-screen overlays in `MainActivity` use `AnimatedVisibility` with a 200 ms fade (`OVERLAY_FADE_MS`) and `rememberLastActive` so the final state (tick/cross) stays visible while fading out. Don't read an animating value in composition (e.g. as a `LaunchedEffect` key): that recomposes on every frame.
 - **Intrusiveness:** The app must NEVER interrupt the user with random Toasts or pop-up Alert Dialogs during normal use (especially for updates). The one exception, requested by the owner: "What's New" once after an update, since 3.0.0 as the floating bar (the notes open only on "Show").
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.
+- **Updates (owner's request, 3.6.1):** "Install Updates Automatically" off by default; exactly one notification for
+  each new version; one automatic check a day (none again that day when it fails for lack of a connection); no
+  periodic loop of requests (the 6-hour job and the 15-minute start throttle are gone).
+- **Polish comments for learning (owner's request, 3.6.1):** the owner reads the split settings and gallery files to
+  learn Kotlin, so they carry Polish explanations: a header "Co tu jest / Jak to działa / Do poczytania" (what to read
+  about) and a line before each function. Keep them true when that code changes (rule in CLAUDE.md).
 - **Update downloads (owner's request, 2.3.0-1; replaces the old "block the UI while downloading" rule):** no blocking dialog. "Download" starts `UpdateDownloadService` and the app stays open (2.3.0-3: 2.3.0-1 moved it to the background with `moveTaskToBack` during the download, which the owner did not like); its progress is a notification (a Live Update in the Now Bar when supported and "Show Progress in Now Bar" is on) and a card in Settings > Updates. Installing is a separate "Install" tap, and that one does send the app to the background (owner's request, 3.0.0-3), so Android can replace it.
 - **Tag Editors:** The active tags UI uses a sleek collapsible design (`AnimatedVisibility`) driven by a horizontal separator to save space while keeping it accessible.
 - **Clean Settings:** Deprecated features (like Image Previews in notifications and Alert Priorities) are completely ripped out of the backend code, not just hidden from the UI.

@@ -1,7 +1,6 @@
 package com.example.forgegen
 
 import android.app.Application
-import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,7 +12,9 @@ import kotlinx.coroutines.withContext
 
 /* ============================================================================
  * UPDATE MANAGER (OTA)
- * Checks the latest GitHub release of the app when it starts (at most every 15 minutes, or on "Check for Updates").
+ * Checks the latest GitHub release of the app when it starts, or on "Check for Updates". The start's check is the
+ * day's one automatic check, shared with SelfUpdate's background job (3.6.1, the owner's request): after it ran, a later
+ * start that day offers the release it found (SelfUpdate.savedOffer) without asking GitHub again.
  * Two steps since 3.0.0-3: "Download" hands the release to UpdateDownloadService (background download, SHA-256 checked,
  * then SelfUpdate.readyUpdate); "Install" sends the app to the background and installs the checked file through
  * SelfUpdate (PackageInstaller: on Android 12+ without the system's confirmation where it allows that).
@@ -32,10 +33,6 @@ class ForgeUpdateManager(
 
         /** owner/repo whose latest release is installed as the update. */
         const val UPDATE_REPOSITORY = "xplod24/ForgeGen"
-
-        // Automatic checks at the start: GitHub allows 60 anonymous API calls per hour and IP.
-        private const val AUTO_CHECK_EVERY_MS = 15 * 60 * 1000L
-        private const val LAST_CHECK_KEY = "last_check_ms"
     }
 
     private val _updateManifest = MutableStateFlow<UpdateManifest?>(null)
@@ -45,18 +42,21 @@ class ForgeUpdateManager(
     val updateDownload: StateFlow<SelfUpdate.DownloadProgress?> = SelfUpdate.downloadProgress
 
     /**
-     * Checks for a newer release. An automatic check (not [manual]) is skipped when one ran in the last 15 minutes
-     * (it used to run once a day, so a release made after it waited until the next day).
+     * Checks for a newer release. An automatic check (not [manual]) runs once a day (3.6.1, it was every 15 minutes):
+     * taken before GitHub is asked, so a start without a connection leaves the next check to the next day.
      */
     fun checkForUpdates(
         manual: Boolean = false,
         offerAnyRelease: Boolean = false,
     ) {
         scope.launch(Dispatchers.IO) {
-            val now = System.currentTimeMillis()
-            if (!manual) {
-                val prefs = application.getSharedPreferences("updates", Context.MODE_PRIVATE)
-                if (now - prefs.getLong(LAST_CHECK_KEY, 0L) < AUTO_CHECK_EVERY_MS) return@launch
+            if (!manual && !SelfUpdate.claimDailyCheck(application)) {
+                // Today's check ran already: the release it found, if it is still newer than this build.
+                runCatching { SelfUpdate.savedOffer(application, installedCode()) }
+                    .onFailure { Log.w(TAG, "Could not read the saved update", it) }
+                    .getOrNull()
+                    ?.let { offer(it) }
+                return@launch
             }
 
             try {
@@ -66,26 +66,26 @@ class ForgeUpdateManager(
                     val manifest = response.body()?.toUpdateManifest()
                     val installed = application.packageManager.getPackageInfo(application.packageName, 0)
                     val currentVersionCode = installed.longVersionCode.toInt()
+                    val newer = manifest != null && manifest.versionCode > currentVersionCode
+                    // Kept for the later starts today, when GitHub is not asked again. A failure here never hides
+                    // the update either.
+                    if (newer && manifest != null) {
+                        runCatching { SelfUpdate.saveOffer(application, manifest) }
+                            .onFailure { Log.w(TAG, "Could not keep the update for later", it) }
+                    }
 
                     // The debug mode can offer the latest release even when it is not newer (to reinstall it).
-                    if (manifest != null && (manifest.versionCode > currentVersionCode || offerAnyRelease)) {
-                        // Downloaded before (also before a restart)? Then "Install" is offered at once. A failure
-                        // here never hides the update: it is offered for download then.
-                        runCatching { SelfUpdate.refreshReady(application, manifest) }
-                            .onFailure { Log.w(TAG, "Could not look for a downloaded update", it) }
-                        _updateManifest.value = manifest
-                        if (manual) showToast("Update available: ${manifest.versionName}")
+                    if (manifest != null && (newer || offerAnyRelease)) {
+                        offer(manifest)
+                        if (manual) {
+                            showToast("Update available: ${manifest.versionName}")
+                        } else {
+                            // The one notification of this version (none again from the background job).
+                            SelfUpdate.notifyAvailable(application, manifest.versionName, "Open Settings > Updates to download it.")
+                        }
                     } else if (manual) {
                         val installedName = installed.versionName?.removeSuffix("-DEBUG") ?: currentVersionCode.toString()
                         showToast("App is up to date (installed: $installedName, latest release: ${manifest?.versionName ?: "none"})")
-                    }
-
-                    if (!manual) {
-                        application
-                            .getSharedPreferences("updates", Context.MODE_PRIVATE)
-                            .edit()
-                            .putLong(LAST_CHECK_KEY, now)
-                            .apply()
                     }
                 } else {
                     Log.e(TAG, "NETWORK ERROR (OTA): HTTP status ${response.code()}")
@@ -104,6 +104,21 @@ class ForgeUpdateManager(
                 if (manual) showToast("Connection error: ${e.message}")
             }
         }
+    }
+
+    private fun installedCode(): Int =
+        application.packageManager
+            .getPackageInfo(application.packageName, 0)
+            .longVersionCode
+            .toInt()
+
+    /** Offers [manifest] in Settings > Updates, with "Install" at once when its file is downloaded already. */
+    private fun offer(manifest: UpdateManifest) {
+        // Downloaded before (also before a restart)? Then "Install" is offered at once. A failure here never hides
+        // the update: it is offered for download then.
+        runCatching { SelfUpdate.refreshReady(application, manifest) }
+            .onFailure { Log.w(TAG, "Could not look for a downloaded update", it) }
+        _updateManifest.value = manifest
     }
 
     /**

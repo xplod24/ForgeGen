@@ -325,7 +325,7 @@ object ForgeSettingsManager {
             savePrivately = parsed?.savePrivately ?: false,
             shareWithoutMetadata = parsed?.shareWithoutMetadata ?: false,
             vibrateOnFinish = parsed?.vibrateOnFinish ?: true,
-            autoInstallUpdates = parsed?.autoInstallUpdates ?: true,
+            autoInstallUpdates = parsed?.autoInstallUpdates ?: false,
             pinchToZoom = parsed?.pinchToZoom ?: true,
             galleryView = GalleryView.of(parsed?.galleryView).name,
             galleryTab = GalleryTab.of(parsed?.galleryTab).name,

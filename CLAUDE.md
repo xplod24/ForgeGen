@@ -7,6 +7,10 @@ Read `MEMORY.md` before working: it holds the architecture notes and the owner's
 - The owner writes in Polish. Always answer in Polish (owner's explicit request): no English sentences or
   headings, and Polish words instead of English jargon wherever a natural one exists. Code, file names, UI texts
   and release notes stay in English.
+- Code comments stay in English, except where the owner asked for Polish ones to learn from (since 3.6.1): the files
+  in `ui/screens/settings/` and `gallery/`, and the `// PL:` notes in `ForgeGalleryManager.kt`. Code added there
+  gets Polish comments too, in the same style (a header "Co tu jest / Jak to działa / Do poczytania", a line before
+  each function); older English comments there may stay.
 - Releasing is part of finishing a change: raise the version in `gradle.properties` (patch for fixes and small changes,
   minor for new features, major only for a clear change across the whole repository OR on the owner's explicit
   command; a micro-patch `x.y.z-n` via `VERSION_MICRO` only on the owner's command, and `VERSION_MICRO` goes back

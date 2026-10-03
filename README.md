@@ -136,10 +136,12 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 - **Backup and data:** export and import the settings, presets, server profiles, wildcards, gallery favorites, queue
   and generation history; the image cache size (512 MB, 1 GB or 2.5 GB); an out-of-memory report with the app's log;
   and a choice of what to wipe.
-- **Updates from GitHub:** the app looks for a new release every 6 hours on Wi-Fi, checks the download's SHA-256 and
-  installs it in the background where Android allows it, never while the queue works or while you use the app. In
-  Settings > Updates a new version has its own section, with its notes and its download's progress. After an update
-  a "What's New" bar offers the release notes.
+- **Updates from GitHub:** the app looks for a new release once a day (at its start or in the background on Wi-Fi,
+  whichever comes first; without a connection the next try is the next day) and shows one notification for each new
+  version. In Settings > Updates a new version has its own section, with its notes and its download's progress;
+  "Download" checks the file's SHA-256 and "Install" hands it to Android. Install Updates Automatically (off by
+  default) installs new versions in the background where Android allows it, never while the queue works or while you
+  use the app. After an update a "What's New" bar offers the release notes.
 - Light, dark or system theme.
 - The license, its full text and a link to the source code in Settings > Updates > License.
 
@@ -230,7 +232,8 @@ ForgeGen/
 │   ├── ForgeRepository.kt        database, API client, connection and progress polling
 │   ├── ForgeQueueManager.kt      the queue, progress, live preview, retries
 │   ├── ForgeNetworkManager.kt    models, samplers, LoRAs, embeddings, styles
-│   ├── ForgeGalleryManager.kt    the gallery through IIB, local index, favorites
+│   ├── ForgeGalleryManager.kt    the gallery through IIB: state, favorites, paths (with gallery/)
+│   ├── gallery/                  the gallery's areas: browsing, filters, index sync, file changes
 │   ├── ForgeSettingsManager.kt   settings, presets, server profiles
 │   ├── ForgeTagManager.kt        tag list for the suggestions
 │   ├── ForgeUpdateManager.kt     updates from GitHub (with SelfUpdate.kt)
@@ -242,7 +245,8 @@ ForgeGen/
 │   ├── ForgeApi.kt               the server's API (Retrofit)
 │   ├── ForgeModels.kt            data classes and the Room database
 │   └── ui/
-│       ├── screens/              gallery, queue, settings, presets, wildcards, statistics
+│       ├── screens/              gallery, queue, presets, wildcards, statistics
+│       │   └── settings/         the settings screen, one file per page
 │       └── components/           cards, pickers, top bars, dialogs, tag suggestion strip
 ├── app/src/test/                 JVM unit tests
 ├── .github/workflows/            ci.yml (work branches) and release.yml (master)

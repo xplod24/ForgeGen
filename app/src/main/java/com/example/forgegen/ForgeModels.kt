@@ -79,7 +79,8 @@ data class AppConfig(
     // A short vibration when a batch finishes while the app is on screen (2.0.0).
     var vibrateOnFinish: Boolean = true,
     // New releases are downloaded and installed in the background (SelfUpdate, 2.0.2); off: only a notification.
-    var autoInstallUpdates: Boolean = true,
+    // Off by default since 3.6.1 (the owner's request); a setting saved before keeps its value.
+    var autoInstallUpdates: Boolean = false,
     // Full-screen images zoom with a pinch or a double tap (2.1.0).
     var pinchToZoom: Boolean = true,
     // The gallery's layout, a GalleryView name (2.1.0).

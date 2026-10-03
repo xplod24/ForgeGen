@@ -41,7 +41,7 @@ class ForgeSettingsManagerConfigTest {
                 savePrivately = true,
                 shareWithoutMetadata = true,
                 vibrateOnFinish = false,
-                autoInstallUpdates = false,
+                autoInstallUpdates = true, // off by default since 3.6.1
                 pinchToZoom = false,
                 galleryView = GalleryView.LIST_LARGE.name,
                 galleryTab = GalleryTab.FAVORITES.name,
