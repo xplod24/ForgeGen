@@ -162,6 +162,9 @@ class ForgeUpdateManager(
                 showToast("The downloaded update is damaged, download it again")
                 return@launch
             }
+            // What the app was doing, saved once more: installing ends the process, and the next build brings it
+            // back at its first start (3.6.2, SessionMemory).
+            ForgeQueueManager.saveSession()
             withContext(Dispatchers.Main) { sendToBackground() }
             try {
                 SelfUpdate.install(application, file, manifest.versionName)

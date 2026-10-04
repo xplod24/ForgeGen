@@ -502,6 +502,23 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
     imports there (`import com.example.forgegen.ForgeGalleryManager.Extension`). All 240 members moved unchanged.
   - **Updates:** auto install off by default (`AppConfig`, `loadConfig`, `SelfUpdate.isAutoInstall`; a saved choice
     stays), one automatic check a day, one notification per version (see "Self update").
+- **3.6.2 (patch "Polish", the owner's request 2026-10-04):**
+  - **Install confirmation:** "Install" on the update card always opens `confirmInstall` (SettingsDialogs; before,
+    only while the queue worked, `confirmInstallDuringQueue`): what is kept, and with the queue working that the
+    running job starts again. Auto install in the background stays without a dialog (opt-in).
+  - **Session memory across updates** (`SessionMemory.kt`, `SavedSession`, settings key `saved_session`):
+    `ForgeQueueManager.startSessionWriter` saves the session images (paths in the cache), the shown index and batch
+    range, the pause and its reason and `completedQueueItems`, a second after each change (merge of the flows,
+    conflated, `sessionWriteLock`), with `BuildConfig.VERSION_CODE`; `saveSession()` also runs in
+    `ForgeUpdateManager.installUpdate` before the app goes to the background. `start()` calls
+    `restoreSessionAfterUpdate()` after `loadQueueState` and before the worker: only when the saved build differs
+    (the first start after an update), `SessionMemory.afterUpdate` keeps the files still in the cache and moves the
+    positions, `keepsPause` brings a pause back unless it was `CONNECTION_LOST_REASON` or no job is left, the run's
+    total becomes completed + runnable; `cleanupSessionCache(keep)` spares the restored files. An ordinary restart
+    (same build) still starts with an empty session (offered to the owner as a one-line change if wanted). The
+    running job of an install during the queue still starts again (the server may finish it too). Works from the
+    first update after 3.6.2 (3.6.1 saved nothing). Tests: unit `SessionMemoryTest`, harness G56 (4); the harness's
+    `TestApp.start(prepare = ...)` runs with the new app and database before the start.
 - **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
   `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
   `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run
@@ -580,7 +597,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Silent Background Checks:** App update checks happen silently in the background. The user is notified via an inline banner in the Settings/Setup Screen, not via a popup.
 - **Updates (owner's request, 3.6.1):** "Install Updates Automatically" off by default; exactly one notification for
   each new version; one automatic check a day (none again that day when it fails for lack of a connection); no
-  periodic loop of requests (the 6-hour job and the 15-minute start throttle are gone).
+  periodic loop of requests (the 6-hour job and the 15-minute start throttle are gone). Since 3.6.2 "Install" always
+  asks first, and after an update the app goes on where the user left it (session memory, section 1 "3.6.2").
 - **Polish comments for learning (owner's request, 3.6.1):** the owner reads the split settings and gallery files to
   learn Kotlin, so they carry Polish explanations: a header "Co tu jest / Jak to działa / Do poczytania" (what to read
   about) and a line before each function. Keep them true when that code changes (rule in CLAUDE.md).

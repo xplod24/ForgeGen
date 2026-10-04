@@ -53,8 +53,6 @@ internal fun SettingsUiState.updatesSettings(): List<SettingItem> {
     val readyUpdate by viewModel.readyUpdate.collectAsStateWithLifecycle()
     val installingUpdate by viewModel.installingUpdate.collectAsStateWithLifecycle()
     val updateConfirm by viewModel.updateConfirm.collectAsStateWithLifecycle()
-    val queueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
-    val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
     val debugUnlocked by viewModel.debugUnlocked.collectAsStateWithLifecycle()
 
     return settingsOf {
@@ -169,7 +167,7 @@ internal fun SettingsUiState.updatesSettings(): List<SettingItem> {
                     download = download,
                     onDismiss = { dismissedUpdateVersion = manifest.versionCode },
                     onDownload = { viewModel.downloadUpdate() },
-                    onInstall = { if (queueActive || generating) confirmInstallDuringQueue = true else installNow() },
+                    onInstall = { confirmInstall = true },
                     onShowAll = { showAllReleaseNotes = true },
                 )
             }

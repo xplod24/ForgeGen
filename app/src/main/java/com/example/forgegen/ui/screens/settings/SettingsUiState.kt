@@ -85,9 +85,9 @@ internal class SettingsUiState(
     // All notes of the offered update, from "Show All" on its card.
     var showAllReleaseNotes by mutableStateOf(false)
 
-    // "Install" w czasie pracy kolejki: instalacja zamyka aplikację, więc najpierw pytamy.
-    // "Install" while the queue works: installing ends the app, so it asks first.
-    var confirmInstallDuringQueue by mutableStateOf(false)
+    // "Install": instalacja zamyka aplikację, więc zawsze najpierw pytamy (od 3.6.2; wcześniej tylko w czasie pracy
+    // kolejki). Okno jest w SettingsDialogs.kt.
+    var confirmInstall by mutableStateOf(false)
 
     // Okna: licencja i klucz galerii (IIB).
     var showLicenseDialog by mutableStateOf(false)

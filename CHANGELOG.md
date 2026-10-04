@@ -1,3 +1,12 @@
+## 3.6.2
+**Polish** · "Install" asks first, and after an update ForgeGen goes on where you left it
+
+### New
+- **After an update ForgeGen goes on where you left it:** the images of this session on the main screen (with the one you were looking at), a paused queue with its reason and how far the queue's run got come back when you open the new version. The queue's jobs, the prompts and the settings were kept before too. This starts with the next update: this one is installed by the version before it.
+
+### Changed
+- **"Install" asks first:** a short confirmation says that ForgeGen closes while Android replaces it and what is kept, and, while the queue works, that the running job starts again when you open the app.
+
 ## 3.6.1
 **Polish** · updates ask before installing, the app looks for them once a day, and each new version gets one notification
 

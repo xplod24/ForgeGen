@@ -139,9 +139,10 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 - **Updates from GitHub:** the app looks for a new release once a day (at its start or in the background on Wi-Fi,
   whichever comes first; without a connection the next try is the next day) and shows one notification for each new
   version. In Settings > Updates a new version has its own section, with its notes and its download's progress;
-  "Download" checks the file's SHA-256 and "Install" hands it to Android. Install Updates Automatically (off by
-  default) installs new versions in the background where Android allows it, never while the queue works or while you
-  use the app. After an update a "What's New" bar offers the release notes.
+  "Download" checks the file's SHA-256 and "Install" (after a confirmation) hands it to Android. Install Updates
+  Automatically (off by default) installs new versions in the background where Android allows it, never while the
+  queue works or while you use the app. After an update the app goes on where you left it (the session's images, a
+  paused queue and its progress) and a "What's New" bar offers the release notes.
 - Light, dark or system theme.
 - The license, its full text and a link to the source code in Settings > Updates > License.
 

@@ -10,6 +10,8 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -36,6 +38,9 @@ class LivePreview(
  *
  * Overnight mode does not stop the queue for a failed job: the job is set aside (FAILED, with its reason) at the end
  * of the queue and skipped, and one summary at the end says how many jobs failed.
+ *
+ * The session (its images, a pause and the run's progress) is saved too, and comes back at the first start after an
+ * update (3.6.2, SessionMemory); an ordinary restart still begins with an empty session.
  * ============================================================================ */
 @SuppressLint("StaticFieldLeak")
 object ForgeQueueManager {
@@ -302,16 +307,19 @@ object ForgeQueueManager {
     /** Returns once the saved queue is loaded; the writer, the worker and the reconnect watcher run from then on. */
     suspend fun start() {
         loadQueueState()
+        // Before the worker starts: a pause saved before an update holds the queue.
+        val restored = restoreSessionAfterUpdate()
         loadScheduleAndSpeed()
         startChangeCostsWatcher()
         startAutoUnloadWatcher()
         ForgeWidgets.start(application)
         startQueueWriter()
+        startSessionWriter()
         startQueueWorker()
         startServiceWatcher()
         startReconnectWatcher()
         startScheduleWatcher()
-        cleanupSessionCache()
+        cleanupSessionCache(keep = restored?.images.orEmpty().toSet())
     }
 
     private const val SCHEDULE_KEY = "queue_scheduled_start"
@@ -544,6 +552,95 @@ object ForgeQueueManager {
 
     private fun saveQueueState() {
         saveRequests.trySend(Unit)
+    }
+
+    // ------------------------------------------------------------------------------------------ session memory
+
+    // Session saves; conflated and written a second after the last change (a batch, a swipe, a pause).
+    private val sessionSaves = Channel<Unit>(Channel.CONFLATED)
+    private val sessionWriteLock = Mutex()
+    private const val SESSION_SAVE_DELAY_MS = 1_000L
+
+    /**
+     * Brings back the session the build before an update saved (SessionMemory): its images still in the cache, the
+     * one shown, the run's progress and a pause. Null after an ordinary restart.
+     */
+    private suspend fun restoreSessionAfterUpdate(): SavedSession? =
+        withContext(Dispatchers.IO) {
+            val saved =
+                try {
+                    ForgeRepository.db
+                        .appSettingDao()
+                        .getSetting(SessionMemory.KEY)
+                        ?.value
+                        ?.let { gson.fromJson(it, SavedSession::class.java) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to read the saved session", e)
+                    null
+                }
+            val session = SessionMemory.afterUpdate(saved, BuildConfig.VERSION_CODE) { File(it).isFile } ?: return@withContext null
+            if (session.images.isNotEmpty()) {
+                _sessionImages.value = session.images
+                _currentBatchStartIndex.value = session.batchStart
+                _currentBatchEndIndex.value = session.batchEnd
+                _currentSessionIndex.value = session.index
+            }
+            val runnable = _generationQueue.value.count { it.isRunnable() }
+            if (runnable > 0) {
+                _completedQueueItems.value = session.completed
+                _totalQueueSize.value = session.completed + runnable
+            }
+            if (SessionMemory.keepsPause(session, runnable, CONNECTION_LOST_REASON)) {
+                pauseQueue(session.pauseReason ?: USER_PAUSED_REASON)
+                _statusText.value = "Queue paused"
+            }
+            Log.i(TAG, "Session of build ${session.versionCode} restored: ${session.images.size} images, paused ${_isQueuePaused.value}")
+            session
+        }
+
+    /** Saves the session whenever it changes, so an update (which ends the process at any moment) finds it saved. */
+    private fun startSessionWriter() {
+        ForgeRepository.repositoryScope.launch {
+            merge(
+                _sessionImages,
+                _currentSessionIndex,
+                _currentBatchStartIndex,
+                _currentBatchEndIndex,
+                _isQueuePaused,
+                _queuePauseReason,
+                _completedQueueItems,
+            ).collect { sessionSaves.trySend(Unit) }
+        }
+        ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
+            for (request in sessionSaves) {
+                delay(SESSION_SAVE_DELAY_MS)
+                saveSession()
+            }
+        }
+    }
+
+    /** Writes the session at once; also called right before an update is installed. */
+    suspend fun saveSession() {
+        withContext(Dispatchers.IO) {
+            sessionWriteLock.withLock {
+                try {
+                    val session =
+                        SavedSession(
+                            versionCode = BuildConfig.VERSION_CODE,
+                            images = _sessionImages.value,
+                            index = _currentSessionIndex.value,
+                            batchStart = _currentBatchStartIndex.value,
+                            batchEnd = _currentBatchEndIndex.value,
+                            paused = _isQueuePaused.value,
+                            pauseReason = _queuePauseReason.value,
+                            completed = _completedQueueItems.value,
+                        )
+                    ForgeRepository.db.appSettingDao().putSetting(AppSettingEntity(SessionMemory.KEY, gson.toJson(session)))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to save the session", e)
+                }
+            }
+        }
     }
 
     /**
@@ -1542,15 +1639,16 @@ object ForgeQueueManager {
     }
 
     /**
-     * Deletes the images of the previous run from the cache. The session only lives in memory, so after a restart
-     * nothing refers to them any more; generated images ("gen_") used to pile up there forever.
+     * Deletes the images of the previous run from the cache, except [keep] (a session restored after an update). An
+     * ordinary restart starts with an empty session, so nothing refers to them any more; generated images ("gen_")
+     * used to pile up there forever.
      */
-    private fun cleanupSessionCache() {
+    private fun cleanupSessionCache(keep: Set<String> = emptySet()) {
         ForgeRepository.repositoryScope.launch(Dispatchers.IO) {
             try {
                 application.cacheDir.listFiles()?.forEach { file ->
                     val isSessionFile = SESSION_CACHE_PREFIXES.any { file.name.startsWith(it) }
-                    if (isSessionFile && file.name.endsWith(".png")) {
+                    if (isSessionFile && file.name.endsWith(".png") && file.absolutePath !in keep) {
                         file.delete()
                     }
                 }

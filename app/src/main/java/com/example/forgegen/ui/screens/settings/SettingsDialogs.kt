@@ -71,6 +71,7 @@ internal fun SettingsUiState.SettingsDialogs() {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val serverCheck by viewModel.lastServerCheck.collectAsStateWithLifecycle()
     val generating by viewModel.isGenerating.collectAsStateWithLifecycle()
+    val queueActive by viewModel.isQueueActive.collectAsStateWithLifecycle()
     val updateManifest by viewModel.updateManifest.collectAsStateWithLifecycle()
     val debugUnlocked by viewModel.debugUnlocked.collectAsStateWithLifecycle()
 
@@ -241,19 +242,34 @@ internal fun SettingsUiState.SettingsDialogs() {
 
     // The download progress dialog is shown globally by MainActivity.
 
-    // "Install" w czasie pracy kolejki: instalacja zamknie aplikację i zatrzyma kolejkę (zadania zostają).
-    if (confirmInstallDuringQueue) {
+    // Potwierdzenie "Install" (3.6.2, prośba właściciela): instalacja zamyka aplikację, a Android ją podmienia.
+    // Tekst mówi, co zostaje: kolejka, prompty i obrazy tej sesji wracają po aktualizacji (SessionMemory.kt).
+    // Gdy kolejka pracuje, dochodzi zdanie o przerwanym zadaniu: zacznie się od nowa po ponownym otwarciu.
+    if (confirmInstall) {
+        val queueWorks = queueActive || generating
         AlertDialog(
-            onDismissRequest = { confirmInstallDuringQueue = false },
-            title = { Text("Install Now?") },
-            text = { Text("Installing closes ForgeGen, so the queue stops. Its jobs are kept and wait for you.") },
+            onDismissRequest = { confirmInstall = false },
+            title = { Text(updateManifest?.let { "Install ForgeGen ${it.versionName}?" } ?: "Install the Update?") },
+            text = {
+                Text(
+                    if (queueWorks) {
+                        "ForgeGen closes while Android replaces it, so the queue stops: the running job starts again " +
+                            "when you open ForgeGen, and the jobs after it wait. The prompts and this session's images " +
+                            "are kept."
+                    } else {
+                        "ForgeGen closes while Android replaces it, and a notification says when it is done. Open it " +
+                            "again and it goes on where you left it: the queue, the prompts and this session's images " +
+                            "are kept."
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    confirmInstallDuringQueue = false
+                    confirmInstall = false
                     installNow()
                 }) { Text("Install") }
             },
-            dismissButton = { TextButton(onClick = { confirmInstallDuringQueue = false }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmInstall = false }) { Text("Cancel") } },
         )
     }
 
