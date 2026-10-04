@@ -573,6 +573,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **What users generate is up to their server (owner's final decision, 1.6.0):** the app does not judge prompts or hide content; the server enforces its rules (HTTP 403, 1.6.2 removed the app's last own check). Don't add prompt checks back to the app; a refusal is the server's answer.
 - **txt2img only (owner, after 2.3.0-3):** the app is dedicated to txt2img. No img2img, inpainting, ControlNet, the
   extras/upscale endpoints or interrogate (prompt from an image); new ideas must work through txt2img parameters.
+- **Ask what kind of help first (owner's request, 2026-10-04):** before starting on a new idea, question or request,
+  unless the owner already said which, ask (AskUserQuestion) whether they want **reconnaissance** (research and an
+  answer: what is there, what could be done; no code changes), **planning** (a plan to approve before any code) or
+  **work right away** (build, test and release). A question such as "czy jesteśmy w stanie…" or "czy da się…" is never
+  by itself a go-ahead to build or release: 3.6.2's session memory was built and nearly released when the owner had
+  only asked whether it could be done.
 - **Language (owner's explicit request):** always talk to the owner in Polish, with no English sentences or headings and Polish words instead of English jargon where a natural one exists; code, UI texts and release notes stay in English.
 - **Releases (owner's standing request):** after finishing a change, Claude publishes the release itself: bump `gradle.properties` (patch for fixes and small changes, minor for new features, major only for a clear change across the whole repository OR on the owner's explicit command), add the `## <version>` section to `CHANGELOG.md` and push to master. Release notes are written for the user of the app, in English like the rest of the UI. Since 3.0.0-4 (owner's request) each section names its kind (**Bugfix**, **Polish**, **Feature**, **Overhaul**) in its first line and sorts its items into New, Changed and Fixed, so a reader knows at once what the update is (rule in CLAUDE.md).
 - **R8 from now on (owner, after 3.4.1 ran without faults):** every published APK is shrunk and optimized by R8, and
