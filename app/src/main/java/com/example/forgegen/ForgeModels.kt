@@ -492,9 +492,15 @@ interface GalleryImageDao {
     @Query("SELECT positivePrompt FROM gallery_images WHERE fullpath = :path LIMIT 1")
     suspend fun getPositivePrompt(path: String): String?
 
-    /** Images whose positive or negative prompt matches the LIKE [pattern] (with '\' as the escape character). */
-    @Query("SELECT fullpath FROM gallery_images WHERE positivePrompt LIKE :pattern ESCAPE '\\' OR negativePrompt LIKE :pattern ESCAPE '\\'")
-    suspend fun findPathsByPrompt(pattern: String): List<String>
+    /**
+     * Both prompts of the images whose positive (or negative) prompt matches the LIKE [pattern], with '\' as the
+     * escape character: the tag search narrows its candidates down with it (3.6.2-1, TagFilter.likePattern).
+     */
+    @Query("SELECT fullpath, positivePrompt, negativePrompt FROM gallery_images WHERE positivePrompt LIKE :pattern ESCAPE '\\'")
+    suspend fun findByPositivePrompt(pattern: String): List<GalleryPromptPair>
+
+    @Query("SELECT fullpath, positivePrompt, negativePrompt FROM gallery_images WHERE negativePrompt LIKE :pattern ESCAPE '\\'")
+    suspend fun findByNegativePrompt(pattern: String): List<GalleryPromptPair>
 
     /** Up to [limit] images read before their details were kept (3.6.0); unread images wait for the sync instead. */
     @Query("SELECT fullpath, name, date, size FROM gallery_images WHERE details < :version AND savedAt != 0 LIMIT :limit")

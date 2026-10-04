@@ -58,9 +58,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -412,6 +415,10 @@ fun GalleryScreen(
                             galleryFilters.detail?.let { detail ->
                                 DetailFilterChip(detail.label) { viewModel.applyGalleryFilters(galleryFilters.copy(detail = null)) }
                             }
+                            // The searched tags (3.6.2-1), each with a cross that takes it out of the search.
+                            if (galleryFilters.positiveTags.isNotEmpty() || galleryFilters.negativeTags.isNotEmpty()) {
+                                SearchedTags(galleryFilters) { viewModel.applyGalleryFilters(it) }
+                            }
                             if (pageTab == GalleryTab.GALLERY) {
                                 val crumbs = remember(folder.path, config.galleryPath) { viewModel.galleryBreadcrumb(folder.path) }
                                 PathBar(
@@ -561,8 +568,8 @@ fun GalleryScreen(
                                             viewModel.clearGalleryFilters()
                                             activeMenu = ActiveMenu.NONE
                                         },
-                                        onConfirm = {
-                                            viewModel.applyGalleryFilters(tempFilters)
+                                        onConfirm = { confirmed ->
+                                            viewModel.applyGalleryFilters(confirmed)
                                             activeMenu = ActiveMenu.NONE
                                         },
                                     )
@@ -696,6 +703,109 @@ private fun DetailFilterChip(
             trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp)) },
         )
         Text("  from Statistics", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** The tags the search looks for (3.6.2-1), in one row that scrolls sideways; a chip's cross takes its tag out. */
+@Composable
+private fun SearchedTags(
+    filters: ForgeGalleryManager.GalleryFilters,
+    onChange: (ForgeGalleryManager.GalleryFilters) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 8.dp),
+    ) {
+        filters.positiveTags.forEach { tag ->
+            TagChip(tag, negative = false) { onChange(filters.copy(positiveTags = filters.positiveTags - tag)) }
+        }
+        filters.negativeTags.forEach { tag ->
+            TagChip(tag, negative = true) { onChange(filters.copy(negativeTags = filters.negativeTags - tag)) }
+        }
+        if (filters.exactTags) Text("exact", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** One searched tag: a negative prompt's tag is marked "−" in the error colors; a tap (or its cross) removes it. */
+@Composable
+private fun TagChip(
+    tag: String,
+    negative: Boolean,
+    onRemove: () -> Unit,
+) {
+    InputChip(
+        selected = true,
+        onClick = onRemove,
+        label = { Text(if (negative) "− $tag" else tag, maxLines = 1) },
+        trailingIcon = { Icon(Icons.Default.Close, contentDescription = "Remove $tag", modifier = Modifier.size(16.dp)) },
+        colors =
+            if (negative) {
+                InputChipDefaults.inputChipColors(
+                    selectedContainerColor = MaterialTheme.colorScheme.errorContainer,
+                    selectedLabelColor = MaterialTheme.colorScheme.onErrorContainer,
+                    selectedTrailingIconColor = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            } else {
+                InputChipDefaults.inputChipColors()
+            },
+    )
+}
+
+/**
+ * A field for the tags of one prompt (3.6.2-1): a comma, the keyboard's Done or "+" turns what was typed into chips
+ * below it, and a chip's cross takes its tag out. [draft] is the text not yet a chip; Confirm adds it too.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TagField(
+    label: String,
+    tags: List<String>,
+    negative: Boolean,
+    draft: String,
+    onDraft: (String) -> Unit,
+    onTags: (List<String>) -> Unit,
+) {
+    fun commit(text: String) {
+        val added = TagFilter.split(text)
+        if (added.isNotEmpty()) onTags((tags + added).distinct())
+    }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = { text ->
+            if (text.contains(',')) {
+                commit(text.substringBeforeLast(','))
+                onDraft(text.substringAfterLast(',').trimStart())
+            } else {
+                onDraft(text)
+            }
+        },
+        label = { Text(label) },
+        placeholder = { Text("e.g. 1girl, long hair") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions =
+            KeyboardActions(onDone = {
+                commit(draft)
+                onDraft("")
+            }),
+        trailingIcon =
+            if (draft.isNotBlank()) {
+                {
+                    IconButton(onClick = {
+                        commit(draft)
+                        onDraft("")
+                    }) { Icon(Icons.Default.Add, contentDescription = "Add Tag") }
+                }
+            } else {
+                null
+            },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    if (tags.isNotEmpty()) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+            tags.forEach { tag -> TagChip(tag, negative) { onTags(tags - tag) } }
+        }
     }
 }
 
@@ -1352,18 +1462,29 @@ private fun FilterPanel(
     isIndexing: Boolean,
     indexError: String?,
     onClear: () -> Unit,
-    onConfirm: () -> Unit,
+    onConfirm: (ForgeGalleryManager.GalleryFilters) -> Unit,
 ) {
     val availableModels by viewModel.availableModels.collectAsStateWithLifecycle()
     val availableLoras by viewModel.galleryAvailableLoras.collectAsStateWithLifecycle()
+    // Text typed into the tag fields that is not a chip yet; Confirm adds it to the tags.
+    var positiveDraft by remember { mutableStateOf("") }
+    var negativeDraft by remember { mutableStateOf("") }
 
-    Column(modifier = Modifier.padding(16.dp).heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+    // Taller since 3.6.2-1 (two tag fields with their chips and Exact Tags); it still scrolls on a short phone.
+    Column(modifier = Modifier.padding(16.dp).heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Search Gallery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             Row {
                 TextButton(onClick = onClear) { Text("Clear All") }
                 Spacer(Modifier.width(8.dp))
-                Button(onClick = onConfirm) { Text("Confirm") }
+                Button(onClick = {
+                    onConfirm(
+                        filters.copy(
+                            positiveTags = (filters.positiveTags + TagFilter.split(positiveDraft)).distinct(),
+                            negativeTags = (filters.negativeTags + TagFilter.split(negativeDraft)).distinct(),
+                        ),
+                    )
+                }) { Text("Confirm") }
             }
         }
         val indexState =
@@ -1388,13 +1509,44 @@ private fun FilterPanel(
         )
         Spacer(Modifier.height(8.dp))
 
-        OutlinedTextField(
-            value = filters.prompt,
-            onValueChange = { onChange(filters.copy(prompt = it)) },
-            label = { Text("Prompt Tag (Pos/Neg)") },
-            modifier = Modifier.fillMaxWidth(),
+        // The positive and the negative prompt apart (3.6.2-1); an image must hold every tag of both.
+        TagField(
+            label = "Positive Prompt Tags",
+            tags = filters.positiveTags,
+            negative = false,
+            draft = positiveDraft,
+            onDraft = { positiveDraft = it },
+            onTags = { onChange(filters.copy(positiveTags = it)) },
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
+        TagField(
+            label = "Negative Prompt Tags",
+            tags = filters.negativeTags,
+            negative = true,
+            draft = negativeDraft,
+            onDraft = { negativeDraft = it },
+            onTags = { onChange(filters.copy(negativeTags = it)) },
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onChange(filters.copy(exactTags = !filters.exactTags)) }
+                    .padding(vertical = 4.dp),
+        ) {
+            Checkbox(checked = filters.exactTags, onCheckedChange = null)
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text("Exact Tags")
+                Text(
+                    "Whole tags only: \"cat\" no longer finds \"catgirl\". Weights and \"_\" do not matter.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
 
         // Models section: an image has one model, so any of the selected ones matches.
         var modelsExpanded by remember { mutableStateOf(false) }

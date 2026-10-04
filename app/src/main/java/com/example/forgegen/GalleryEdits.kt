@@ -1,7 +1,5 @@
 package com.example.forgegen
 
-import com.example.forgegen.ui.components.parseTags
-import com.example.forgegen.ui.components.splitTagWeight
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -265,27 +263,15 @@ object GalleryStatistics {
     }
 
     /**
-     * Adds the tags of [prompt] to [counts], each once: without weights, LoRAs and BREAK, "_" read as a space. A LoRA
-     * ("<lora:x:0.8>") is taken out first, as it is often written without a comma before it.
+     * Adds the tags of [prompt] to [counts], each once: without weights, escapes, LoRAs and BREAK, "_" read as a space
+     * (TagFilter.tagsOf, which the gallery's "Exact Tags" search uses too, so a tag opened from here finds its count).
      */
     fun countTags(
         prompt: String,
         counts: MutableMap<String, Int>,
     ) {
-        parseTags(prompt.replace(ANGLE_BLOCK, ","))
-            .mapNotNull { tag ->
-                val base =
-                    splitTagWeight(tag)
-                        .base
-                        .replace('_', ' ')
-                        .trim()
-                        .lowercase(Locale.ROOT)
-                base.takeIf { it.isNotEmpty() && !it.startsWith("<") && it != "break" }
-            }.toSet()
-            .forEach { counts.merge(it, 1, Int::plus) }
+        TagFilter.tagsOf(prompt).forEach { counts.merge(it, 1, Int::plus) }
     }
-
-    private val ANGLE_BLOCK = Regex("<[^<>]*>")
 
     /** The day of a server date ("yyyy-MM-dd HH:mm:ss"); null when it is not one. */
     fun dayOf(date: String): LocalDate? = runCatching { LocalDate.parse(date.take(10)) }.getOrNull()

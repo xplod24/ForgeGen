@@ -101,7 +101,8 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 
 - Your server's images through [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing):
   Gallery, Favorites and All Images tabs, folder covers, a grid of 2 to 5 columns or a list, and pinch to zoom.
-- **Search by prompt** across the whole gallery, from an index kept on the phone.
+- **Search by prompt** across the whole gallery, from an index kept on the phone: tags of the positive and of the
+  negative prompt, as parts of the text or as whole tags ("Exact Tags"), each shown as a chip you can take out.
 - **Locked galleries:** when the extension has a secret key, the app asks for it once and keeps only its fingerprint.
 - **Select many:** save to the phone (or privately), share (optionally without generation data), download as ZIP, add
   to the favorites, delete with Undo, or move and copy to a folder.

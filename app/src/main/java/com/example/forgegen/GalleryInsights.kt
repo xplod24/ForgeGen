@@ -44,8 +44,10 @@ sealed interface StatTarget {
         val name: String,
     ) : StatTarget
 
+    // A tag of the positive prompt, or of the negative one (3.6.2-1).
     data class Tag(
         val tag: String,
+        val negative: Boolean = false,
     ) : StatTarget
 
     data class Detail(
@@ -62,7 +64,13 @@ sealed interface StatTarget {
             return when (target) {
                 is Model -> clean.copy(models = setOf(target.name))
                 is Lora -> clean.copy(loras = setOf(target.name))
-                is Tag -> clean.copy(prompt = target.tag)
+                // Whole tags, as the statistics count them, so the gallery finds as many images as the count says.
+                is Tag ->
+                    if (target.negative) {
+                        clean.copy(negativeTags = listOf(target.tag), exactTags = true)
+                    } else {
+                        clean.copy(positiveTags = listOf(target.tag), exactTags = true)
+                    }
                 is Detail -> clean.copy(detail = target.filter)
             }
         }
@@ -284,7 +292,7 @@ class GalleryInsights(
                 negativeTags.entries
                     .sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
                     .take(TOP_TAGS)
-                    .map { SettingCount(it.key, it.value, StatTarget.Tag(it.key)) },
+                    .map { SettingCount(it.key, it.value, StatTarget.Tag(it.key, negative = true)) },
         )
     }
 

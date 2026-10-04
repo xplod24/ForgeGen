@@ -309,14 +309,24 @@ object ForgeGalleryManager {
         val loras: Set<String> = emptySet(),
         val lorasIsAnd: Boolean = false, // false = any of the LoRAs, true = all of them
         val name: String = "",
-        val prompt: String = "",
+        // Tags the positive and the negative prompt must hold, all of them (3.6.2-1: before, one text in either).
+        val positiveTags: List<String> = emptyList(),
+        val negativeTags: List<String> = emptyList(),
+        // Whole tags only ("cat" no longer finds "catgirl"), compared as the statistics count them (TagFilter).
+        val exactTags: Boolean = false,
         val sortOrder: SortOrder = SortOrder.NEWEST,
         // A setting the statistics opened the gallery with (3.6.0), shown as one chip.
         val detail: GalleryDetailFilter? = null,
     ) {
         /** A search looks through the whole indexed gallery instead of the open folder. */
         val isSearch: Boolean
-            get() = name.isNotBlank() || prompt.isNotBlank() || models.isNotEmpty() || loras.isNotEmpty() || detail != null
+            get() =
+                name.isNotBlank() ||
+                    positiveTags.isNotEmpty() ||
+                    negativeTags.isNotEmpty() ||
+                    models.isNotEmpty() ||
+                    loras.isNotEmpty() ||
+                    detail != null
     }
 
     internal val _galleryFilters = MutableStateFlow(GalleryFilters())
@@ -381,7 +391,7 @@ object ForgeGalleryManager {
                 val inGallery = if (root == null) index else index.filter { isUnderNormalized(it.fullpath, root) }
                 val hits =
                     if (filters.isSearch) {
-                        val promptHits = filters.prompt.trim().takeIf { it.isNotEmpty() }?.let { promptMatches(it) }
+                        val promptHits = tagMatches(filters)
                         val detailHits = filters.detail?.let { detailMatches(it) }
                         inGallery.filter { matches(it, filters, promptHits) && (detailHits == null || it.fullpath in detailHits) }
                     } else {

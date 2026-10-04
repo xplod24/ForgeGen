@@ -420,8 +420,8 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   (`ForgeApp`). AppState is written by a debounced writer (500 ms, `flushState` on stop). txt2img images are streamed
   to files by `Txt2ImgImages` (never a whole base64 string); the live preview is a `LivePreview` (bytes decoded once,
   same text skipped) downsampled by the UI; the session keeps `MAX_SESSION_IMAGES` = 100 (never the newest batch)
-  and deletes older files. The gallery keeps `IndexedImage` (no prompts) in memory; prompt search =
-  `findPathsByPrompt` (SQL LIKE, escaped); a sync merges its changes into it (3.6.0-1, `GalleryIndex.merge`). Grid and list: `GalleryThumbnail` (AsyncImage) +
+  and deletes older files. The gallery keeps `IndexedImage` (no prompts) in memory; prompt search = tags since
+  3.6.2-1 (see "3.6.2-1"); a sync merges its changes into it (3.6.0-1, `GalleryIndex.merge`). Grid and list: `GalleryThumbnail` (AsyncImage) +
   `Modifier.shimmer()` (draw phase). Models/LoRAs: `ResourcePickerSheet` (lazy, searchable). Undo history: 100 steps,
   typing grouped (800 ms). `PromptHighlighting` is an object. Tests: G32 (session, debounce, answer order).
 - **3.6.0 (minor "Feature", plan approved by the owner 2026-10-01; mockups "ForgeGen Statistics Proposal", boards
@@ -519,6 +519,17 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
     running job of an install during the queue still starts again (the server may finish it too). Works from the
     first update after 3.6.2 (3.6.1 saved nothing). Tests: unit `SessionMemoryTest`, harness G56 (4); the harness's
     `TestApp.start(prepare = ...)` runs with the new app and database before the start.
+- **3.6.2-1 (micro-patch "Polish" on the owner's command, 2026-10-04): tag search in the gallery.**
+  `GalleryFilters.prompt` (one text, either prompt) became `positiveTags`, `negativeTags` (all must match) and
+  `exactTags`. `TagFilter` (pure, `TagFilterTest`): `normalize` (no weight, `\(`/`\)` unescaped, "_" = space,
+  lowercase, BREAK and LoRAs out), `tagsOf` (also parts tags at a new line), `holdsAll` (substring any case, or whole
+  tags), `likePattern` (narrowing: the text, or a whole tag's longest word). `tagMatches` (gallery/GalleryFiltering.kt)
+  narrows in SQL (`findByPositivePrompt` / `findByNegativePrompt`, which replaced `findPathsByPrompt`) and checks in
+  Kotlin. `GalleryStatistics.countTags` uses `TagFilter.tagsOf`, and `StatTarget.Tag(tag, negative)` opens an exact
+  search in its own prompt, so the gallery finds what the count says. UI (GalleryScreen): `TagField` (a comma, Done or
+  "+" makes chips; Confirm adds the text not yet a chip), the "Exact Tags" checkbox, `SearchedTags` chips over the
+  list (negative "−" in error colors, "exact" after them), the search panel up to 560 dp. Tests: G17-03 (positive,
+  negative, several, exact), unit `StatisticsTest`.
 - **R8 rules (since 3.4.1; the owner confirmed the shrunk app works and made R8 permanent):** only the APK built with
   `-Pforgegen.publish` (release.yml, ci.yml) goes through R8 (setup in `app/build.gradle.kts`, rules in
   `app/proguard-rules.pro`). Android Studio builds, the unit tests, the JVM harness and the Robolectric rig all run

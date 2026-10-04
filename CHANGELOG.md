@@ -1,3 +1,14 @@
+## 3.6.2-1
+**Polish** · the gallery's search looks for tags: in the positive or the negative prompt, as whole tags if you like, each one a chip you can take out
+
+### New
+- **Exact Tags:** a checkbox in the search panel. On, a tag must be a whole tag of the prompt: "cat" no longer finds "catgirl". Weights, "_" and capitals do not matter.
+- **Every searched tag is a chip** above the images and in the search panel; its cross takes it out of the search at once.
+
+### Changed
+- **Positive and negative prompt apart:** the search panel has a field for each. Type several tags (a comma or Done adds one) and only images with all of them are found.
+- A tag opened from the statistics now finds exactly as many images as its count, in its own prompt.
+
 ## 3.6.2
 **Polish** · "Install" asks first, and after an update ForgeGen goes on where you left it
 

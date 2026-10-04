@@ -68,13 +68,36 @@ internal suspend fun ForgeGalleryManager.detailMatches(filter: GalleryDetailFilt
     }
 }
 
-// Ścieżki obrazów, których prompt zawiera tekst (zapytanie LIKE w bazie, ze znakami specjalnymi zabezpieczonymi).
+// Ścieżki obrazów pasujących do tagów z filtrów (pozytywne i negatywne osobno, wszystkie naraz); null bez tagów.
+// Najpierw baza zawęża wyniki zapytaniem LIKE (jeden tag, najdłuższy), potem Kotlin sprawdza każdy prompt dokładnie
+// (TagFilter.holdsAll: fragment tekstu albo, przy "Exact Tags", cały tag). Od 3.6.2-1.
 
-/** Paths of the images whose prompts contain [text] (ignoring case), found by the database. */
-internal suspend fun ForgeGalleryManager.promptMatches(text: String): Set<String> {
-    val escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+/** Paths of the images whose prompts hold the filters' tags (3.6.2-1); null without tags. */
+internal suspend fun ForgeGalleryManager.tagMatches(filters: GalleryFilters): Set<String>? {
+    val positive = filters.positiveTags.filter { it.isNotBlank() }
+    val negative = filters.negativeTags.filter { it.isNotBlank() }
+    if (positive.isEmpty() && negative.isEmpty()) return null
     return try {
-        getDb().galleryImageDao().findPathsByPrompt("%$escaped%").toHashSet()
+        val dao = getDb().galleryImageDao()
+
+        // Jeden prompt (pozytywny albo negatywny): zawężenie w bazie, potem dokładne sprawdzenie w Kotlinie.
+        suspend fun inPrompt(
+            tags: List<String>,
+            isNegative: Boolean,
+        ): Set<String> {
+            val pattern = TagFilter.likePattern(tags.maxBy { it.length }, filters.exactTags)
+            val rows = if (isNegative) dao.findByNegativePrompt(pattern) else dao.findByPositivePrompt(pattern)
+            return rows
+                .filter { TagFilter.holdsAll(if (isNegative) it.negativePrompt else it.positivePrompt, tags, filters.exactTags) }
+                .mapTo(HashSet()) { it.fullpath }
+        }
+        val positiveHits = if (positive.isEmpty()) null else inPrompt(positive, isNegative = false)
+        val negativeHits = if (negative.isEmpty()) null else inPrompt(negative, isNegative = true)
+        when {
+            positiveHits == null -> negativeHits.orEmpty()
+            negativeHits == null -> positiveHits
+            else -> positiveHits.intersect(negativeHits)
+        }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         Log.e(TAG, "Prompt search failed", e)

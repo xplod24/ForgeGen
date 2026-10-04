@@ -261,14 +261,20 @@ class StatisticsTest {
 
     @Test
     fun `a statistics row opens the gallery with only its own filter`() {
-        val current = ForgeGalleryManager.GalleryFilters(prompt = "cat", sortOrder = ForgeGalleryManager.SortOrder.OLDEST)
+        val current = ForgeGalleryManager.GalleryFilters(positiveTags = listOf("cat"), sortOrder = ForgeGalleryManager.SortOrder.OLDEST)
         val size = StatTarget.filters(StatTarget.Detail(GalleryDetailFilter(GalleryDetailFilter.Kind.SIZE, "832x1216")), current)
-        assertEquals("", size.prompt)
+        assertTrue(size.positiveTags.isEmpty())
         assertEquals(ForgeGalleryManager.SortOrder.OLDEST, size.sortOrder)
         assertEquals("Size 832×1216", size.detail?.label)
         assertTrue(size.isSearch)
         assertEquals(setOf("flux1-dev"), StatTarget.filters(StatTarget.Model("flux1-dev"), current).models)
-        assertEquals("smile", StatTarget.filters(StatTarget.Tag("smile"), current).prompt)
+        // A tag as a whole tag, in its own prompt (3.6.2-1), so the gallery finds as many images as the count says.
+        val smile = StatTarget.filters(StatTarget.Tag("smile"), current)
+        assertEquals(listOf("smile"), smile.positiveTags)
+        assertTrue(smile.exactTags && smile.negativeTags.isEmpty())
+        val blurry = StatTarget.filters(StatTarget.Tag("blurry", negative = true), current)
+        assertEquals(listOf("blurry"), blurry.negativeTags)
+        assertTrue(blurry.exactTags && blurry.positiveTags.isEmpty())
         assertEquals("Euler a · Karras", GalleryDetailFilter(GalleryDetailFilter.Kind.SAMPLER, "Euler a", "Karras").label)
         assertEquals("The model's own VAE", GalleryDetailFilter(GalleryDetailFilter.Kind.MODULES, "").label)
     }
