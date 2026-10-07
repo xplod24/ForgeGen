@@ -12,6 +12,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okio.buffer
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -35,7 +38,7 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 data class VaultConnection(val url: String = "", val token: String = "", val certificate: String = "")
-data class VaultLocal(val connection: VaultConnection = VaultConnection(), val key: String = "", val enabled: Boolean = false, val automatic: Boolean = false)
+data class VaultLocal(val connection: VaultConnection = VaultConnection(), val key: String = "", val enabled: Boolean = false, val automatic: Boolean = false, val recoveryEnvelope: String = "")
 data class VaultEntry(val id: String = "", val deleted: Double? = null, val expires: Double? = null, val size: Long = 0)
 data class VaultListing(val objects: List<VaultEntry> = emptyList(), val used: Long = 0, val quota: Long = 0)
 data class VaultImport(val server: String = "", val items: List<GalleryItem> = emptyList(), val position: Int = 0, val prefix: String = "", val folders: List<String> = emptyList(), val visited: List<String> = emptyList(), val root: String = "")
@@ -48,6 +51,8 @@ object RemoteVault {
     private lateinit var context: Context
     private val gson = Gson()
     private val guard = Any()
+    private val transferMutex = Mutex()
+    private val calls = java.util.concurrent.ConcurrentHashMap.newKeySet<okhttp3.Call>()
     val enabled = MutableStateFlow(false)
     val automatic = MutableStateFlow(false)
     val status = MutableStateFlow("Not configured")
@@ -115,14 +120,17 @@ object RemoteVault {
         automatic.value = value.automatic
     }
 
+    private fun update(change: (VaultLocal) -> VaultLocal) = synchronized(guard) { save(change(local)) }
+
     fun setEnabled(value: Boolean) {
-        save(local.copy(enabled = value))
+        update { it.copy(enabled = value) }
         if (value && ready) schedule() else {
+            calls.forEach { it.cancel() }
             WorkManager.getInstance(context).cancelUniqueWork(WORK)
             WorkManager.getInstance(context).cancelUniqueWork(PERIODIC)
         }
     }
-    fun setAutomatic(value: Boolean) = save(local.copy(automatic = value))
+    fun setAutomatic(value: Boolean) = update { it.copy(automatic = value) }
 
     suspend fun connect(text: String) = withContext(Dispatchers.IO) {
         val connection = gson.fromJson(text, VaultConnection::class.java)
@@ -131,8 +139,8 @@ object RemoteVault {
         require(connection.token.length in 16..4096 && connection.certificate.length <= 16384) { "Invalid connection file" }
         require(!ready || local.connection.url == connection.url.trimEnd('/')) { "This phone already has a vault on another server. Restore it on a fresh installation to change hosts." }
         val candidate = connection.copy(url = connection.url.trimEnd('/'))
-        client(candidate).newCall(Request.Builder().url(candidate.url + "/healthz").build()).execute().use { require(it.isSuccessful) { "Server unavailable" } }
-        save(local.copy(connection = candidate, enabled = true))
+        execute(client(candidate).newCall(Request.Builder().url(candidate.url + "/healthz").build())).use { require(it.isSuccessful) { "Server unavailable" } }
+        update { it.copy(connection = candidate) }
         status.value = if (ready) "Connected" else "Connected. Create or restore your vault."
     }
 
@@ -152,8 +160,32 @@ object RemoteVault {
 
     private fun request(path: String, method: String = "GET", body: okhttp3.RequestBody? = null): okhttp3.Response {
         check(enabled.value) { "Remote vault is disabled" }
-        return client().newCall(Request.Builder().url(local.connection.url + path).header("Authorization", "Bearer " + local.connection.token)
-            .method(method, body).build()).execute()
+        return execute(client().newCall(Request.Builder().url(local.connection.url + path).header("Authorization", "Bearer " + local.connection.token)
+            .method(method, body).build()))
+    }
+
+    /** Keep calls cancellable until their response bodies close, including downloads after response headers. */
+    private fun execute(call: okhttp3.Call): okhttp3.Response {
+        synchronized(guard) {
+            check(enabled.value) { "Remote vault is disabled" }
+            calls.add(call)
+        }
+        try {
+            val response = call.execute()
+            val body = response.body
+            val source = object : okio.ForwardingSource(body.source()) {
+                override fun close() { try { super.close() } finally { calls.remove(call) } }
+            }
+            val buffered = source.buffer()
+            return response.newBuilder().body(object : okhttp3.ResponseBody() {
+                override fun contentType() = body.contentType()
+                override fun contentLength() = body.contentLength()
+                override fun source() = buffered
+            }).build()
+        } catch (error: Exception) {
+            calls.remove(call)
+            throw error
+        }
     }
 
     /** Returns a new code only here, once; neither the code nor a reversible copy is persisted. */
@@ -164,8 +196,7 @@ object RemoteVault {
         val recovery = VaultCrypto.randomKey()
         val envelope = VaultCrypto.encode(VaultCrypto.seal(recovery, key, "forgegen-vault-recovery-v1"))
         // Preserve the device key before committing the server envelope; do not lose it on a dropped reply.
-        save(local.copy(key = VaultCrypto.encode(key)))
-        writePrivate(File(directory, "recovery-pending.enc"), envelope.toByteArray())
+        update { it.copy(key = VaultCrypto.encode(key), recoveryEnvelope = envelope) }
         runCatching { schedule() }
         val code = VaultCrypto.encode(recovery)
         recovery.fill(0)
@@ -183,7 +214,7 @@ object RemoteVault {
             }
             val key = VaultCrypto.open(recovery, VaultCrypto.decode(envelope), "forgegen-vault-recovery-v1")
             require(key.size == 32)
-            save(local.copy(key = VaultCrypto.encode(key)))
+            update { it.copy(key = VaultCrypto.encode(key)) }
             key.fill(0)
             schedule()
             status.value = "Vault restored"
@@ -264,11 +295,14 @@ object RemoteVault {
     }
 
     suspend fun transfer(): Boolean = withContext(Dispatchers.IO) {
-        if (!enabled.value || !ready) return@withContext true
-        try {
-            val recovery = File(directory, "recovery-pending.enc")
-            if (recovery.exists()) {
-                val envelope = String(readPrivate(recovery))
+        transferMutex.withLock { transferLocked() }
+    }
+
+    private suspend fun transferLocked(): Boolean {
+        if (!enabled.value || !ready) return true
+        return try {
+            val envelope = local.recoveryEnvelope
+            if (envelope.isNotBlank()) {
                 request("/v1/recovery", "PUT", gson.toJson(mapOf("envelope" to envelope)).toRequestBody("application/json".toMediaType())).use {
                     if (it.code == 409) {
                         request("/v1/recovery").use { existing ->
@@ -276,7 +310,7 @@ object RemoteVault {
                         }
                     } else check(it.isSuccessful) { "Recovery setup failed" }
                 }
-                recovery.delete()
+                update { it.copy(recoveryEnvelope = "") }
             }
             val importing = File(directory, "import.enc")
             if (importing.exists()) {
@@ -308,7 +342,7 @@ object RemoteVault {
                         val url = task.server.trimEnd('/').toHttpUrl().newBuilder()
                             .addPathSegment(task.prefix).addPathSegment("file")
                             .addQueryParameter("path", item.fullpath).addQueryParameter("t", item.date.orEmpty()).build()
-                        ForgeSettingsManager.client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+                        execute(ForgeSettingsManager.client.newCall(Request.Builder().url(url).build())).use { response ->
                             check(response.isSuccessful) { "Source image unavailable" }
                             response.body!!.byteStream().use { input -> source.outputStream().use { output ->
                                 val buffer = ByteArray(65536)
@@ -342,13 +376,14 @@ object RemoteVault {
         }
     }
 
-    private fun uploadPending() {
+    private suspend fun uploadPending() {
         for (file in directory.listFiles()?.filter { it.name.endsWith(".pending") }.orEmpty()) {
+            currentCoroutineContext().ensureActive()
             if (!enabled.value) return
             val id = file.name.removeSuffix(".pending")
             val req = Request.Builder().url(local.connection.url + "/v1/objects/$id").header("Authorization", "Bearer " + local.connection.token)
                 .header("X-Content-SHA256", VaultCrypto.digest(file)).put(file.asRequestBody("application/octet-stream".toMediaType())).build()
-            client().newCall(req).execute().use { response -> check(response.isSuccessful) { "Upload failed" } }
+            execute(client().newCall(req)).use { response -> check(response.isSuccessful) { "Upload failed" } }
             // Keep only an opaque receipt; no per-image decryption key or original survives in this queue.
             check(File(directory, "$id.saved").createNewFile() || File(directory, "$id.saved").exists())
             file.delete()
@@ -365,8 +400,13 @@ object RemoteVault {
         } }
     }
     suspend fun trash(id: String, restore: Boolean = false) = withContext(Dispatchers.IO) {
+        if (!restore) calls.filter { it.request().method == "PUT" && it.request().url.encodedPath == "/v1/objects/$id" }.forEach { it.cancel() }
         request("/v1/objects/$id" + if (restore) "/restore" else "", if (restore) "POST" else "DELETE", if (restore) ByteArray(0).toRequestBody() else null).use { check(it.isSuccessful) }
-        if (!restore) File(directory, "$id.saved").delete()
+        if (!restore) synchronized(guard) {
+            // An opaque receipt prevents an unfinished import from silently recreating a deleted image.
+            File(directory, "$id.pending").delete()
+            File(directory, "$id.saved").createNewFile()
+        }
     }
     suspend fun download(id: String) = withContext(Dispatchers.IO) {
         val partial = File(directory, "download.part")

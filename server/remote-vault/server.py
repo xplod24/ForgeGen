@@ -69,6 +69,18 @@ class Store:
             self.purge()
             existing = self.db.execute('SELECT sha,deleted FROM objects WHERE id=?', (identifier,)).fetchone()
             if existing:
+                # Consume the bounded request before replying. Closing with unread body bytes can reset TCP
+                # and hide the successful retry/conflict response from the phone.
+                remaining = size
+                checksum = hashlib.sha256()
+                while remaining:
+                    chunk = stream.read(min(65536, remaining))
+                    if not chunk:
+                        raise Problem(400, 'Incomplete upload')
+                    checksum.update(chunk)
+                    remaining -= len(chunk)
+                if not hmac.compare_digest(checksum.hexdigest(), expected_sha):
+                    raise Problem(400, 'Checksum mismatch')
                 if existing[0] != expected_sha or existing[1] is not None:
                     raise Problem(409, 'Object already exists or is in trash')
                 return False
