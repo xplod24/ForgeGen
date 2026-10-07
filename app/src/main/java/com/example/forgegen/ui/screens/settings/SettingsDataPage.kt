@@ -35,7 +35,13 @@ internal fun SettingsUiState.dataSettings(): List<SettingItem> {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val debugUnlocked by viewModel.debugUnlocked.collectAsStateWithLifecycle()
 
+    var showVault by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    if (showVault) RemoteVaultPanel { showVault = false }
     return settingsOf {
+        // Opcjonalny schowek otwiera osobny panel; ustawienia i galeria pozostają niezależne.
+        add(SettingsPage.DATA, "Storage", "secure remote vault encrypted archive") {
+            TextPreference("Secure Remote Vault", "Optional encrypted storage on your own server") { showVault = true }
+        }
         // --- BACKUP & DATA ---
         // Eksport: systemowe okno zapisu pliku, domyślna nazwa z dzisiejszą datą.
         add(SettingsPage.DATA, "Backup", "export settings backup file presets profiles wildcards favorites queue") {

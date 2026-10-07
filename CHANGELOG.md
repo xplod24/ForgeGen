@@ -1,3 +1,19 @@
+## 3.7.0
+**Feature** · optional encrypted storage on your own server, with recovery and a 24-hour trash
+
+### New
+- **Secure Remote Vault:** disabled by default. Connect your own HTTPS server from Settings > Backup & Data; ForgeGen works without it.
+- Save a result manually, send selected Forge gallery images, automatically archive new results or import the entire gallery with a persistent transfer queue.
+- Images, thumbnails and unchanged generation metadata are encrypted on the phone before upload. Server outages do not fail generation.
+- A recovery code is shown once when the vault is created; explicitly export it as a text file if wanted. A replacement phone needs that code and the server connection file.
+- Browsing requires the phone's screen lock; background transfers can continue while the phone is locked. Vault keys and transfers are excluded from app and Android backups.
+- Vault-only trash keeps objects for 24 hours before removing their encrypted files and wrapped image keys. Previously exported copies and backups remain outside its control; forensic erasure on microSD is not guaranteed.
+- A small ARM64/x86_64 server deployment, manual backup tool, server integrity tests and connected Compose visual checks.
+
+### Changed
+- CI and publication wait for the vault server and emulator checks. A reproducible full verification script includes the unit suite, connected UI tests and the R8 publication build.
+- Android Gradle Plugin 9.4.1 and KSP 2.3.6, matching the locally verified toolchain.
+
 ## 3.6.2-1
 **Polish** · the gallery's search looks for tags: in the positive or the negative prompt, as whole tags if you like, each one a chip you can take out
 

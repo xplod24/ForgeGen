@@ -15,6 +15,7 @@ class ForgeApp :
     ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
+        RemoteVault.init(this)
         // New releases are looked for once a day, also while the app is closed (every 6 hours up to 3.6.0-2).
         SelfUpdate.scheduleChecks(this)
         // The home screen widgets are drawn as RemoteViews (3.6.0).

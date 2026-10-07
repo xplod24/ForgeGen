@@ -22,6 +22,10 @@ object Txt2ImgImages {
         reader: Reader,
         onImage: (index: Int, image: InputStream) -> Unit,
     ): Int {
+        return readWithInfo(reader, onImage) {}
+    }
+
+    fun readWithInfo(reader: Reader, onImage: (Int, InputStream) -> Unit, onInfo: (String) -> Unit): Int {
         val json = Scanner(reader)
         var count = 0
         json.expect('{')
@@ -33,6 +37,9 @@ object Txt2ImgImages {
             if (key == "images" && json.peekNonSpace() == '['.code) {
                 json.next()
                 count += readImages(json, onImage, count)
+            } else if (key == "info" && json.peekNonSpace() == '"'.code) {
+                json.next()
+                onInfo(json.readShortString(512 * 1024))
             } else {
                 json.skipValue() // for "images": null (no images)
             }
@@ -114,14 +121,14 @@ object Txt2ImgImages {
         }
 
         /** The rest of a string whose opening quote was read, for keys and other short strings. */
-        fun readShortString(): String {
+        fun readShortString(limit: Int = Int.MAX_VALUE): String {
             val sb = StringBuilder()
             while (true) {
                 when (val c = next()) {
                     -1 -> throw MalformedJsonException("Unterminated string")
                     '"'.code -> return sb.toString()
-                    '\\'.code -> sb.append(escaped())
-                    else -> sb.append(c.toChar())
+                    '\\'.code -> { val decoded = escaped(); if (sb.length < limit) sb.append(decoded) }
+                    else -> if (sb.length < limit) sb.append(c.toChar())
                 }
             }
         }

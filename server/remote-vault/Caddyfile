@@ -1,0 +1,10 @@
+{
+    admin off
+    auto_https disable_redirects
+    skip_install_trust
+    default_sni {$VAULT_HOST}
+}
+https://{$VAULT_HOST}:8443 {
+    tls internal
+    reverse_proxy vault:8080
+}

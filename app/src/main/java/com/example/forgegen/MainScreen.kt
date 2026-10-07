@@ -59,6 +59,8 @@ fun MainScreen(
     navController: NavHostController,
 ) {
     val config by viewModel.config.collectAsStateWithLifecycle()
+    val vaultEnabled by RemoteVault.enabled.collectAsStateWithLifecycle()
+    val vaultScope = rememberCoroutineScope()
     val appState = viewModel.appState.collectAsStateWithLifecycle()
     // Every typed character changes the state (3.4.0): the cards below the prompt get it without the prompts, so they
     // are not drawn again while a prompt is typed.
@@ -301,6 +303,16 @@ fun MainScreen(
                                     },
                                 )
                             }
+                        }
+
+                        if (vaultEnabled && RemoteVault.ready && currentSessionIndex in sessionImages.indices) {
+                            TextButton(onClick = {
+                                val file = java.io.File(sessionImages[currentSessionIndex])
+                                vaultScope.launch(Dispatchers.IO) {
+                                    try { RemoteVault.enqueue(file); viewModel.showToast("Vault transfer queued") }
+                                    catch (_: Exception) { viewModel.showToast("Vault transfer could not be prepared") }
+                                }
+                            }) { Text("Save Result to Remote Vault") }
                         }
 
                         PromptCard(

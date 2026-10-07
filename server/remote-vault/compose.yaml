@@ -1,0 +1,31 @@
+services:
+  vault:
+    build: .
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes: [./data:/data]
+    tmpfs: [/tmp]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    logging:
+      options: {max-size: "5m", max-file: "2"}
+  https:
+    build:
+      context: .
+      dockerfile: Dockerfile.https
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    ports: ["${VAULT_BIND:-127.0.0.1}:8443:8443"]
+    environment:
+      VAULT_HOST: ${VAULT_HOST:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./tls:/data
+      - ./caddy-config:/config
+    logging:
+      options: {max-size: "5m", max-file: "2"}

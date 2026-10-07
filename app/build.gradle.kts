@@ -164,6 +164,8 @@ androidComponents {
 }
 
 dependencies{
+    implementation("com.google.crypto.tink:tink-android:1.23.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation(libs.retrofit)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.logging)

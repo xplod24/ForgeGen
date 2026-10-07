@@ -13,7 +13,10 @@ on:
       - '**.md'
 
 jobs:
+  vault-checks:
+    uses: ./.github/workflows/vault-checks.yml
   build:
+    needs: vault-checks
     runs-on: ubuntu-latest
 
     steps:

@@ -112,6 +112,7 @@ fun SelectionMoreMenu(
     onMove: () -> Unit,
     onCopy: () -> Unit,
     onDelete: () -> Unit,
+    onVault: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     Box {
@@ -147,6 +148,7 @@ fun SelectionMoreMenu(
                 },
             )
             item("Save to Phone", Icons.Default.Save, onClick = onSave)
+            if (onVault != null) item("Save to Remote Vault", Icons.Default.Save, onClick = onVault)
             item("Download as ZIP", Icons.Default.FolderZip, onClick = onZip)
             if (onUpscale != null) item("Upscale or Vary", Icons.Default.OpenInFull, onClick = onUpscale)
             HorizontalDivider()

@@ -658,3 +658,12 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
    Seed" in section 1).
 6. **Default options per model**: done in 3.0.0 ("Use Model Defaults" in the model's settings, off unless switched on).
    Released together with the main screen redesign (the owner's pick "A") and the What's New bar as the major 3.0.0.
+
+## Secure Remote Vault (3.7.0)
+
+- Optional, off by default, own HTTPS server. No semantic prompt processing; Forge WebUI Neo remains the primary server.
+- `RemoteVault` owns separate Keystore-encrypted settings/manifests in `noBackupFilesDir/remote-vault`, outside Room, settings exports and Coil/session caches. WorkManager queues run only when opted in. Import manifests record source server, IIB prefix, folder frontier, visited folders and per-file progress; switching generation servers pauses import.
+- `VaultCrypto` uses AES-256-GCM for metadata/recovery envelopes and Tink streaming AES256_GCM_HKDF_1MB for originals; a random image keyset lives only inside its encrypted header. HMAC of the original checksum deduplicates retries without exposing its plaintext checksum. Recovery code is independent random 32 bytes, returned only at creation, never persisted by the app.
+- `RemoteVaultPanel` is a separate secure dialog; native unlock gates browsing and ON_STOP clears decrypted headers. Background uploads use the device Keystore without per-use authentication. Only an explicit Save to Phone exposes a verified decrypted original outside private temporary files.
+- Raspberry Pi backend is `server/remote-vault`: opaque authenticated storage, 100 GiB quota, TLS through private Caddy CA, rootless read-only containers, 24h trash and expiry on access/startup/sweeper. The owner accepted logical deletion and microSD limitations, including older backups/copies. Manual backup mechanism only, no scheduler.
+- `tools/full-harness.sh`, `VaultCryptoTest`, `VaultUiTest`, backend tests and reusable `vault-checks.yml` supplement the entire existing unit suite; CI/release depend on backend/emulator verification. No UI screenshots contain recovery codes or private connection credentials.

@@ -25,7 +25,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  vault-checks:
+    uses: ./.github/workflows/vault-checks.yml
   release:
+    needs: vault-checks
     runs-on: ubuntu-latest
 
     steps:

@@ -1,0 +1,10 @@
+data
+tls
+caddy-config
+bootstrap-token
+connection.json
+__pycache__
+*.tar.gz
+
+.env
+backups

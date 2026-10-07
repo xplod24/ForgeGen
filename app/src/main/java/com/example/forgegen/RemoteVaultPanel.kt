@@ -1,0 +1,201 @@
+package com.example.forgegen
+
+import android.app.Activity
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** Kept outside the existing gallery layout. No content is fetched until the user unlocks the vault. */
+@Composable
+fun RemoteVaultPanel(onClose: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val enabled by RemoteVault.enabled.collectAsState()
+    val automatic by RemoteVault.automatic.collectAsState()
+    val status by RemoteVault.status.collectAsState()
+    var message by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var unlocked by remember { mutableStateOf(false) }
+    var recoveryCode by remember { mutableStateOf<String?>(null) }
+    var restoreCode by remember { mutableStateOf("") }
+    var showRestore by remember { mutableStateOf(false) }
+    var showTrash by remember { mutableStateOf(false) }
+    var entries by remember { mutableStateOf<List<VaultEntry>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    val headers = remember { mutableStateMapOf<String, VaultHeader>() }
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) { unlocked = false; entries = emptyList(); headers.clear() }
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer); headers.clear() }
+    }
+    fun action(task: suspend () -> Unit) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            try { task(); message = "" } catch (error: Exception) { message = error.message ?: "Operation failed" }
+            finally { busy = false }
+        }
+    }
+    suspend fun refresh() {
+        entries = RemoteVault.list().objects
+        headers.clear()
+    }
+    val connection = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) action {
+            val text = withContext(Dispatchers.IO) {
+                context.contentResolver.openInputStream(uri)!!.use { input ->
+                    val bytes = input.readNBytes(32769)
+                    require(bytes.size <= 32768) { "Connection file is too large" }
+                    String(bytes)
+                }
+            }
+            RemoteVault.connect(text)
+        }
+    }
+    val exportCode = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val code = recoveryCode
+        if (uri != null && code != null) scope.launch(Dispatchers.IO) {
+            try { context.contentResolver.openOutputStream(uri)!!.use { it.write(code.toByteArray()) } }
+            catch (_: Exception) { withContext(Dispatchers.Main) { message = "Recovery code could not be saved" } }
+        }
+    }
+    Dialog(onDismissRequest = { if (recoveryCode == null && !busy) onClose() }, properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Secure Remote Vault", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onClose, enabled = recoveryCode == null && !busy) { Text("Close") }
+                }
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item {
+                        VaultSwitches(enabled, automatic, RemoteVault.ready, status,
+                            onEnabled = { RemoteVault.setEnabled(it); if (!it) { unlocked = false; entries = emptyList(); headers.clear() } },
+                            onAutomatic = { RemoteVault.setAutomatic(it) })
+                    }
+                    if (enabled) {
+                        item {
+                            Text(RemoteVault.address.ifBlank { "Use your own vault server. Images are encrypted on this phone." }, style = MaterialTheme.typography.bodySmall)
+                            OutlinedButton(onClick = { connection.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }, enabled = !busy) { Text("Import Connection File") }
+                            if (!RemoteVault.ready) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { action { recoveryCode = RemoteVault.create() } }, enabled = !busy && RemoteVault.address.isNotBlank()) { Text("Create Vault") }
+                                    OutlinedButton(onClick = { showRestore = true }, enabled = !busy && RemoteVault.address.isNotBlank()) { Text("Restore Vault") }
+                                }
+                            } else {
+                                OutlinedButton(onClick = {
+                                    if (!AppLock.isAvailable(context)) message = "Set a screen lock on this phone to browse the vault."
+                                    else AppLock.authenticate(context as Activity, true, "Unlock Remote Vault") {
+                                        unlocked = true
+                                        action { refresh() }
+                                    }
+                                }, enabled = !busy) { Text(if (unlocked) "Refresh Vault" else "Unlock Vault") }
+                                OutlinedButton(onClick = { action { RemoteVault.queueWholeGallery() } }, enabled = !busy) { Text("Import Entire Forge Gallery") }
+                                TextButton(onClick = { RemoteVault.schedule() }) { Text("Retry Pending Transfers") }
+                                TextButton(onClick = { RemoteVault.cancelImport() }) { Text("Cancel Gallery Import") }
+                            }
+                        }
+                    }
+                    if (busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                    if (message.isNotEmpty()) item { Text(message, color = MaterialTheme.colorScheme.error) }
+                    if (unlocked && enabled) {
+                        item {
+                            OutlinedTextField(query, { query = it }, label = { Text("Search names or generation data") }, modifier = Modifier.fillMaxWidth())
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                FilterChip(!showTrash, { showTrash = false }, label = { Text("Images") })
+                                FilterChip(showTrash, { showTrash = true }, label = { Text("Trash · 24 hours") })
+                            }
+                            Text("Deleting here only affects the remote vault. Saved copies elsewhere remain.", style = MaterialTheme.typography.bodySmall)
+                        }
+                        items(entries.filter { (it.deleted != null) == showTrash }, key = { it.id }) { entry ->
+                            var error by remember(entry.id) { mutableStateOf(false) }
+                            LaunchedEffect(entry.id, unlocked) {
+                                if (unlocked) try { val header = RemoteVault.header(entry.id); if (unlocked && enabled) headers[entry.id] = header } catch (_: Exception) { error = true }
+                            }
+                            val header = headers[entry.id]
+                            if (query.isBlank() || header?.let { (it.name + " " + it.metadata).contains(query, true) } == true) {
+                                Card(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(12.dp)) {
+                                        if (header != null) {
+                                            val bitmap = remember(header.thumbnail) { runCatching { val data = VaultCrypto.decode(header.thumbnail); BitmapFactory.decodeByteArray(data, 0, data.size) }.getOrNull() }
+                                            if (bitmap != null) Image(bitmap.asImageBitmap(), header.name, Modifier.fillMaxWidth().height(160.dp))
+                                            Text(header.name, style = MaterialTheme.typography.titleSmall)
+                                            if (entry.expires != null) Text("Expires: " + java.util.Date((entry.expires * 1000).toLong()), style = MaterialTheme.typography.bodySmall)
+                                        } else Text(if (error) "Encrypted image could not be opened" else "Loading encrypted thumbnail…")
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            if (!showTrash) TextButton(onClick = { action { RemoteVault.download(entry.id) } }, enabled = !busy && header != null) { Text("Save to Phone") }
+                                            TextButton(onClick = { action { RemoteVault.trash(entry.id, showTrash); refresh() } }, enabled = !busy) { Text(if (showTrash) "Restore" else "Move to Trash") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (recoveryCode != null) AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        title = { Text("Save Your Recovery Code") },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Shown only now. Without this code, a lost phone means you cannot recover your vault. Anyone with the code and your encrypted vault can decrypt it.")
+            Text(recoveryCode!!, style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = { exportCode.launch("forgegen-vault-recovery.txt") }) { Text("Save as Text File") }
+        } },
+        confirmButton = { TextButton(onClick = { recoveryCode = null }) { Text("I saved it, or accept losing recovery") } },
+    )
+    if (showRestore) AlertDialog(
+        onDismissRequest = { showRestore = false; restoreCode = "" },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        title = { Text("Restore Remote Vault") },
+        text = { OutlinedTextField(restoreCode, { restoreCode = it }, label = { Text("Recovery code") }) },
+        confirmButton = { TextButton(onClick = {
+            val code = restoreCode
+            restoreCode = ""
+            showRestore = false
+            action { RemoteVault.recover(code) }
+        }) { Text("Restore") } },
+        dismissButton = { TextButton(onClick = { showRestore = false; restoreCode = "" }) { Text("Cancel") } },
+    )
+}
+
+/** Stateless component used both in the app and in visual regression tests. */
+@Composable
+fun VaultSwitches(enabled: Boolean, automatic: Boolean, ready: Boolean, status: String, onEnabled: (Boolean) -> Unit, onAutomatic: (Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) { Text("Secure Remote Vault"); Text("Optional · your server, encrypted on your phone", style = MaterialTheme.typography.bodySmall) }
+            Switch(enabled, onEnabled)
+        }
+        if (enabled) {
+            Row(Modifier.fillMaxWidth()) {
+                Text("Save New Results Automatically", modifier = Modifier.weight(1f))
+                Switch(automatic, onAutomatic, enabled = ready)
+            }
+            Text(status, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}

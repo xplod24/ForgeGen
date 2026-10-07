@@ -318,3 +318,15 @@ FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 In short: you may use, study, change and share ForgeGen, also for money, as long as every copy or changed version you
 share keeps this license and comes with access to its source code. The app comes as it is, without any warranty.
+
+## Optional Secure Remote Vault
+
+ForgeGen's primary purpose is to operate your Forge WebUI Neo server. It does not judge, filter or rewrite prompts; use of your server remains your responsibility. Secure Remote Vault is a separate, optional feature, disabled by default. No storage server or Raspberry Pi is required for generation or the existing gallery.
+
+Settings > Backup & Data > Secure Remote Vault opens its setup. Import the private connection file from your own HTTPS storage host, then create or recover a vault. Keep the recovery code: it is shown once and is never saved by the app, unless you explicitly export it to a text file. A lost phone without that code means a lost vault. Browse after unlocking with your device PIN/pattern/password or strong biometrics. Background uploads can run while the phone is locked.
+
+Manual result saving, selected-image saving, automatic new-result saving and resumable whole-gallery import are supported. Images, thumbnails, file names, metadata and per-image keys are encrypted on the phone; the host stores opaque bytes. Vault deletion has its own 24-hour trash and does not remove images from Forge or the phone. Expiry deletes stored ciphertext and wrapped keys; microSD forensic erasure and deletion of older exports/backups cannot be guaranteed.
+
+See [server deployment and manual backup](server/remote-vault/README.md). There is no scheduled backup until you provide an independent destination. Vault connection credentials, keys and pending transfers are kept outside ordinary app and Android backups.
+
+Run `bash tools/full-harness.sh` with a connected Android emulator/device and Python 3. CI retains the Compose screenshots for visual review before publication.

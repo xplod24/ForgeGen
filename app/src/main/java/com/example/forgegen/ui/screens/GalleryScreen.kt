@@ -198,6 +198,7 @@ fun GalleryScreen(
     val pagerState = rememberPagerState(initialPage = tab.ordinal) { GalleryTab.entries.size }
     val shownTab = GalleryTab.entries[pagerState.currentPage]
     val scope = rememberCoroutineScope()
+    val vaultEnabled by RemoteVault.enabled.collectAsStateWithLifecycle()
     LaunchedEffect(tab) {
         if (pagerState.currentPage != tab.ordinal) pagerState.animateScrollToPage(tab.ordinal)
     }
@@ -312,6 +313,13 @@ fun GalleryScreen(
                         // The rest in one menu (3.2.0, board 3A).
                         SelectionMoreMenu(
                             canWrite = canWrite,
+                            onVault = if (vaultEnabled && RemoteVault.ready) ({
+                                val images = selectedItems()
+                                scope.launch {
+                                    try { RemoteVault.queueGallery(images); viewModel.showToast("Vault transfer queued"); selected = emptySet() }
+                                    catch (error: Exception) { viewModel.showToast(error.message ?: "Vault transfer failed") }
+                                }
+                            }) else null,
                             onSave = {
                                 viewModel.downloadImages(selectedItems())
                                 selected = emptySet()
