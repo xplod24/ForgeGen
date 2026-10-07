@@ -139,7 +139,7 @@ object RemoteVault {
         require(connection.token.length in 16..4096 && connection.certificate.length <= 16384) { "Invalid connection file" }
         require(!ready || local.connection.url == connection.url.trimEnd('/')) { "This phone already has a vault on another server. Restore it on a fresh installation to change hosts." }
         val candidate = connection.copy(url = connection.url.trimEnd('/'))
-        execute(client(candidate).newCall(Request.Builder().url(candidate.url + "/healthz").build())).use { require(it.isSuccessful) { "Server unavailable" } }
+        execute(client(candidate).newCall(Request.Builder().url(candidate.url + "/v1/recovery").header("Authorization", "Bearer " + candidate.token).build())).use { require(it.code == 200 || it.code == 404) { "Server access denied or unavailable" } }
         update { it.copy(connection = candidate) }
         status.value = if (ready) "Connected" else "Connected. Create or restore your vault."
     }
@@ -357,7 +357,7 @@ object RemoteVault {
                                 }
                             } }
                         }
-                        enqueue(source, item.name)
+                        enqueue(source, DeviceImages.nameFor(item.fullpath))
                     } finally { source.delete() }
                     uploadPending()
                     task = task.copy(position = task.position + 1)
