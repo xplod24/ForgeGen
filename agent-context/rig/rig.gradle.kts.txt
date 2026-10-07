@@ -1,0 +1,36 @@
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Screenshot rig additions (agent-context/rig/make-rig.sh appends this to the rig's copy of app/build.gradle.kts;
+// never to the repository's own file). Robolectric renders Compose screens on the JVM; ShotTest saves PNGs to
+// the "shot.dir" folder.
+android {
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.maxHeapSize = "3g"
+            it.systemProperty("robolectric.graphicsMode", "NATIVE")
+        }
+    }
+}
+
+dependencies {
+    testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+// Robolectric's Android jar comes from Maven like any dependency, so the tests also run without its own downloader.
+val robolectricSdk by configurations.creating
+dependencies { robolectricSdk("org.robolectric:android-all-instrumented:15-robolectric-13954326-i7") }
+val copyRobolectricSdk by tasks.registering(Copy::class) {
+    from(robolectricSdk)
+    into(layout.buildDirectory.dir("robolectric-jars"))
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(copyRobolectricSdk)
+    systemProperty("robolectric.offline", "true")
+    systemProperty("robolectric.dependency.dir", layout.buildDirectory.dir("robolectric-jars").get().asFile.absolutePath)
+    systemProperty("shot.dir", "@SHOT_DIR@")
+}

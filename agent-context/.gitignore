@@ -1,0 +1,7 @@
+# Build output of the harness (./gradlew -p agent-context/harness).
+build/
+.gradle/
+.kotlin/
+# The root .gitignore drops *.py and *.txt as agents' temporary files; the tools here are kept.
+!*.py
+!*.txt

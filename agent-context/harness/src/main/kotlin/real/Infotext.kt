@@ -1,0 +1,1 @@
+../../../../../../app/src/main/java/com/example/forgegen/Infotext.kt

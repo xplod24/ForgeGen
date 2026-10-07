@@ -1,0 +1,1 @@
+../../../../../../app/src/test/java/com/example/forgegen/SelfUpdateTest.kt
