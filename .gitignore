@@ -31,3 +31,6 @@ temp_*.kt
 
 # Kotlin compiler daemon logs
 .kotlin/
+
+# Pinned legacy harness is materialized by tools/legacy-harness.sh.
+/agent-context/

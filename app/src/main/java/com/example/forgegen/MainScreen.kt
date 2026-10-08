@@ -309,8 +309,12 @@ fun MainScreen(
                             TextButton(onClick = {
                                 val file = java.io.File(sessionImages[currentSessionIndex])
                                 vaultScope.launch(Dispatchers.IO) {
-                                    try { RemoteVault.enqueue(file); viewModel.showToast("Vault transfer queued") }
-                                    catch (_: Exception) { viewModel.showToast("Vault transfer could not be prepared") }
+                                    try {
+                                        RemoteVault.enqueue(file)
+                                        viewModel.showToast("Vault transfer queued")
+                                    } catch (_: Exception) {
+                                        viewModel.showToast("Vault transfer could not be prepared")
+                                    }
                                 }
                             }) { Text("Save Result to Remote Vault") }
                         }

@@ -1153,14 +1153,20 @@ object ForgeQueueManager {
         val files = mutableListOf<File>()
         var metadata = emptyList<String>()
         body.charStream().use { reader ->
-            Txt2ImgImages.readWithInfo(reader,
+            Txt2ImgImages.readWithInfo(
+                reader,
                 onImage = { index, image -> files += saveGeneratedImage(image, index, saveToDevice) },
                 onInfo = { info ->
                     if (RemoteVault.enabled.value && RemoteVault.automatic.value) {
-                        metadata = runCatching {
-                            com.google.gson.JsonParser.parseString(info).asJsonObject.getAsJsonArray("infotexts")
-                                ?.map { it.asString }.orEmpty()
-                        }.getOrDefault(emptyList())
+                        metadata =
+                            runCatching {
+                                com.google.gson.JsonParser
+                                    .parseString(info)
+                                    .asJsonObject
+                                    .getAsJsonArray("infotexts")
+                                    ?.map { it.asString }
+                                    .orEmpty()
+                            }.getOrDefault(emptyList())
                     }
                 },
             )

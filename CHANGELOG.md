@@ -11,7 +11,7 @@
 - A small ARM64/x86_64 server deployment, manual backup tool, server integrity tests and connected Compose visual checks.
 
 ### Changed
-- CI and publication wait for the vault server and emulator checks. A reproducible full verification script includes the unit suite, connected UI tests and the R8 publication build.
+- CI and publication wait for the complete existing JVM harness, vault server and emulator checks. A reproducible full verification script includes the unit suite, connected UI tests and the R8 publication build.
 - Android Gradle Plugin 9.4.1 and KSP 2.3.6, matching the locally verified toolchain.
 
 ## 3.6.2-1

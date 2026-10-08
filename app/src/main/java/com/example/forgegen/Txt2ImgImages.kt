@@ -21,11 +21,13 @@ object Txt2ImgImages {
     fun read(
         reader: Reader,
         onImage: (index: Int, image: InputStream) -> Unit,
-    ): Int {
-        return readWithInfo(reader, onImage) {}
-    }
+    ): Int = readWithInfo(reader, onImage) {}
 
-    fun readWithInfo(reader: Reader, onImage: (Int, InputStream) -> Unit, onInfo: (String) -> Unit): Int {
+    fun readWithInfo(
+        reader: Reader,
+        onImage: (Int, InputStream) -> Unit,
+        onInfo: (String) -> Unit,
+    ): Int {
         val json = Scanner(reader)
         var count = 0
         json.expect('{')
@@ -127,7 +129,10 @@ object Txt2ImgImages {
                 when (val c = next()) {
                     -1 -> throw MalformedJsonException("Unterminated string")
                     '"'.code -> return sb.toString()
-                    '\\'.code -> { val decoded = escaped(); if (sb.length < limit) sb.append(decoded) }
+                    '\\'.code -> {
+                        val decoded = escaped()
+                        if (sb.length < limit) sb.append(decoded)
+                    }
                     else -> if (sb.length < limit) sb.append(c.toChar())
                 }
             }

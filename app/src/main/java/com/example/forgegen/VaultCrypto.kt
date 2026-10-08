@@ -21,19 +21,34 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-data class VaultHeader(val name: String = "", val metadata: String = "", val thumbnail: String = "", val keyset: String = "")
+data class VaultHeader(
+    val name: String = "",
+    val metadata: String = "",
+    val thumbnail: String = "",
+    val keyset: String = "",
+)
 
 /** Versioned opaque envelopes. Recovery codes are independent of the vault key and cannot be reconstructed from it. */
 object VaultCrypto {
     private val random = SecureRandom()
     private val gson = Gson()
     private const val MAX_HEADER = 1024 * 1024 - 4
-    init { StreamingAeadConfig.register() }
+
+    init {
+        StreamingAeadConfig.register()
+    }
+
     fun randomKey() = ByteArray(32).also(random::nextBytes)
+
     fun encode(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
     fun decode(text: String): ByteArray = Base64.getUrlDecoder().decode(text.trim())
 
-    fun seal(key: ByteArray, bytes: ByteArray, context: String): ByteArray {
+    fun seal(
+        key: ByteArray,
+        bytes: ByteArray,
+        context: String,
+    ): ByteArray {
         val nonce = ByteArray(12).also(random::nextBytes)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
@@ -41,7 +56,11 @@ object VaultCrypto {
         return nonce + cipher.doFinal(bytes)
     }
 
-    fun open(key: ByteArray, bytes: ByteArray, context: String): ByteArray {
+    fun open(
+        key: ByteArray,
+        bytes: ByteArray,
+        context: String,
+    ): ByteArray {
         require(bytes.size >= 28)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
@@ -50,6 +69,7 @@ object VaultCrypto {
     }
 
     fun digest(file: File): String = file.inputStream().use { digest(it) }.joinToString("") { "%02x".format(it) }
+
     private fun digest(input: InputStream): ByteArray {
         val sha = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(65536)
@@ -61,15 +81,32 @@ object VaultCrypto {
     }
 
     /** HMAC hides the plaintext checksum and provides stable identities across retries/imports. */
-    fun identifier(key: ByteArray, file: File): String {
+    fun identifier(
+        key: ByteArray,
+        file: File,
+    ): String {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(key, "HmacSHA256"))
         return mac.doFinal(file.inputStream().use { digest(it) }).joinToString("") { "%02x".format(it) }
     }
 
-    fun encrypt(key: ByteArray, id: String, image: File, target: File, name: String, metadata: String, thumbnail: ByteArray) {
+    fun encrypt(
+        key: ByteArray,
+        id: String,
+        image: File,
+        target: File,
+        name: String,
+        metadata: String,
+        thumbnail: ByteArray,
+    ) {
         val imageKey = KeysetHandle.generateNew(StreamingAeadKeyTemplates.AES256_GCM_HKDF_1MB)
-        val header = VaultHeader(name, metadata, encode(thumbnail), TinkJsonProtoKeysetFormat.serializeKeyset(imageKey, InsecureSecretKeyAccess.get()))
+        val header =
+            VaultHeader(
+                name,
+                metadata,
+                encode(thumbnail),
+                TinkJsonProtoKeysetFormat.serializeKeyset(imageKey, InsecureSecretKeyAccess.get()),
+            )
         val encrypted = seal(key, gson.toJson(header).toByteArray(), "forgegen-vault-header-v1:$id")
         require(encrypted.size <= MAX_HEADER)
         target.outputStream().use { output ->
@@ -83,7 +120,11 @@ object VaultCrypto {
         }
     }
 
-    fun header(key: ByteArray, id: String, input: InputStream): VaultHeader {
+    fun header(
+        key: ByteArray,
+        id: String,
+        input: InputStream,
+    ): VaultHeader {
         val data = DataInputStream(input)
         val length = data.readInt()
         require(length in 28..MAX_HEADER)
@@ -92,11 +133,18 @@ object VaultCrypto {
         return gson.fromJson(String(open(key, encrypted, "forgegen-vault-header-v1:$id")), VaultHeader::class.java)
     }
 
-    fun decrypt(key: ByteArray, id: String, input: InputStream, output: OutputStream): VaultHeader {
+    fun decrypt(
+        key: ByteArray,
+        id: String,
+        input: InputStream,
+        output: OutputStream,
+    ): VaultHeader {
         val header = header(key, id, input)
         val imageKey = TinkJsonProtoKeysetFormat.parseKeyset(header.keyset, InsecureSecretKeyAccess.get())
-        imageKey.getPrimitive(RegistryConfiguration.get(), StreamingAead::class.java)
-            .newDecryptingStream(input, "forgegen-vault-image-v1:$id".toByteArray()).use { it.copyTo(output, 65536) }
+        imageKey
+            .getPrimitive(RegistryConfiguration.get(), StreamingAead::class.java)
+            .newDecryptingStream(input, "forgegen-vault-image-v1:$id".toByteArray())
+            .use { it.copyTo(output, 65536) }
         return header
     }
 }

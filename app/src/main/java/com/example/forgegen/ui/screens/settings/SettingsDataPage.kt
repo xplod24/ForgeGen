@@ -19,7 +19,7 @@ import java.util.Locale
  * Co tu jest:
  * - Backup: eksport i import ustawień (z presetami, profilami, wildcardami, ulubionymi i kolejką) do pliku JSON,
  * - Logs: zapis raportu z logiem do Pobranych, gdy aplikacji lub serwerowi zabraknie pamięci,
- * - Storage: pamięć obrazów na telefonie (rozmiar, czyszczenie),
+ * - Storage: pamięć obrazów na telefonie (rozmiar, czyszczenie) i opcjonalny zdalny schowek,
  * - Danger Zone: usuwanie wybranych danych aplikacji,
  * - Debug: narzędzia testowe (tylko po odblokowaniu trybu debugowania).
  *
@@ -38,10 +38,6 @@ internal fun SettingsUiState.dataSettings(): List<SettingItem> {
     var showVault by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     if (showVault) RemoteVaultPanel { showVault = false }
     return settingsOf {
-        // Opcjonalny schowek otwiera osobny panel; ustawienia i galeria pozostają niezależne.
-        add(SettingsPage.DATA, "Storage", "secure remote vault encrypted archive") {
-            TextPreference("Secure Remote Vault", "Optional encrypted storage on your own server") { showVault = true }
-        }
         // --- BACKUP & DATA ---
         // Eksport: systemowe okno zapisu pliku, domyślna nazwa z dzisiejszą datą.
         add(SettingsPage.DATA, "Backup", "export settings backup file presets profiles wildcards favorites queue") {
@@ -95,6 +91,10 @@ internal fun SettingsUiState.dataSettings(): List<SettingItem> {
                     viewModel.showToast("Image cache cleared")
                 }
             }
+        }
+        // Opcjonalny schowek otwiera osobny panel; ustawienia i galeria pozostają niezależne.
+        add(SettingsPage.DATA, "Storage", "secure remote vault encrypted archive") {
+            TextPreference("Secure Remote Vault", "Optional encrypted storage on your own server") { showVault = true }
         }
         // Usuwanie wybranych danych (okno z listą w SettingsDialogs.kt).
         add(SettingsPage.DATA, "Danger Zone", "wipe application data delete clear reset") {

@@ -329,4 +329,4 @@ Manual result saving, selected-image saving, automatic new-result saving and res
 
 See [server deployment and manual backup](server/remote-vault/README.md). There is no scheduled backup until you provide an independent destination. Vault connection credentials, keys and pending transfers are kept outside ordinary app and Android backups.
 
-Run `bash tools/full-harness.sh` with a connected Android emulator/device and Python 3. CI retains the Compose screenshots for visual review before publication.
+Run `bash tools/full-harness.sh` with JDK 21, Python 3 and a connected Android emulator/device. It runs the server tests, the complete G1–G56 JVM harness from the pinned `codex-context` commit, app unit tests, connected Compose tests and the R8 publication build. `bash tools/legacy-harness.sh` runs the legacy harness alone; its two data-dependent classes are skipped unless `FORGEGEN_DEBUG_PASSWORD` and `TAGCOMPLETE_TAGS` are provided as documented on the context branch. Never commit the password or signing key. CI and publication require both the legacy harness and vault checks and retain reports and Compose screenshots for review.
