@@ -11,6 +11,9 @@ history. Read, in this order:
 3. **`agent-context/README.md`**: how a change was verified before every release (unit tests, the JVM harness, the
    screenshot rig, the R8 build, CI, the release workflow) and how to run each tool.
 4. **`agent-context/WORKLOG.md`**: how the work went, the latest releases in detail, lessons learned and open threads.
+5. **`agent-context/CHAT_HISTORY.md`** when you need the history behind a decision: the whole conversation with the
+   owner (2026-09-23 to 2026-10-08) in one file, with its 18 context summaries. Where it disagrees with the files
+   above, they win: it is history.
 
 `CLAUDE.md` holds these rules for Claude Code; when a rule changes, change both files.
 
@@ -76,5 +79,7 @@ history. Read, in this order:
 - It is master at 3.6.2-1 (commit 499e8bc) plus `AGENTS.md` and `agent-context/`. App code changes go to a work
   branch and to master as described above; this branch only carries the context. When a tool changes, update
   `agent-context/` here too.
-- Not included on purpose: the raw session transcripts (very large, and they may hold values that must never be
-  committed), the tagcomplete tag files the harness's G38 reads (about 25 MB), the debug password and the release key.
+- The conversation is in `agent-context/CHAT_HISTORY.md`: the owner's messages and the assistant's answers only,
+  without the tool calls and their output, with the secrets redacted. Not included on purpose: that tool output
+  (about 150 MB, and it held values that must never be committed), the tagcomplete tag files the harness's G38 reads
+  (about 25 MB), the debug password, and the release key and its password.

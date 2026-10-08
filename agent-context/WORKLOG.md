@@ -79,7 +79,8 @@ users, `MEMORY.md` the technical decisions behind them.
 - **3.6.2-1 (micro-patch on the owner's command):** gallery search by tags: positive and negative prompt apart, several
   tags (all must match), "Exact Tags" for whole tags as the statistics count them, each tag a chip with a cross above
   the images and in the panel. Statistics tags open an exact search in their own prompt.
-- **2026-10-07:** this branch, so Codex has the context.
+- **2026-10-07:** this branch, so Codex has the context; **2026-10-08:** the whole conversation exported to
+  `CHAT_HISTORY.md` (messages and answers, the secrets redacted).
 
 ## Lessons
 

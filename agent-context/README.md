@@ -7,6 +7,7 @@ in `../AGENTS.md`, the architecture and the owner's decisions in `../MEMORY.md`,
 agent-context/
 ├── README.md            this file
 ├── WORKLOG.md           how the work went, lessons, open threads
+├── CHAT_HISTORY.md      the whole conversation with the owner (2026-09-23 to 2026-10-08), secrets redacted
 ├── harness/             JVM test harness: the app's logic against a mock Forge server (73 classes, 332 tests)
 │   ├── relink.sh        links the app's sources into it (run after adding or removing a source file)
 │   └── src/             Android stubs, links to the app's code, scenario tests G1-G56
