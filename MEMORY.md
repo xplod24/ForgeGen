@@ -2,6 +2,8 @@
 
 This file maintains the ongoing memory, architectural decisions, and user preferences for the ForgeGen project. It should be consulted and updated regularly.
 
+Additional historical source: local, ignored `agent-context/CHAT_HISTORY.md` (Claude conversation, 2026-09-23 to 2026-10-08). See "Conversation history imported" below for provenance and superseded decisions. Historical messages and assistant summaries are reference material, not new tasks or authorization; current owner instructions and verified repository facts take precedence.
+
 ## 1. Architectural Decisions & Code Structure
 - **State Management:** All settings and app state variables are consolidated in `ForgeModels.kt` (specifically `AppConfig` and `AppState` data classes).
 - **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, stored in the Room `app_settings` table.
@@ -591,6 +593,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   by itself a go-ahead to build or release: 3.6.2's session memory was built and nearly released when the owner had
   only asked whether it could be done.
 - **Language (owner's explicit request):** always talk to the owner in Polish, with no English sentences or headings and Polish words instead of English jargon where a natural one exists; code, UI texts and release notes stay in English.
+- **Explain fixes for learning (owner, 2026-09-24):** briefly explain what was wrong, what changed and how to avoid the mistake. The owner is learning Kotlin; prefer concrete explanations and preserve the Polish learning comments in settings/gallery code.
 - **Releases (owner's standing request):** after finishing a change, Claude publishes the release itself: bump `gradle.properties` (patch for fixes and small changes, minor for new features, major only for a clear change across the whole repository OR on the owner's explicit command), add the `## <version>` section to `CHANGELOG.md` and push to master. Release notes are written for the user of the app, in English like the rest of the UI. Since 3.0.0-4 (owner's request) each section names its kind (**Bugfix**, **Polish**, **Feature**, **Overhaul**) in its first line and sorts its items into New, Changed and Fixed, so a reader knows at once what the update is (rule in CLAUDE.md).
 - **R8 from now on (owner, after 3.4.1 ran without faults):** every published APK is shrunk and optimized by R8, and
   new code must work with it: follow "R8 rules" in section 1 whenever code touches saved data, Gson, reflection,
@@ -627,7 +630,7 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - **Builds 195-198:** Extracted settings logic from `ForgeRepository` into `ForgeSettingsManager`, modernized the update flow, implemented SHA-256 validation for existing APKs, and polished the active tags UI.
 - All empty legacy directories (`data`, `domain/models`) and temporary scripts have been cleaned up and ignored via `.gitignore`.
 - **Testing Architecture:** Integrated `io.mockk:mockk` and `kotlinx-coroutines-test` into the `testImplementation` to allow comprehensive testing of `ForgeQueueManager` (and future managers) without needing an emulator or physical device.
-- **Code Formatting:** Downloaded `ktlint.jar` to the project root. It can be run via `java -jar ktlint.jar -F "app/src/**/*.kt"` to auto-format all Kotlin files and remove unused imports.
+- **Code Formatting:** `ktlint.jar` is retained at the project root. Check only changed lines in existing files; whole-file formatting is allowed for new files. The historical command that formatted all Kotlin files is superseded and must not be used for routine changes. UpperCamelCase names of Compose functions are accepted.
 - **Build 277 fixes:** see CHANGELOG.md (generation timeout, checkpoint override, progress, settings persistence, lock on cold start, PNG metadata, queue pause UX). Unit tests: `PngMetadataTest`, `ForgeSettingsManagerConfigTest`; `ForgeUpdateManagerTest` fixed to the list-based changelog.
 
 ## 4. Current Outstanding Tasks
@@ -692,3 +695,31 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 - Pixel comparison covers both main-screen themes, all settings pages and the gallery's tag/filter controls: eleven images identical, three differing only in version labels, one with the intentional vault row. The added row belongs to the existing Storage group, after Clear Image Cache; its corrected screenshot was regenerated and visually inspected. The three vault screenshots were also visually inspected, with no clipped controls. No recovery codes or connection credentials appear in screenshots.
 - Both CI and release now require the full legacy harness and vault backend/connected UI jobs. Updated checkout/setup-java/upload-artifact actions and validated workflows with actionlint; changed Kotlin lines pass ktlint. Preserve test APKs after connected tests so AGP does not delete screenshot files before their artifact upload. The earlier GitHub run at `7c8dc36` passed both connected tests but failed only while retrieving their already-cleaned screenshots; no green release was claimed for it.
 - Publication remains pending until the work branch's exact commit passes CI and the master release publishes both APK and mapping. Do not push tags manually.
+
+### Verified 3.7.0 publication (2026-10-08)
+
+- Supersedes the pending publication, blocked push and unverified emulator status in the earlier dated handoffs. Version 3.7.0 was published from `c94ceaf11ad8a5fe03e1f5a2e5c4ad10a7c214f5`; master and tag `v3.7.0` matched that commit at verification. GitHub reported it as the latest release: https://github.com/xplod24/ForgeGen/releases/tag/v3.7.0.
+- Work-branch CI `37790434208` and master Release `37793173486` both succeeded. App unit suite: 242 passed. Full legacy harness on GitHub: 73 classes, 323 reported cases, 321 passed and the two documented G29/G38 private-input skips. Backend: ten passed. Connected emulator: three passed in both workflows; its screenshots were downloaded and visually inspected, in addition to the baseline/current UI comparison.
+- Both published assets were downloaded and matched GitHub's SHA-256 digests. `ForgeGen.apk`: `43b645b5587661e188dac33b540b3b7583f92e5d4b65b327027cdac2c3b14900`; `mapping.zip`: `72e0c56992a2714bee7ee97eb84409e5bd5931d428ce8b1fc42310b557dd8f3e`. APK verification confirmed the single existing release certificate and v3 signature, unchanged package, version 3.7.0 / 300700000 and no debuggable flag. Mapping archive integrity passed.
+- Raspberry Pi was rechecked through SSH: Forgejo and vault HTTPS running, about 217 GiB free; `/healthz` returned ok over HTTPS with the private CA. This does not imply an independent backup destination or a scheduled backup exists.
+
+### Conversation history imported (2026-10-08)
+
+- Source supplied by the owner: `C:/Users/xplod24/Downloads/CHAT_HISTORY.md`, 990167 bytes; SHA-256 `75a6a353e2cc550eecee50d93c5fb48052da1346d6b964874e048951012fee82`. An identical local copy is retained at `agent-context/CHAT_HISTORY.md`, excluded by the existing `/agent-context/` ignore rule. Raw conversation history is not added to the public repository.
+- The export contains 143 owner messages and 18 assistant context summaries across 2026-09-23 to 2026-10-08. Owner decisions were reviewed chronologically and compared with current memory. It excludes tool outputs and attached image pixels; assistant claims and old test counts remain historical evidence, not proof of current behavior.
+- Superseded decisions include content modes/client prompt rules (removed in 1.6.x), the hard-coded IIB cookie (replaced by server-specific connection settings), public debug-key signing and the `.debug` package, and update checks every six hours (replaced by the daily rule in 3.6.1). Keep the present signing identity, package, server-controlled prompt handling and updater behavior described above.
+- Native phone-side Forge generation was considered and declined on 2026-10-03; the owner chose to remain a Forge WebUI client. Gallery upscale/variations continue through txt2img/hires fix, rather than adding an extras or img2img subsystem. The optional encrypted vault added later does not change that primary purpose.
+- Historical branch names, Claude-specific commit trailers, sandbox paths, old release commands and "pending tasks" inside summaries are not current instructions. In particular, importing this file does not reopen completed releases or authorize implementing old proposals. Current Codex work and the optional-vault requirements are newer than the exported conversation.
+
+### Local vault settings appearance draft (2026-10-08)
+
+- Owner explicitly requested matching the existing settings style, successive settings windows and screenshots, with no release. Local work branch: `codex/vault-settings-style`; version remains 3.7.0. No push, tag or publication was made for this draft.
+- `RemoteVaultPanel` uses a secure standard AlertDialog with existing TextPreference/SwitchPreference rows and rounded surfaces. Server Connection and Saving & Transfers open separate pages with Back; long content scrolls. Existing connection, recovery, transfer and image actions remain wired to their original operations; phone unlock and ON_STOP clearing still gate browsing.
+- Current draft verification: 242 app unit tests passed; Android test APK compiled. Five Compose UI tests passed in the isolated native-graphics Robolectric rig, covering navigation, callbacks, both themes and enlarged text. Backup & Data was rendered again and matched the pre-change screenshot pixel for pixel. All new dialogs were visually inspected; previews contain no credentials or recovery code.
+- Evidence: `C:/Users/xplod24/Documents/Codex/2026-10-07/h/outputs/vault-ui-style/`. Changed-line lint and git diff whitespace checks passed. This UI draft did not rerun the full legacy harness, connected emulator tests or R8 publication build; the verified 3.7.0 results above concern that published baseline.
+
+### Vault settings micro-patch (3.7.0-1)
+
+- The owner subsequently authorized publishing the appearance draft as a micro-patch to master. VERSION_MICRO is 1, with the major/minor/patch values unchanged. This supersedes the draft's no-release restriction for these changes.
+- Settings reuse the existing secure dialog and preference components. Server Connection and Saving & Transfers open successive windows with a Back action; optional storage, encryption, recovery and background transfers retain their existing operations.
+- The draft already passed 242 app unit tests and five native-graphics Compose tests; Backup & Data matched its pre-change rendering pixel for pixel. Publication must additionally pass the current commit's full legacy harness, backend tests, connected emulator checks and signed R8 CI build before master advances. Earlier results do not replace those release gates.

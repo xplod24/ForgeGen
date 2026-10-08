@@ -13,17 +13,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsOff
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
-import androidx.compose.ui.test.isToggleable
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
@@ -31,6 +33,13 @@ import java.io.File
 /** Render production controls, including the existing settings rows, at small widths and enlarged text. */
 class VaultUiTest {
     @get:Rule val compose = createComposeRule()
+    private val previousEnabled = RemoteVault.enabled.value
+    private val previousAutomatic = RemoteVault.automatic.value
+
+    @After fun resetDisplayState() {
+        RemoteVault.enabled.value = previousEnabled
+        RemoteVault.automatic.value = previousAutomatic
+    }
 
     private fun screenshot(
         name: String,
@@ -48,6 +57,7 @@ class VaultUiTest {
     }
 
     @Test fun disabledPreservesExistingSettingsAndIsOptional() {
+        var enabledChoice: Boolean? = null
         compose.setContent {
             MaterialTheme(colorScheme = forgeColorScheme(false)) {
                 Surface(Modifier.width(360.dp)) {
@@ -58,7 +68,7 @@ class VaultUiTest {
                         ) {}
                         TextPreference("Import Settings", "Replaces settings; adds favorites and queued jobs") {}
                         TextPreference("Secure Remote Vault", "Optional encrypted storage on your own server") {}
-                        VaultSwitches(false, false, false, "Not configured", {}, {})
+                        VaultSwitches(false, false, false, "Not configured", { enabledChoice = it }, {})
                         TextPreference("Clear Image Cache", "Images load again from the server") {}
                     }
                 }
@@ -67,18 +77,20 @@ class VaultUiTest {
         compose.onNodeWithText("Export Settings").assertIsDisplayed()
         compose.onNodeWithText("Clear Image Cache").assertIsDisplayed()
         compose.onNodeWithText("Save New Results Automatically").assertDoesNotExist()
-        compose.onNode(isToggleable()).assertIsOff().assertIsDisplayed()
+        compose.onAllNodesWithText("Secure Remote Vault")[1].performClick()
+        assertEquals(true, enabledChoice)
         screenshot("vault-disabled-light")
     }
 
     @Test fun darkLargeTextDoesNotHideControls() {
+        var automaticChoice = true
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 1.5f)) {
                 MaterialTheme(colorScheme = forgeColorScheme(true)) {
                     Surface(Modifier.width(360.dp)) {
                         Column(Modifier.padding(16.dp)) {
-                            VaultSwitches(true, true, true, "All pending images saved", {}, {})
+                            VaultSwitches(true, true, true, "All pending images saved", {}, { automaticChoice = it })
                             OutlinedButton({}) { Text("Import Entire Forge Gallery") }
                             Text("Trash · 24 hours")
                         }
@@ -88,8 +100,8 @@ class VaultUiTest {
         }
         compose.onNodeWithText("Save New Results Automatically").assertIsDisplayed()
         compose.onNodeWithText("Import Entire Forge Gallery").assertIsDisplayed()
-        compose.onAllNodes(isToggleable())[0].assertIsOn().assertIsDisplayed()
-        compose.onAllNodes(isToggleable())[1].assertIsOn().assertIsDisplayed()
+        compose.onNodeWithText("Save New Results Automatically").performClick()
+        assertFalse(automaticChoice)
         screenshot("vault-enabled-dark-large-text")
     }
 
@@ -106,5 +118,39 @@ class VaultUiTest {
         compose.onNodeWithText("Optional · your server, encrypted on your phone").assertIsDisplayed()
         compose.onNodeWithText("Unlock Vault").assertDoesNotExist()
         screenshot("vault-dialog-disabled-dark-large-text", dialog = true)
+    }
+
+    @Test fun settingsOpenConnectionAndTransfersInSequence() {
+        RemoteVault.enabled.value = true
+        compose.setContent {
+            MaterialTheme(colorScheme = forgeColorScheme(true), shapes = forgeShapes()) {
+                RemoteVaultPanel(onClose = {})
+            }
+        }
+        compose.onNodeWithText("Server Connection").assertIsDisplayed()
+        screenshot("vault-settings-dark", dialog = true)
+        compose.onNodeWithText("Server Connection").performClick()
+        compose.onNodeWithText("Import Connection File").assertIsDisplayed()
+        compose.onNodeWithText("Create Vault").assertIsDisplayed()
+        screenshot("vault-connection-dark", dialog = true)
+        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithText("Saving & Transfers").performClick()
+        compose.onNodeWithText("Save New Results Automatically").assertIsDisplayed()
+        screenshot("vault-transfers-dark", dialog = true)
+        compose.onNodeWithText("Back").performClick()
+        compose.onNodeWithText("Browse Vault").assertIsDisplayed()
+        compose.onNodeWithText("Close").assertIsDisplayed()
+    }
+
+    @Test fun lightSettingsMatchTheExistingPreferences() {
+        RemoteVault.enabled.value = true
+        compose.setContent {
+            MaterialTheme(colorScheme = forgeColorScheme(false), shapes = forgeShapes()) {
+                RemoteVaultPanel(onClose = {})
+            }
+        }
+        compose.onNodeWithText("Server Connection").assertIsDisplayed()
+        compose.onNodeWithText("Saving & Transfers").assertIsDisplayed()
+        screenshot("vault-settings-light", dialog = true)
     }
 }

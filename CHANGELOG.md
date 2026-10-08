@@ -1,3 +1,10 @@
+## 3.7.0-1
+**Polish** · Secure Remote Vault settings match the rest of the app
+
+### Changed
+- The vault uses the same rounded cards, preference rows and switches as the other settings.
+- Server connection and saving options open separate settings windows with a Back button; long lists scroll.
+
 ## 3.7.0
 **Feature** · optional encrypted storage on your own server, with recovery and a 24-hour trash
 
