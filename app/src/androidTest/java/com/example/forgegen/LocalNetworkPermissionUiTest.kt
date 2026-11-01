@@ -62,7 +62,7 @@ class LocalNetworkPermissionUiTest {
         }
         compose.onNodeWithText("Server Address").assertIsDisplayed()
         compose.onNodeWithText("Allow").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Allowed · connect to servers on Wi-Fi or Ethernet").assertIsDisplayed()
+        compose.onNodeWithText("Allowed · local servers").assertIsDisplayed()
         compose.onNodeWithText("Settings").assertIsDisplayed()
         compose.onNodeWithText("Server Profiles").assertIsDisplayed()
         assertEquals(1, requests)

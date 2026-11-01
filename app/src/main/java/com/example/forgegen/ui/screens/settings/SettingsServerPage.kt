@@ -370,9 +370,9 @@ internal fun LocalNetworkPermissionRow(
         title = "Local Network Access",
         subtitle =
             when {
-                allowed -> "Allowed · connect to servers on Wi-Fi or Ethernet"
-                canRequest -> "Allow Nearby devices to connect to servers on Wi-Fi or Ethernet"
-                else -> "Not allowed · enable Nearby devices in Android settings"
+                allowed -> "Allowed · local servers"
+                canRequest -> "Allow Nearby devices for local servers"
+                else -> "Not allowed · enable Nearby devices"
             },
         trailing = {
             FilledTonalButton(onClick = onRequest) {

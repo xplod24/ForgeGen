@@ -2,7 +2,7 @@
 **Bugfix** · local server access on Android 17
 
 ### Changed
-- On Android 17, ForgeGen checks local network access at startup and asks for the Nearby devices permission when first needed.
+- On Android 17, ForgeGen checks local network access at startup and requests the missing Nearby devices permission once.
 - Settings > Server > Connection shows the permission status and an Allow button, with a shortcut to Android settings after a permanent denial.
 
 ### Fixed
