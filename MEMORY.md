@@ -2,6 +2,13 @@
 
 This file maintains the ongoing memory, architectural decisions, and user preferences for the ForgeGen project. It should be consulted and updated regularly.
 
+### Android 17 local network access (3.7.0-2)
+
+- The owner explicitly requested this micro-patch. `ACCESS_LOCAL_NETWORK` is declared for the existing target SDK 37. This belongs to Android's Nearby devices group; VPN-routed connections are excluded from local network protection (Google's `privacy-and-security/local-network-definition`). Do not require the grant as a condition for all server connections.
+- Startup checks the actual permission after initialization and app unlock, using one queued multiple-permission launcher for notifications and LAN access. The first missing LAN grant is requested; a denial is remembered in private `permission_requests` preferences so reopening does not repeatedly prompt. Rotation preserves the startup check. This request marker is not the permission state: always read Android again.
+- Settings > Server > Connection uses `TextPreference` and a `FilledTonalButton` for Local Network Access, only on API 37+. Allow requests the permission; after a permanent denial, or when managing a granted permission, Settings opens this app's Android settings. Both the result callback and the existing ON_RESUME refresh update the status and reconnect after a new grant.
+- `LocalNetworkPermissionTest` covers API gating, a first request, group pre-grants, denial persistence, permanent denial and revocation. `LocalNetworkPermissionUiTest` uses the production row and captures light/granted and dark/large-text/denied controls. New UI text stays in English; settings comments stay in Polish.
+
 Additional historical source: local, ignored `agent-context/CHAT_HISTORY.md` (Claude conversation, 2026-09-23 to 2026-10-08). See "Conversation history imported" below for provenance and superseded decisions. Historical messages and assistant summaries are reference material, not new tasks or authorization; current owner instructions and verified repository facts take precedence.
 
 ## 1. Architectural Decisions & Code Structure

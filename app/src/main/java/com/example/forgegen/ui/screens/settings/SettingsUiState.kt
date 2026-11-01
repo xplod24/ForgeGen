@@ -2,8 +2,10 @@ package com.example.forgegen
 
 import android.app.KeyguardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -131,12 +133,36 @@ internal class SettingsUiState(
     var areNotificationsAllowed by mutableStateOf(LiveUpdates.areNotificationsAllowed(context))
     var promotedLastTime by mutableStateOf(LiveUpdates.promotedLastTime(context))
 
+    // Android 17: aktualna zgoda na LAN; odmowa nie blokuje korzystania z serwera przez VPN.
+    val needsLocalNetworkPermission = LocalNetworkPermission.isRequired()
+    var isLocalNetworkAllowed by mutableStateOf(LocalNetworkPermission.isGranted(context))
+    var canRequestLocalNetwork by mutableStateOf(
+        needsLocalNetworkPermission && LocalNetworkPermission.canRequest(context, context.findActivity()),
+    )
+    lateinit var localNetworkLauncher: ManagedActivityResultLauncher<String, Boolean>
+
     // Po powrocie aplikacji na ekran: użytkownik mógł zmienić coś w ustawieniach systemu, więc czytamy to od nowa.
     fun refreshFromSystem() {
         isIgnoringBattery = powerManager.isIgnoringBatteryOptimizations(context.packageName)
         isLiveUpdateAllowed = LiveUpdates.isAllowedBySystem(context)
         areNotificationsAllowed = LiveUpdates.areNotificationsAllowed(context)
         promotedLastTime = LiveUpdates.promotedLastTime(context)
+        val wasAllowed = isLocalNetworkAllowed
+        isLocalNetworkAllowed = LocalNetworkPermission.isGranted(context)
+        canRequestLocalNetwork = needsLocalNetworkPermission && LocalNetworkPermission.canRequest(context, context.findActivity())
+        if (!wasAllowed && isLocalNetworkAllowed) viewModel.reconnect()
+    }
+
+    // Pyta o zgodę, a po trwałej odmowie lub przy zarządzaniu przyznaną zgodą otwiera ustawienia Androida.
+    fun requestLocalNetworkAccess() {
+        if (!needsLocalNetworkPermission) return
+        refreshFromSystem()
+        if (isLocalNetworkAllowed || !canRequestLocalNetwork) {
+            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+        } else {
+            LocalNetworkPermission.markRequested(context)
+            localNetworkLauncher.launch(LocalNetworkPermission.PERMISSION)
+        }
     }
 
     // "Install": aplikacja schodzi na bok, żeby Android mógł ją podmienić nową wersją.
@@ -252,6 +278,10 @@ internal fun rememberSettingsUiState(viewModel: ForgeViewModel): SettingsUiState
         }
     state.importLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> state.importUri = uri }
+
+    // Wynik systemowego pytania odświeża wiersz i ponawia połączenie po przyznaniu zgody.
+    state.localNetworkLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { state.refreshFromSystem() }
 
     // --- LIFECYCLE OBSERVER FOR BATTERY OPTIMIZATION AND LIVE NOTIFICATION REFRESH ---
     val lifecycleOwner = LocalLifecycleOwner.current

@@ -1,3 +1,13 @@
+## 3.7.0-2
+**Bugfix** · local server access on Android 17
+
+### Changed
+- On Android 17, ForgeGen checks local network access at startup and asks for the Nearby devices permission when first needed.
+- Settings > Server > Connection shows the permission status and an Allow button, with a shortcut to Android settings after a permanent denial.
+
+### Fixed
+- Connections to servers on Wi-Fi or Ethernet can now receive the local network permission required by Android 17. After allowing access, ForgeGen retries the connection. Denying it does not prevent VPN connections.
+
 ## 3.7.0-1
 **Polish** · Secure Remote Vault settings match the rest of the app
 

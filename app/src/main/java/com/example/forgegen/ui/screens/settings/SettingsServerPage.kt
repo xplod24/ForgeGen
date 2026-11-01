@@ -102,6 +102,12 @@ internal fun SettingsUiState.serverSettings(
         add(SettingsPage.SERVER, "Connection", "server address api url ip host ${config.apiUrl}") {
             TextPreference(title = "Server Address", subtitle = config.apiUrl) { showUrlDialog = true }
         }
+        // Zgoda Androida 17 na LAN: ten sam wiersz ustawień i przycisk tonalny co pozostałe akcje połączenia.
+        if (needsLocalNetworkPermission) {
+            add(SettingsPage.SERVER, "Connection", "local network access permission nearby devices allow grant wifi ethernet android") {
+                LocalNetworkPermissionRow(isLocalNetworkAllowed, canRequestLocalNetwork, ::requestLocalNetworkAccess)
+            }
+        }
         // Zapisane serwery (profile): przełączanie między nimi i zapis obecnego.
         add(SettingsPage.SERVER, "Connection", "server profiles switch add saved servers") {
             val count = config.serverProfiles.size
@@ -351,6 +357,30 @@ internal fun SettingsUiState.serverSettings(
             ) { confirmRestart = true }
         }
     }
+}
+
+// Pokazuje stan zgody; po odmowie przycisk pozwala zapytać ponownie lub otworzyć ustawienia systemowe.
+@Composable
+internal fun LocalNetworkPermissionRow(
+    allowed: Boolean,
+    canRequest: Boolean,
+    onRequest: () -> Unit,
+) {
+    TextPreference(
+        title = "Local Network Access",
+        subtitle =
+            when {
+                allowed -> "Allowed · connect to servers on Wi-Fi or Ethernet"
+                canRequest -> "Allow Nearby devices to connect to servers on Wi-Fi or Ethernet"
+                else -> "Not allowed · enable Nearby devices in Android settings"
+            },
+        trailing = {
+            FilledTonalButton(onClick = onRequest) {
+                Text(if (!allowed && canRequest) "Allow" else "Settings")
+            }
+        },
+        onClick = onRequest,
+    )
 }
 
 // "raz", "dwa razy", "3 razy" po angielsku: "once", "twice", "3 times".

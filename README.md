@@ -154,6 +154,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 - Android 12 (API 31) or newer.
 - A network path to the server: the same Wi-Fi, or a VPN such as Tailscale or WireGuard. Plain HTTP is allowed, as
   home servers rarely have HTTPS.
+- On Android 17 or newer, allow **Nearby devices** for direct access to servers on Wi-Fi or Ethernet. ForgeGen
+  checks this at startup; **Settings > Server > Connection > Local Network Access** shows the status and lets you
+  grant access or open Android settings. Connections routed through a VPN do not require this permission.
 
 ### Server
 

@@ -610,14 +610,30 @@ class MainActivity : ComponentActivity() {
             val defaultTypography = remember { forgeTypography() }
             val defaultShapes = remember { forgeShapes() }
 
-            if (Build.VERSION.SDK_INT >= 33) {
-                val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
-                LaunchedEffect(Unit) {
-                    if (ContextCompat.checkSelfPermission(this@MainActivity, "android.permission.POST_NOTIFICATIONS") !=
-                        PackageManager.PERMISSION_GRANTED
-                    ) {
-                        permissionLauncher.launch("android.permission.POST_NOTIFICATIONS")
-                    }
+            // One launcher queues the system dialogs, after startup and the app lock, without overlapping prompts.
+            val permissionLauncher =
+                rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+                    if (grants[LocalNetworkPermission.PERMISSION] == true) viewModel.reconnect()
+                }
+            var startupPermissionsChecked by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(isStarted, isLocked) {
+                if (!isStarted || isLocked || startupPermissionsChecked) return@LaunchedEffect
+                lifecycleOwner.lifecycle.withResumed {
+                    startupPermissionsChecked = true
+                    val permissions =
+                        buildList {
+                            if (Build.VERSION.SDK_INT >= 33 &&
+                                ContextCompat.checkSelfPermission(this@MainActivity, "android.permission.POST_NOTIFICATIONS") !=
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                add("android.permission.POST_NOTIFICATIONS")
+                            }
+                            if (LocalNetworkPermission.shouldRequestAtStartup(this@MainActivity)) {
+                                LocalNetworkPermission.markRequested(this@MainActivity)
+                                add(LocalNetworkPermission.PERMISSION)
+                            }
+                        }
+                    if (permissions.isNotEmpty()) permissionLauncher.launch(permissions.toTypedArray())
                 }
             }
 
