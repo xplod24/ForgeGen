@@ -12,7 +12,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
-      - name: Run all G1-G56 scenarios and linked unit tests
+      - name: Run all G1-G57 scenarios and linked unit tests
         run: chmod +x gradlew && bash tools/legacy-harness.sh
       - name: Save complete harness results
         if: always()

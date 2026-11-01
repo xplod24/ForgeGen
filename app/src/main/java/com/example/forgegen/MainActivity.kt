@@ -218,7 +218,13 @@ fun AppNavigation(
         popEnterTransition = { fadeIn(animationSpec = tween(200)) },
         popExitTransition = { fadeOut(animationSpec = tween(200)) },
     ) {
-        composable("setup") { SetupScreen(viewModel, onDismiss = { navController.popBackStack() }) }
+        composable(
+            "setup",
+            enterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(200)) },
+            exitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) },
+            popEnterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(200)) },
+            popExitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) },
+        ) { SetupScreen(viewModel, onDismiss = { navController.popBackStack() }) }
         composable("main") { MainScreen(viewModel, navController) }
         composable(
             "gallery",

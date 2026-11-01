@@ -8,7 +8,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,8 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,15 +48,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
  * Scaffold (szkielet ekranu w Material 3), operator + na listach w Kotlinie (sklejanie list).
  * ============================================================================ */
 
-// Ekran ustawień. [belowTopBar]: pokazany pod górnym paskiem ekranu głównego (bez dodatkowego odstępu na pasek stanu).
+// Samodzielny ekran ustawień; własny nagłówek obsługuje tę samą kolejność powrotu co systemowe Wstecz.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SetupScreen(
     viewModel: ForgeViewModel,
     onDismiss: () -> Unit,
-    // Shown over the main screen, under its top bar: the status bar is already covered there. Counting it again
-    // left a wide empty band above "Settings" (2.3.0).
-    belowTopBar: Boolean = false,
 ) {
     // --- STATE OBSERVATION ---
     // Dane potrzebne stronie głównej i podsumowaniom (strony zbierają swoje same).
@@ -85,15 +79,14 @@ fun SetupScreen(
     LaunchedEffect(debugUnlocked) { if (!debugUnlocked && page == SettingsPage.DEBUG) page = null }
 
     // Wstecz: ze strony kategorii na główną, potem czyszczenie wyszukiwania, na końcu zamknięcie ustawień.
-    // Back: a category page returns to the main page, a search is cleared, then the settings close (both as a nav
-    // destination and as the overlay on MainScreen).
-    BackHandler {
+    val onBack: () -> Unit = {
         when {
             page != null -> page = null
             query.isNotEmpty() -> query = ""
             else -> onDismiss()
         }
     }
+    BackHandler(onBack = onBack)
 
     // Opis i kolor stanu połączenia (karta serwera na stronie głównej i pierwszy wiersz strony Server).
     val connectionText =
@@ -176,7 +169,7 @@ fun SetupScreen(
     val hasUpdate = updateManifest != null && updateManifest?.versionCode != ui.dismissedUpdateVersion
 
     // --- UI STRUCTURE ---
-    Scaffold(contentWindowInsets = if (belowTopBar) WindowInsets(0, 0, 0, 0) else ScaffoldDefaults.contentWindowInsets) { padding ->
+    SettingsScaffold(title = page?.title ?: "Settings", onBack = onBack) { padding ->
         // Animowane przejście między stroną główną a stroną kategorii.
         AnimatedContent(
             targetState = page,
@@ -212,9 +205,7 @@ fun SetupScreen(
                 )
             } else {
                 SettingsPageContent(
-                    page = shown,
                     settings = settings.filter { it.page == shown },
-                    onBack = { page = null },
                 )
             }
         }

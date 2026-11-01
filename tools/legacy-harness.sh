@@ -7,6 +7,11 @@ if ! git cat-file -e "$CONTEXT^{commit}" 2>/dev/null; then
     git fetch origin "$CONTEXT"
 fi
 git archive "$CONTEXT" agent-context/harness | tar -x
+# The new status model has no Android dependencies and is shared by the production sync and this JVM harness.
+ln -sfn ../../../../../../app/src/main/java/com/example/forgegen/GalleryIndexProgress.kt \
+    agent-context/harness/src/main/kotlin/real/GalleryIndexProgress.kt
+ln -sfn ../../../../../tools/harness/G57_IndexProgressTest.kt \
+    agent-context/harness/src/test/kotlin/G57_IndexProgressTest.kt
 # The legacy JVM has no Android Keystore or WorkManager. Vault-off generation
 # remains covered here; real encryption, transfers and recovery have app/server tests.
 cat > agent-context/harness/src/main/kotlin/stubs/RemoteVault.kt <<'KOTLIN'

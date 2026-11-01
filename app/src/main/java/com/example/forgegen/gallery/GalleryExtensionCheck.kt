@@ -61,6 +61,9 @@ fun ForgeGalleryManager.forgetKey() {
 
 /** Another server: what was found on the previous one no longer holds, the open folder included. */
 fun ForgeGalleryManager.onServerChanged() {
+    syncJob?.cancel()
+    resyncRequested = false
+    resetIndexProgress()
     _extension.value = ExtensionStatus(Extension.UNKNOWN)
     clearFolder()
 }

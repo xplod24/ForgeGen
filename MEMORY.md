@@ -2,6 +2,14 @@
 
 This file maintains the ongoing memory, architectural decisions, and user preferences for the ForgeGen project. It should be consulted and updated regularly.
 
+### Gallery index status and standalone settings (3.8.0)
+
+- The owner approved both mockups and requested a MINOR release. `VERSION_MINOR=8`, patch and micro reset to zero. The gallery gets a persistent, expandable status strip below the tabs, using the existing dark/light theme. Whole-gallery coverage and the current update's work are separate; folder discovery/finalization have no fabricated percentage. Unreadable generation data never removes images.
+- `GalleryIndexProgress` is a single coherent StateFlow snapshot. Progress advances after Room commits each metadata batch, without rereading or resorting the whole index per batch. A normal quiet sync keeps the existing no-full-index/no-all-path-read guarantees. Only a failed sync reloads committed rows so a partially completed first index remains browsable. Server changes and index wipes invalidate old run publications. Counts are loaded from the existing index, without a new database schema or persisted per-image flags.
+- The details panel retains counts after failure, offers Retry, and reports deferred older image details separately. Its expanded area scrolls at large font sizes while preserving space for the gallery. No pause/cancel controls or time estimates were added.
+- The existing settings icon now navigates to the existing `setup` destination, with a matching forward/back slide. `SetupScreen` has its own `FloatingTopBar`; category/home content no longer duplicates the header or reserves space for the generation tray. Both header Back and Android Back use category → clear search → previous screen. The Activity's shared ViewModel and the navigation back stack retain generation state; disposing MainScreen stops its preview subscription rather than the queue.
+- G57 tests live in `tools/harness/` and are linked into the pinned legacy harness alongside the new pure Kotlin status model. They verify initial/incremental counts between real committed batches and failure/retry. Keep all G1–G56 tests as well.
+
 ### Android 17 local network access (3.7.0-2)
 
 - The owner explicitly requested this micro-patch. `ACCESS_LOCAL_NETWORK` is declared for the existing target SDK 37. This belongs to Android's Nearby devices group; VPN-routed connections are excluded from local network protection (Google's `privacy-and-security/local-network-definition`). Do not require the grant as a condition for all server connections.

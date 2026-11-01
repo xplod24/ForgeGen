@@ -99,6 +99,10 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 
 ### Gallery
 
+- **Gallery index bar:** the gallery-wide image count stays below the tabs. Tap it for the current update's stage,
+  progress, remaining images, checked folders and unreadable generation data. Existing images stay available after
+  an interrupted update; Retry reconnects when needed. Folder discovery shows its stage until the total is known.
+
 - Your server's images through [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing):
   Gallery, Favorites and All Images tabs, folder covers, a grid of 2 to 5 columns or a list, and pinch to zoom.
 - **Search by prompt** across the whole gallery, from an index kept on the phone: tags of the positive and of the
@@ -145,6 +149,8 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   queue works or while you use the app. After an update the app goes on where you left it (the session's images, a
   paused queue and its progress) and a "What's New" bar offers the release notes.
 - Light, dark or system theme.
+- **Full-screen settings:** the existing Settings button opens a separate screen with its own Back navigation,
+  search and familiar preference cards. Generation and the queue keep working while settings are open.
 - The license, its full text and a link to the source code in Settings > Updates > License.
 
 ## Requirements
@@ -332,4 +338,4 @@ Manual result saving, selected-image saving, automatic new-result saving and res
 
 See [server deployment and manual backup](server/remote-vault/README.md). There is no scheduled backup until you provide an independent destination. Vault connection credentials, keys and pending transfers are kept outside ordinary app and Android backups.
 
-Run `bash tools/full-harness.sh` with JDK 21, Python 3 and a connected Android emulator/device. It runs the server tests, the complete G1–G56 JVM harness from the pinned `codex-context` commit, app unit tests, connected Compose tests and the R8 publication build. `bash tools/legacy-harness.sh` runs the legacy harness alone; its two data-dependent classes are skipped unless `FORGEGEN_DEBUG_PASSWORD` and `TAGCOMPLETE_TAGS` are provided as documented on the context branch. Never commit the password or signing key. CI and publication require both the legacy harness and vault checks and retain reports and Compose screenshots for review.
+Run `bash tools/full-harness.sh` with JDK 21, Python 3 and a connected Android emulator/device. It runs the server tests, the complete G1–G56 JVM harness from the pinned `codex-context` commit plus the G57 gallery status scenarios, app unit tests, connected Compose tests and the R8 publication build. `bash tools/legacy-harness.sh` runs the legacy harness alone; its two data-dependent classes are skipped unless `FORGEGEN_DEBUG_PASSWORD` and `TAGCOMPLETE_TAGS` are provided as documented on the context branch. Never commit the password or signing key. CI and publication require both the legacy harness and vault checks and retain reports and Compose screenshots for review.

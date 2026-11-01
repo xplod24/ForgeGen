@@ -4,9 +4,6 @@ import com.example.forgegen.ui.screens.*
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,7 +13,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.ui.zIndex
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.material.icons.filled.*
@@ -153,8 +149,7 @@ fun MainScreen(
             navController.navigate("gallery")
         }
 
-    var showSettingsOverlay by rememberSaveable { mutableStateOf(false) }
-    val onSettingsClick = rememberDebounced { showSettingsOverlay = !showSettingsOverlay }
+    val onSettingsClick = rememberDebounced { navController.navigate("setup") { launchSingleTop = true } }
     val onQueueClick = rememberDebounced { navController.navigate("queue") }
 
     val blurModifier = if (isRestoringPrompt != IndicatorState.IDLE) Modifier.blur(10.dp) else Modifier
@@ -216,9 +211,8 @@ fun MainScreen(
         val keyboardBottom = if (suggesting && !typingLayout.oneBar) keyboardNowDp + typingLayout.stripDp.dp else keyboardNowDp
         val statusBarNowDp = with(density) { WindowInsets.statusBars.getTop(this).toDp() }
         HideStatusBarWhile(typingLayout.hideStatusBar)
-        // The server sends the live preview only while it can be seen here (3.4.0): not under the settings, not while
-        // typing folds it away, not on the other screens (this one leaves the composition then).
-        val previewVisible = !showSettingsOverlay && !typingLayout.hidePreview
+        // Other destinations dispose this screen and stop the preview subscription, including Settings.
+        val previewVisible = !typingLayout.hidePreview
         DisposableEffect(previewVisible) {
             viewModel.setPreviewShown(previewVisible)
             onDispose { viewModel.setPreviewShown(false) }
@@ -245,9 +239,9 @@ fun MainScreen(
                     }
                 },
                 bottomBar = {
-                    // Out of the way while typing and while the settings are open.
+                    // Other destinations have their own layout; here the controls give way to the keyboard.
                     AnimatedVisibility(
-                        visible = !keyboardUp && !showSettingsOverlay,
+                        visible = !keyboardUp,
                         enter = slideInVertically { it } + fadeIn(),
                         exit = slideOutVertically { it } + fadeOut(),
                     ) {
@@ -353,20 +347,6 @@ fun MainScreen(
                         Spacer(modifier = Modifier.height(16.dp))
                     }
 
-                    AnimatedVisibility(
-                        visible = showSettingsOverlay,
-                        enter = expandVertically(expandFrom = Alignment.Top, animationSpec = tween(200, easing = LinearOutSlowInEasing)),
-                        exit = shrinkVertically(shrinkTowards = Alignment.Top, animationSpec = tween(200, easing = FastOutLinearInEasing)),
-                        modifier = Modifier.zIndex(100f),
-                    ) {
-                        Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                            SetupScreen(
-                                viewModel = viewModel,
-                                onDismiss = { showSettingsOverlay = false },
-                                belowTopBar = true,
-                            )
-                        }
-                    }
                 }
             }
         }

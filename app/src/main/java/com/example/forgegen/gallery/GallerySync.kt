@@ -46,10 +46,41 @@ internal suspend fun ForgeGalleryManager.reloadIndex() {
     synchronized(promptCache) { promptCache.clear() } // an image read again may have its prompt now
     try {
         indexedImages.value = getDb().galleryImageDao().getIndexedImages()
+        val source = indexProgressSource()
+        val count = galleryRoot()?.let { root -> indexedImages.value.count { isUnder(it.fullpath, root) } } ?: 0
+        _indexProgress.update { it.afterReload(source, count) }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         Log.e(TAG, "Failed to load the gallery index", e)
     }
+}
+
+// Tożsamość indeksu obejmuje serwer i górny folder; nie pokazujemy szczegółów poprzedniego profilu.
+internal fun ForgeGalleryManager.indexProgressSource(root: String? = galleryRoot()): String {
+    val server = ForgeRepository.config.value.apiUrl
+    return "${server.trimEnd('/')}\n${root.orEmpty()}"
+}
+
+// Zmiana serwera lub wyczyszczenie bazy unieważnia także spóźnione aktualizacje poprzedniego zadania.
+internal fun ForgeGalleryManager.resetIndexProgress() {
+    indexRun.incrementAndGet()
+    val root = galleryRoot()
+    _indexProgress.value =
+        GalleryIndexProgress(
+            source = indexProgressSource(root),
+            indexed = if (root == null) 0 else indexedImages.value.count { isUnder(it.fullpath, root) },
+        )
+    _isIndexing.value = false
+    _indexError.value = null
+    _gallerySyncProgress.value = 0 to 0
+}
+
+// Tylko aktualne zadanie może opublikować stan; anulowana synchronizacja nie nadpisze następnej.
+internal fun ForgeGalleryManager.updateIndexProgress(
+    run: Int,
+    change: (GalleryIndexProgress) -> GalleryIndexProgress,
+) {
+    _indexProgress.update { if (indexRun.get() == run) change(it) else it }
 }
 
 // Wpisuje zmiany jednej synchronizacji do indeksu w pamięci, bez czytania całej bazy (3.6.0-1).
@@ -115,6 +146,15 @@ internal data class SyncResult(
 
 // Jedna synchronizacja: wybiera pełną (raz w tygodniu) albo zwykłą, zapisuje wynik do logu.
 internal suspend fun ForgeGalleryManager.runSync(root: String) {
+    val run = indexRun.incrementAndGet()
+    val source = indexProgressSource(root)
+    val previous = _indexProgress.value
+    _indexProgress.value =
+        GalleryIndexProgress(
+            source = source,
+            stage = GalleryIndexStage.CHECKING_FOLDERS,
+            indexed = if (previous.source == source) previous.indexed else 0,
+        )
     _isIndexing.value = true
     _gallerySyncProgress.value = 0 to 0
     val result =
@@ -127,17 +167,35 @@ internal suspend fun ForgeGalleryManager.runSync(root: String) {
                     ?.value
                     ?.toLongOrNull() ?: 0L
             val full = System.currentTimeMillis() - lastFull >= FULL_SYNC_INTERVAL_MS
-            doSync(root, full).also {
+            doSync(root, full, run).also {
                 if (full) getDb().appSettingDao().putSetting(AppSettingEntity(FULL_SYNC_AT_KEY, System.currentTimeMillis().toString()))
             }
         } catch (e: CancellationException) {
-            _isIndexing.value = false
+            if (indexRun.get() == run) {
+                updateIndexProgress(run) { it.copy(stage = GalleryIndexStage.INTERRUPTED) }
+                _isIndexing.value = false
+            }
             throw e
         } catch (e: Exception) {
             // A dropped connection used to escape from here and close the app.
             Log.e(TAG, "Gallery sync failed", e)
+            // Wcześniejsze paczki są już zapisane w Room; po błędzie udostępniamy je także w widoku galerii.
+            reloadIndex()
             SyncResult(error = e.message ?: e.javaClass.simpleName)
         }
+    if (indexRun.get() != run) return
+    updateIndexProgress(run) {
+        it.copy(
+            stage =
+                when {
+                    result.error != null -> GalleryIndexStage.FAILED
+                    it.detailsRemaining > 0 -> GalleryIndexStage.WAITING_FOR_GENERATION
+                    else -> GalleryIndexStage.UP_TO_DATE
+                },
+            error = result.error,
+            indexed = indexedImages.value.count { image -> isUnder(image.fullpath, root) },
+        )
+    }
     _indexError.value = result.error
     lastSyncMessage.value = result.message
     Log.d(TAG, result.message)
@@ -161,6 +219,7 @@ internal class Listing(
 internal suspend fun ForgeGalleryManager.doSync(
     root: String,
     full: Boolean,
+    run: Int = indexRun.get(),
 ): SyncResult {
     val dao = getDb().galleryImageDao()
     // The paths from the index in memory once it is loaded (3.6.0-1), else only the paths from the database (the
@@ -168,9 +227,12 @@ internal suspend fun ForgeGalleryManager.doSync(
     val indexed = if (_indexLoaded.value) indexedImages.value.map { it.fullpath } else dao.getAllPaths()
     val indexedPaths = indexed.toHashSet()
     val unread = dao.getUnreadPaths().toHashSet()
+    val missingData = unread.filterTo(HashSet()) { isUnder(it, root) }
+    val beforeCount = indexed.count { isUnder(it, root) }
+    updateIndexProgress(run) { it.copy(indexed = beforeCount, unreadable = missingData.size) }
 
     // 1. Find the images.
-    val listing = listTree(root, if (full) emptyMap() else loadFolderDates())
+    val listing = listTree(root, if (full) emptyMap() else loadFolderDates(), run)
 
     // 2. Forget images that are gone: from every listed folder, or anywhere in the gallery on a full sync.
     val present = listing.files.mapTo(HashSet()) { norm(it.fullpath) }
@@ -185,6 +247,7 @@ internal suspend fun ForgeGalleryManager.doSync(
                 )
         }
     stale.chunked(500).forEach { dao.deleteImages(it) } // SQLite limits the number of parameters
+    missingData.removeAll(stale.toSet())
 
     // 3. Read the generation data of the new images (and of those it could not be read for before, at most
     // MAX_INFO_TRIES times in a run of the app), 100 per request. An image whose data cannot be read is indexed
@@ -198,6 +261,20 @@ internal suspend fun ForgeGalleryManager.doSync(
     val inserted = ArrayList<GalleryImageEntity>()
     var failed = 0
     var done = 0
+    val retained = beforeCount - stale.size
+    val newPaths = listing.files.filter { it.fullpath !in indexedPaths }.mapTo(HashSet()) { it.fullpath }
+    val committedNew = HashSet<String>()
+    updateIndexProgress(run) {
+        it.copy(
+            stage = GalleryIndexStage.READING_IMAGES,
+            indexed = retained,
+            total = retained + newPaths.size,
+            processed = 0,
+            workTotal = newFiles.size,
+            foldersTotal = it.foldersChecked,
+            unreadable = missingData.size,
+        )
+    }
     _gallerySyncProgress.value = 0 to newFiles.size
     for (chunk in newFiles.chunked(INFO_BATCH_SIZE)) {
         currentCoroutineContext().ensureActive()
@@ -214,13 +291,21 @@ internal suspend fun ForgeGalleryManager.doSync(
                 }
             }
         dao.insertImages(entities)
+        entities.forEach { image ->
+            if (image.fullpath in newPaths) committedNew += image.fullpath
+            if (image.savedAt == INFO_NOT_READ) missingData += image.fullpath else missingData -= image.fullpath
+        }
         inserted += entities
         done += chunk.size
         _gallerySyncProgress.value = done to newFiles.size
+        updateIndexProgress(run) {
+            it.copy(indexed = retained + committedNew.size, processed = done, unreadable = missingData.size)
+        }
     }
 
     // The details of images indexed before 3.6.0, read once more (never IIB's own index under /db/).
-    fillDetails(dao, reader)
+    fillDetails(dao, reader, run)
+    updateIndexProgress(run) { it.copy(stage = GalleryIndexStage.FINISHING) }
 
     // Sizes of images indexed before the index kept them (3.2.0): the listing tells them.
     val knownSizes = indexedImages.value.associate { it.fullpath to it.size }
@@ -254,6 +339,7 @@ internal suspend fun ForgeGalleryManager.doSync(
 internal suspend fun ForgeGalleryManager.listTree(
     root: String,
     known: Map<String, String>,
+    run: Int = indexRun.get(),
 ): Listing {
     val files = ArrayList<GalleryItem>()
     val listed = HashSet<String>()
@@ -268,6 +354,7 @@ internal suspend fun ForgeGalleryManager.listTree(
         val items = listFolder(folder)
         val folderKey = norm(folder)
         listed += folderKey
+        updateIndexProgress(run) { it.copy(foldersChecked = listed.size) }
         files += items.filter { !it.isDir && isImage(it.name) }
 
         val subfolders = items.filter { it.isDir }
@@ -340,9 +427,16 @@ internal fun ForgeGalleryManager.toEntity(
 internal suspend fun ForgeGalleryManager.fillDetails(
     dao: GalleryImageDao,
     reader: InfoReader,
+    run: Int = indexRun.get(),
 ) {
     var remaining = dao.countDetailsBacklog(IndexDetails.VERSION)
+    val total = remaining
     _detailsBacklog.value = remaining
+    if (remaining > 0) {
+        updateIndexProgress(run) {
+            it.copy(stage = GalleryIndexStage.READING_DETAILS, processed = 0, workTotal = total, detailsRemaining = remaining)
+        }
+    }
     while (remaining > 0 && !ForgeQueueManager.isGenerating.value) {
         currentCoroutineContext().ensureActive()
         val rows = dao.getDetailsBacklog(IndexDetails.VERSION, INFO_BATCH_SIZE)
@@ -357,6 +451,7 @@ internal suspend fun ForgeGalleryManager.fillDetails(
         )
         remaining = dao.countDetailsBacklog(IndexDetails.VERSION)
         _detailsBacklog.value = remaining
+        updateIndexProgress(run) { it.copy(processed = total - remaining, detailsRemaining = remaining) }
         if (remaining > 0) delay(DETAILS_PAUSE_MS)
     }
 }

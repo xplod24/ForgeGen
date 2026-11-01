@@ -1,3 +1,14 @@
+## 3.8.0
+**Feature** · a detailed gallery index bar and full-screen settings
+
+### New
+- A clickable index bar below the gallery tabs keeps the gallery-wide image count visible. Expand it for the current stage, update progress, remaining images, checked folders and unreadable generation data.
+- Folder discovery and finalization show their stage without a misleading percentage. Interrupted updates retain their counts, and unreadable generation data does not hide images from the gallery.
+
+### Changed
+- The same Settings button now opens a dedicated screen with its own header and Back navigation. Search, categories, dialogs and the existing preference cards stay familiar.
+- Settings use the full screen height. Returning restores the previous screen, while generation and the queue keep working in the background.
+
 ## 3.7.0-2
 **Bugfix** · local server access on Android 17
 

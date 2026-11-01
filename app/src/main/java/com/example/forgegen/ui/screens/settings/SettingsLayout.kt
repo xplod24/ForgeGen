@@ -21,13 +21,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.forgegen.ui.components.FloatingTopBar
 
 /* ============================================================================
  * USTAWIENIA: UKŁAD EKRANU (3.6.1, podział SetupScreen na pliki)
@@ -84,15 +85,8 @@ internal fun SettingsHome(
     onOpen: (SettingsPage) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
-    // Below the list the generation sheet's handle covers the screen's bottom edge.
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-        item {
-            Text(
-                "Settings",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
-            )
-        }
+    // Własny ekran nie potrzebuje już miejsca na uchwyt panelu generowania.
+    LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         // Pole wyszukiwania; klawisz "szukaj" na klawiaturze tylko ją chowa (wyniki pokazują się od razu).
         item {
             TextField(
@@ -179,31 +173,19 @@ internal fun SettingsHome(
     }
 }
 
-// Strona jednej kategorii. Kolejne ustawienia z tą samą grupą trafiają do jednej karty pod wspólnym nagłówkiem.
+// Zawartość kategorii pod nagłówkiem SettingsScaffold. Ustawienia tej samej grupy trafiają do jednej karty.
 
-/** A category's own page: a back arrow with its name, then its groups of settings, each group a card. */
+/** A category's groups of settings, each in a card; SettingsScaffold owns the title and Back action. */
 @Composable
 internal fun SettingsPageContent(
-    page: SettingsPage,
     settings: List<SettingItem>,
-    onBack: () -> Unit,
 ) {
     val groups = mutableListOf<Pair<String?, MutableList<SettingItem>>>()
     settings.forEach { setting ->
         val last = groups.lastOrNull()
         if (last != null && last.first == setting.group) last.second += setting else groups += setting.group to mutableListOf(setting)
     }
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
-        item {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-            ) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to Settings") }
-                Spacer(Modifier.width(4.dp))
-                Text(page.title, style = MaterialTheme.typography.titleLarge.copy(fontSize = 22.sp))
-            }
-        }
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
         groups.forEachIndexed { index, (group, items) ->
             item(key = "group$index") {
                 Column {
@@ -213,6 +195,20 @@ internal fun SettingsPageContent(
             }
         }
     }
+}
+
+// Wspólny szkielet pełnego ekranu: pasek jak w galerii, własne odstępy systemowe i brak nakładki generowania.
+@Composable
+internal fun SettingsScaffold(
+    title: String,
+    onBack: () -> Unit,
+    content: @Composable (PaddingValues) -> Unit,
+) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = { FloatingTopBar(title = title, onNavigate = onBack) },
+        content = content,
+    )
 }
 
 // Nagłówek grupy (niebieskie wersaliki nad kartą).

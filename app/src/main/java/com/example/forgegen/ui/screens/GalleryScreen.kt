@@ -150,7 +150,7 @@ fun GalleryScreen(
     val indexError by viewModel.galleryIndexError.collectAsStateWithLifecycle()
     val indexedImageCount by viewModel.galleryIndexedImageCount.collectAsStateWithLifecycle()
     val indexLoaded by viewModel.galleryIndexLoaded.collectAsStateWithLifecycle()
-    val gallerySyncProgress by viewModel.gallerySyncProgress.collectAsStateWithLifecycle()
+    val indexProgress by viewModel.galleryIndexProgress.collectAsStateWithLifecycle()
 
     // Subscription to the list of favorite paths
     val favoritePaths by viewModel.favoritePaths.collectAsStateWithLifecycle()
@@ -393,18 +393,12 @@ fun GalleryScreen(
                 )
             }
 
-            // The index updates itself; only this thin bar shows it.
-            AnimatedVisibility(
-                visible = isIndexing && !showExtensionStatus,
-                enter = fadeIn(tween(OVERLAY_FADE_MS)),
-                exit = fadeOut(tween(OVERLAY_FADE_MS)),
-            ) {
-                val (done, total) = gallerySyncProgress
-                if (total > 0) {
-                    LinearProgressIndicator(progress = { done.toFloat() / total }, modifier = Modifier.fillMaxWidth().height(2.dp))
-                } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp))
-                }
+            if (!showExtensionStatus) {
+                GalleryIndexPanel(
+                    progress = indexProgress,
+                    loaded = indexLoaded,
+                    onRetry = { if (isConnected) viewModel.refreshGallery() else viewModel.checkGalleryExtension() },
+                )
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {

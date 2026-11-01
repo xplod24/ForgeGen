@@ -225,6 +225,11 @@ object ForgeGalleryManager {
     internal val _gallerySyncProgress = MutableStateFlow(0 to 0)
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = _gallerySyncProgress.asStateFlow()
 
+    // PL: Jeden spójny stan paska: cała galeria, bieżąca aktualizacja i etap pracy; licznik odrzuca stare zadania.
+    internal val indexRun = AtomicInteger(0)
+    internal val _indexProgress = MutableStateFlow(GalleryIndexProgress())
+    val indexProgress: StateFlow<GalleryIndexProgress> = _indexProgress.asStateFlow()
+
     /** Why the last update of the index failed; null when it worked. Shown quietly in the search panel. */
     internal val _indexError = MutableStateFlow<String?>(null)
     val indexError: StateFlow<String?> = _indexError.asStateFlow()
@@ -588,6 +593,7 @@ object ForgeGalleryManager {
             getDb().appSettingDao().removeSetting(FOLDER_DATES_KEY) // the next sync lists every folder again
             infoTries.clear() // and tries every image anew
             reloadIndex() // empties the model/LoRA filter lists built from the index
+            resetIndexProgress()
             lastAutoSyncAt = 0L // opening the gallery builds it again at once
             ForgeRepository.showToast("Gallery Index Wiped")
         }

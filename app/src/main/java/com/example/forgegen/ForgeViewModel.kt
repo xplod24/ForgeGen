@@ -540,6 +540,7 @@ class ForgeViewModel(
     val currentGalleryPath: StateFlow<String> = ForgeGalleryManager.currentGalleryPath
     val isGalleryLoading: StateFlow<Boolean> = ForgeGalleryManager.isGalleryLoading
     val gallerySyncProgress: StateFlow<Pair<Int, Int>> = ForgeGalleryManager.gallerySyncProgress
+    val galleryIndexProgress: StateFlow<GalleryIndexProgress> = ForgeGalleryManager.indexProgress
     val galleryError: StateFlow<String?> = ForgeGalleryManager.galleryError
     val showGalleryMetadata: StateFlow<Boolean> = ForgeGalleryManager.showGalleryMetadata
     val currentImageMetadata: StateFlow<String?> = ForgeGalleryManager.currentImageMetadata
