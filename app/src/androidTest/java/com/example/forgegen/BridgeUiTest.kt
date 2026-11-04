@@ -12,7 +12,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -67,12 +68,12 @@ class BridgeUiTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithText(value).fetchSemanticsNodes().isNotEmpty() }
     }
 
-    private fun screenshot(name: String) {
+    private fun screenshot(name: String, dialog: Boolean = false) {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val file = File(context.getExternalFilesDir(null), "ui-screenshots/$name.png").apply { parentFile!!.mkdirs() }
         file.outputStream().use {
             compose
-                .onRoot()
+                .onNode(if (dialog) isDialog() else isRoot())
                 .captureToImage()
                 .asAndroidBitmap()
                 .compress(Bitmap.CompressFormat.PNG, 100, it)
@@ -179,7 +180,7 @@ class BridgeUiTest {
         compose.onNodeWithText("Select…").performClick()
         compose.onNodeWithText("checkpoint · checkpoint-default").performClick()
         compose.onNodeWithText("One file path relative to this root").performTextInput("synthetic/model.safetensors")
-        screenshot("bridge-selected-file-scan")
+        screenshot("bridge-selected-file-scan", dialog = true)
         compose.onNodeWithText("Submit").performClick()
         compose.waitUntil(10_000) { !controller.state.value.busy && server.requests.any { it.path == "models/scan-selected" } }
         val request = server.requests.single { it.path == "models/scan-selected" }
