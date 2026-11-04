@@ -37,6 +37,23 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
   repository debug key; only the CI/release workflow signs with the owner's publication key. Remote CI, connected
   emulator checks and publication are verified separately before master advances; no live server tests are claimed.
 
+### Verified Bridge publication (2026-11-04)
+
+- Published 3.9.0 from `2b5cefa968ee6fd15fac528f521d26a6c8765429`. Tag `v3.9.0` and master matched that commit at
+  verification; GitHub reported it as the latest release: https://github.com/xplod24/ForgeGen/releases/tag/v3.9.0.
+- Work-branch CI `41826000523` and master Release `41828939242` both succeeded, including the complete G1-G57 legacy
+  harness, vault backend, connected Android emulator, app unit suite and signed R8 build. Local app suite: 280 passed;
+  native-graphics Bridge/settings suite: five passed; focused legacy G55/G57: eight passed. Live home-lab/provider and
+  physical-camera testing remains with the owner. Emulator artifact download through GitHub API was forbidden in this
+  environment; visual inspection used the successful local native-graphics production-screen captures.
+- Downloaded official APK and mapping archive; both matched GitHub's public SHA-256 asset digests. APK: 7,761,614 bytes,
+  `8bdca2cac669f846f1495a956540ee499c5bbfc898d3b0f9b24a107a6406aacd`; mapping.zip:
+  `231f72b0558b046ce884efa5a240a9bdaa37e0ed8ff8861e7360074819476cd4`. Verified a single existing owner certificate,
+  v3 signature, unchanged package, version 3.9.0 / 300900000, target 37, LAN/camera permissions, no debuggable flag,
+  archive integrity and the 3.9.0 changelog inside the APK.
+- Root README was updated only after this published-release verification, as requested. The documentation commit
+  follows the release tag and does not change the APK source or version; Markdown-only pushes are ignored by CI/release.
+
 ### Gallery index status and standalone settings (3.8.0)
 
 - The owner approved both mockups and requested a MINOR release. `VERSION_MINOR=8`, patch and micro reset to zero. The gallery gets a persistent, expandable status strip below the tabs, using the existing dark/light theme. Whole-gallery coverage and the current update's work are separate; folder discovery/finalization have no fabricated percentage. Unreadable generation data never removes images.

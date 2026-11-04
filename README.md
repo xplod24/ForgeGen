@@ -49,7 +49,7 @@ ForgeGen is an Android client for [Stable Diffusion WebUI Forge](https://github.
 (Forge Neo included). The images are made by your own server; the phone writes the prompts, runs the queue, shows the
 progress and browses the results, at home on the same Wi-Fi or from anywhere through a VPN.
 
-- **txt2img only, by design.** No img2img, inpainting, ControlNet or extras: every feature works through txt2img
+- **txt2img only, by design.** No img2img, inpainting, ControlNet or extras: generation features use txt2img
   parameters, so it works the same way on every Forge server.
 - **Your server decides.** The app does not judge prompts. A prompt the server refuses (HTTP 403) is set aside in the
   queue with the server's reason.
@@ -132,6 +132,24 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 - Server profiles to switch between servers. When the server does not answer, the app keeps working offline and
   tries again when you come back, when the network returns or when you queue a job.
 
+### Optional ForgeGen Bridge
+
+- **Disabled by default, separately for each server.** Open Settings > Server > ForgeGen Bridge to enable it.
+  A compact card below the main menu then opens its dedicated tools screen. All basic functions work without it.
+- Pair using an administrator-issued QR invitation or pasted JSON. The app verifies the server identity and
+  keeps the device token encrypted outside backups and settings exports. The server owner assigns access.
+- Model counts/catalog/details, scan/move/delete, server downloads and operation history, permitted cancellation
+  and explicit transfer retry. Counts-only servers keep names and file actions private.
+- Optional **Civitai search and server-side downloads**: choose the exact version, file and registered destination.
+  Configure the Civitai API key only on the server; the phone neither collects nor stores it.
+- Extension installation/removal, next-start switches and bulk actions, with protected Bridge/built-in entries.
+  Changes require `--enable-insecure-extension-access`, granted scopes and the server's own authorization.
+- Server status, unload/restart and paired-device access management. Confirmations and persistent request keys
+  protect against accidental duplicate operations after a lost response.
+
+See the [Bridge setup and testing guide](docs/bridge/README.md). Verification uses synthetic loopback fixtures;
+real Forge/Bridge/provider testing is performed separately by the owner.
+
 ### App
 
 - **Settings** in categories with a search field, and a **Features** page with a switch for each feature: a feature
@@ -158,6 +176,7 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 ### Phone
 
 - Android 12 (API 31) or newer.
+- A camera is optional, used only when scanning a Bridge invitation. Pasting invitation JSON works without it.
 - A network path to the server: the same Wi-Fi, or a VPN such as Tailscale or WireGuard. Plain HTTP is allowed, as
   home servers rarely have HTTPS.
 - On Android 17 or newer, allow **Nearby devices** for direct access to servers on Wi-Fi or Ethernet. ForgeGen
@@ -169,9 +188,11 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
 | What | Needed for | Notes |
 | --- | --- | --- |
 | Stable Diffusion WebUI Forge or Forge Neo, started with `--api --listen` | Everything | `--api` opens the API, `--listen` lets the phone reach it. AUTOMATIC1111 works too, but of the model settings only an SD model's VAE is sent to it. |
-| No API password | Everything | ForgeGen does not sign in, so don't use `--api-auth`. Keep the server on a private network or a VPN. |
+| No Forge API password | Core Forge API access | ForgeGen does not sign in, so don't use `--api-auth`. Keep the server on a private network or a VPN. |
 | [Infinite Image Browsing](https://github.com/zanllp/sd-webui-infinite-image-browsing) extension | The gallery | Deleting, moving and copying need write access (not `IIB_ACCESS_CONTROL_PERMISSION=read-only`). With `IIB_SECRET_KEY` set, the app asks for the key once; with Forge's login on, the extension needs such a key. |
 | [tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete) extension | Tag suggestions | Optional. |
+| ForgeGen Bridge extension with API 1.0 | Optional server management | Off by default in the app; pair with an administrator-issued invitation. Core generation/queue/gallery do not require it. |
+| `--enable-insecure-extension-access` | Optional Bridge extension changes | Also requires the appropriate device scopes and Forge/Bridge authorization. |
 | `--api-server-stop`, Forge started by `webui.bat` or `webui.sh` | Restart Forge | Optional. Without it the button is greyed out. |
 | Forge's web UI without a login (not `--nowebui`) | Seeing other jobs on the server, Check Now | Optional. Without it the progress works as before and the server page says why there is no report. |
 
@@ -197,7 +218,7 @@ export COMMANDLINE_ARGS="--api --listen --api-server-stop"
    top bar, or go to Settings > Server).
 4. That's it: later versions arrive by themselves (Settings > Updates to check now or to turn off automatic installs).
 
-The APK is shrunk and optimized by R8 (about 6.5 MB). The app's package is `io.github.xplod24.forgegen`, signed with
+The APK is shrunk and optimized by R8. The app's package is `io.github.xplod24.forgegen`, signed with
 ForgeGen's own key, certificate SHA-256 `22c6e6add4c03e59b4a7106a6036f4d8781ef7c7559340f87909d6318261c06d`.
 
 **Coming from 3.5.2-1 or older?** Up to 3.5.2-1 the app was `io.github.xplod24.forgegen.debug`, so the current version
@@ -210,6 +231,7 @@ version, update to 3.5.2-1 first, or export, install `ForgeGen.apk` by hand and 
 ## Building from source
 
 You need JDK 21 and the Android SDK with platform 37 (a current Android Studio has both).
+Unit tests also need Python 3.9 or newer for local synthetic server fixtures; they do not contact a live Forge server or Civitai.
 
 ```sh
 git clone https://github.com/xplod24/ForgeGen.git
@@ -244,6 +266,7 @@ ForgeGen/
 │   ├── ForgeQueueManager.kt      the queue, progress, live preview, retries
 │   ├── ForgeNetworkManager.kt    models, samplers, LoRAs, embeddings, styles
 │   ├── ForgeGalleryManager.kt    the gallery through IIB: state, favorites, paths (with gallery/)
+│   ├── bridge/                   optional Bridge API, controller, encrypted device store and QR scanner
 │   ├── gallery/                  the gallery's areas: browsing, filters, index sync, file changes
 │   ├── ForgeSettingsManager.kt   settings, presets, server profiles
 │   ├── ForgeTagManager.kt        tag list for the suggestions
@@ -257,9 +280,13 @@ ForgeGen/
 │   ├── ForgeModels.kt            data classes and the Room database
 │   └── ui/
 │       ├── screens/              gallery, queue, presets, wildcards, statistics
+│       │   ├── bridge/           paired server tools and confirmations
 │       │   └── settings/         the settings screen, one file per page
 │       └── components/           cards, pickers, top bars, dialogs, tag suggestion strip
 ├── app/src/test/                 JVM unit tests
+├── app/src/androidTest/          synthetic connected UI and private-storage checks
+├── docs/bridge/                  supplied API contract and integration guide
+├── server/bridge-harness/        loopback-only fictional Bridge for contract tests
 ├── .github/workflows/            ci.yml (work branches) and release.yml (master)
 ├── tools/sign-apk.sh             signs the published APK with ForgeGen's key
 ├── CHANGELOG.md                  release notes, also shown in the app after an update
@@ -288,15 +315,19 @@ ForgeGen/
 | Storage | Room (SQLite) |
 | Network | Retrofit, OkHttp, Gson |
 | Images | Coil |
+| Local QR scanning | ZXing Android Embedded, ZXing core |
 | Build | Android Gradle Plugin, KSP, R8 |
 | Tests | JUnit 4, MockK, kotlinx-coroutines-test |
 
-The exact versions are in [`gradle/libs.versions.toml`](gradle/libs.versions.toml).
+Dependency versions are in [`gradle/libs.versions.toml`](gradle/libs.versions.toml) and
+[`app/build.gradle.kts`](app/build.gradle.kts).
 
 ## Privacy
 
 - ForgeGen talks only to **your server** and to **GitHub's API** (to look for updates and download them).
-- No accounts, no analytics, no ads. Settings, the queue, presets, wildcards and the gallery index stay on the phone.
+- No app accounts, analytics or ads. Settings, the queue, presets, wildcards and the gallery index stay on the phone.
+- Optional Bridge uses a separate encrypted device token. QR decoding runs locally. Civitai credentials and model
+  transfers stay on the Bridge server; the app talks to that server rather than directly to Civitai.
 
 ## Acknowledgements
 
@@ -306,6 +337,10 @@ The exact versions are in [`gradle/libs.versions.toml`](gradle/libs.versions.tom
   gallery.
 - [tagcomplete](https://github.com/DominikDoom/a1111-sd-webui-tagcomplete) by DominikDoom, whose tag lists feed the
   suggestions.
+
+- [ZXing Android Embedded](https://github.com/journeyapps/zxing-android-embedded) and
+  [ZXing](https://github.com/zxing/zxing), for local QR scanning (Apache 2.0;
+  [notices and license](docs/bridge/THIRD_PARTY_NOTICES.md)).
 
 ## License
 
