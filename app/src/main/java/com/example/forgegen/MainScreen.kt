@@ -53,7 +53,9 @@ import kotlinx.coroutines.launch
 fun MainScreen(
     viewModel: ForgeViewModel,
     navController: NavHostController,
+    bridge: BridgeController? = null,
 ) {
+    val bridgeState = bridge?.state?.collectAsStateWithLifecycle()?.value ?: BridgeState()
     val config by viewModel.config.collectAsStateWithLifecycle()
     val vaultEnabled by RemoteVault.enabled.collectAsStateWithLifecycle()
     val vaultScope = rememberCoroutineScope()
@@ -224,18 +226,21 @@ fun MainScreen(
                 containerColor = MaterialTheme.colorScheme.background,
                 topBar = {
                     AnimatedVisibility(visible = !typingLayout.hideTopBar, enter = expandVertically(), exit = shrinkVertically()) {
-                        MainTopBar(
-                            connection = connection,
-                            pingMs = pingMs,
-                            searchEndsAt = searchEndsAt,
-                            memory = serverMemory,
-                            onConnectionClick = { viewModel.openServerDialog() },
-                            onMemoryClick = { showMemorySheet = true },
-                            onGalleryClick = onGalleryClick,
-                            onSettingsClick = onSettingsClick,
-                            restartingSince = restartingSince,
-                            showMeters = config.memoryMeters,
-                        )
+                        Column {
+                            MainTopBar(
+                                connection = connection,
+                                pingMs = pingMs,
+                                searchEndsAt = searchEndsAt,
+                                memory = serverMemory,
+                                onConnectionClick = { viewModel.openServerDialog() },
+                                onMemoryClick = { showMemorySheet = true },
+                                onGalleryClick = onGalleryClick,
+                                onSettingsClick = onSettingsClick,
+                                restartingSince = restartingSince,
+                                showMeters = config.memoryMeters && density.fontScale <= 1.2f,
+                            )
+                            BridgeHomeEntry(bridgeState) { navController.navigate("bridge") { launchSingleTop = true } }
+                        }
                     }
                 },
                 bottomBar = {

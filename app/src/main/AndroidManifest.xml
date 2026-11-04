@@ -26,6 +26,8 @@
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <application
         android:name=".ForgeApp"
         android:hasFragileUserData="true" android:allowBackup="true"
@@ -38,6 +40,9 @@
         android:theme="@style/Theme.ForgeGen"
         android:usesCleartextTraffic="true"
         >
+
+        <activity android:name=".BridgeCaptureActivity" android:exported="false"
+            android:screenOrientation="fullSensor" android:theme="@style/zxing_CaptureTheme" />
 
         <activity
             android:name=".MainActivity"

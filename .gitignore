@@ -24,6 +24,8 @@ local.properties
 !/tools/**/*.py
 !/server/**/*.py
 *.txt
+!/docs/bridge/ZXING_*.txt
+__pycache__/
 old_*.kt
 init_*.kt
 git_*.kt

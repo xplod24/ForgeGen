@@ -198,6 +198,9 @@ fun AppNavigation(
     navController: NavHostController,
 ) {
     val context = LocalContext.current
+    val bridge: BridgeViewModel =
+        androidx.lifecycle.viewmodel.compose
+            .viewModel()
 
     LaunchedEffect(Unit) {
         if (context is MainActivity) {
@@ -224,8 +227,19 @@ fun AppNavigation(
             exitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) },
             popEnterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(200)) },
             popExitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(200)) },
-        ) { SetupScreen(viewModel, onDismiss = { navController.popBackStack() }) }
-        composable("main") { MainScreen(viewModel, navController) }
+        ) {
+            SetupScreen(
+                viewModel,
+                onDismiss = { navController.popBackStack() },
+                onOpenBridge = { navController.navigate("bridge") { launchSingleTop = true } },
+            )
+        }
+        composable("bridge") {
+            val config by viewModel.config.collectAsStateWithLifecycle()
+            val name = config.serverProfiles.firstOrNull { it.url.trimEnd('/') == config.apiUrl.trimEnd('/') }?.name ?: "Selected server"
+            BridgeScreen(bridge.controller, onBack = { navController.popBackStack() }, serverName = name)
+        }
+        composable("main") { MainScreen(viewModel, navController, bridge.controller) }
         composable(
             "gallery",
             enterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(200)) },

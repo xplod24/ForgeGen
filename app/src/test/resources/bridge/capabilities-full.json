@@ -1,0 +1,152 @@
+{
+  "api_version": {
+    "major": 1,
+    "minor": 0
+  },
+  "features": {
+    "status": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.count": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.catalog": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.scan": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.move": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.delete": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "downloads.create": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "downloads.cancel": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "downloads.retry": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "civitai.search": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "civitai.download": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "extensions.list": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "extensions.install": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "extensions.uninstall": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "extensions.toggle": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "extensions.bulk": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "server.unload": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "server.restart": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "devices.list": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "devices.revoke": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "devices.me": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "operations.read": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "operations.cancel": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    }
+  },
+  "required_flags": {
+    "enable_insecure_extension_access": true,
+    "extension_access_allowed": true,
+    "extensions_globally_allowed": true
+  },
+  "privacy_policy": "full"
+}

@@ -70,6 +70,7 @@ import java.util.Locale
 internal fun SettingsUiState.serverSettings(
     connectionText: String,
     connectionColor: Color,
+    onOpenBridge: () -> Unit = {},
 ): List<SettingItem> {
     val config by viewModel.config.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
@@ -129,6 +130,10 @@ internal fun SettingsUiState.serverSettings(
                 title = "Diagnostics",
                 subtitle = "Asks 7 of the server's endpoints how fast they answer",
             ) { runDiagnostics() }
+        }
+        // Opcjonalny pomost ma własny ekran; podstawowe połączenie i galeria pozostają niezależne.
+        add(SettingsPage.SERVER, "Bridge", "forgegen bridge optional models extensions pairing qr devices") {
+            TextPreference(title = "ForgeGen Bridge", subtitle = "Optional server tools") { onOpenBridge() }
         }
         // Klucz galerii: tajny klucz rozszerzenia IIB na serwerze, gdy galeria o niego prosi (3.5.0).
         // The secret key of the server's Infinite Image Browsing (3.5.0), for a gallery that asks for one.

@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 fun SetupScreen(
     viewModel: ForgeViewModel,
     onDismiss: () -> Unit,
+    onOpenBridge: () -> Unit = {},
 ) {
     // --- STATE OBSERVATION ---
     // Dane potrzebne stronie głównej i podsumowaniom (strony zbierają swoje same).
@@ -108,7 +109,7 @@ fun SetupScreen(
 
     // Wszystkie ustawienia, strona po stronie; ta kolejność to też kolejność wyników wyszukiwania.
     val settings =
-        ui.serverSettings(connectionText, connectionColor) +
+        ui.serverSettings(connectionText, connectionColor, onOpenBridge) +
             ui.appearanceSettings() +
             ui.featuresSettings() +
             ui.notificationsSettings() +

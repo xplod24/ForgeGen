@@ -2,6 +2,41 @@
 
 This file maintains the ongoing memory, architectural decisions, and user preferences for the ForgeGen project. It should be consulted and updated regularly.
 
+### Optional ForgeGen Bridge (3.9.0)
+
+- Owner approved the UI proposals and requested full implementation, synthetic tests only and a MINOR release.
+  Bridge is an optional extension, off by default per canonical Forge URL. Its compact main-screen entry appears
+  below the top bar only when enabled; Settings > Server always provides configuration. Root README is updated
+  after the release is published, as explicitly requested. Home-lab/provider live tests belong to the owner.
+- `BridgeViewModel` is a separate Activity-scoped companion; `BridgeController`, `BridgeApi` and `AndroidBridgeStore`
+  never change Forge's existing clients, ViewModel, queue, IIB gallery or AppConfig. No Bridge requests are made when
+  disabled. Reads poll only in foreground views, stop on error and never submit mutations.
+- Public discovery checks Bridge identity/API 1.0 and server UUID before any bearer token or invitation code is sent.
+  QR scanning is local ZXing Android Embedded 4.3.0; camera access is requested only for scanning, with JSON paste as
+  an alternative. Invitation expiry/current profile/server identity are validated; invitation secrets are not saved.
+  The device token and pending intentions use Keystore AES-256-GCM AtomicFiles under noBackupFilesDir, outside settings
+  exports and saved UI state. Redirects are rejected. An upstream authentication challenge remains distinct from pairing.
+- Every mutation has a persisted per-intention key before sending; ambiguous acknowledgments survive recreation and
+  retry with the original method/body/query/key. DELETE and download retry have no JSON body. A retry rejection keeps
+  the original uncertainty. User confirmations precede administration; restart acceptance is not server readiness.
+- Actual capabilities, scopes, privacy policy and all three extension-access flags gate actions. Count-only hides names
+  and file operations. Bridge/built-ins cannot be switched or removed. Next-start extension state stays separate from
+  current state. Server-side Civitai search/download is optional; its API key never enters the phone. This supersedes
+  the historic no-Civitai rule only for this opt-in Bridge supplement; existing Forge model metadata remains separate.
+- `docs/bridge/` retains the owner-supplied contract and full synthetic capability example. `tools/bridge-contract.py`
+  generates 34 DTOs, wire validators and 34 route entries; generated Kotlin is formatted with ktlint. All DTOs remain
+  in the package covered by the existing R8/Gson fields/constructors rule; no production method-name reflection.
+- The stdlib `server/bridge-harness` binds only to loopback and validates against the supplied OpenAPI. App tests walk
+  every endpoint, check pairing/isolation/privacy/idempotency and locally decode QR. Android tests use a fictional Java
+  loopback server, exercise production UI and verify the real Keystore store. Keep the full pinned legacy harness,
+  vault backend and connected emulator gates in both CI and release; no private server/provider calls are needed.
+- Local verification: 280 app unit tests, five native-graphics production UI tests and eight focused G55/G57 legacy
+  cases passed. Inspected the dark Bridge overview/extensions/provider-file and light counts-only screenshots.
+  Final R8 publication build passed; DEX inspection retained all 34 DTO classes/183 fields and scanner activities/views,
+  required scanner layouts, unchanged package, version 3.9.0 / 300900000 and no debuggable flag. Local signing uses the
+  repository debug key; only the CI/release workflow signs with the owner's publication key. Remote CI, connected
+  emulator checks and publication are verified separately before master advances; no live server tests are claimed.
+
 ### Gallery index status and standalone settings (3.8.0)
 
 - The owner approved both mockups and requested a MINOR release. `VERSION_MINOR=8`, patch and micro reset to zero. The gallery gets a persistent, expandable status strip below the tabs, using the existing dark/light theme. Whole-gallery coverage and the current update's work are separate; folder discovery/finalization have no fabricated percentage. Unreadable generation data never removes images.

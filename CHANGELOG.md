@@ -1,3 +1,17 @@
+## 3.9.0
+**Feature** · optional ForgeGen Bridge for paired server management
+
+### New
+- Enable ForgeGen Bridge separately for each server from Settings > Server. Once enabled, a compact card below the main menu opens its dedicated tools screen. Generation, the local queue and the IIB gallery work without the extension.
+- Pair with an administrator-issued QR invitation, or paste its JSON. The app verifies the server identity before exchanging the invitation and keeps its device token encrypted outside backups and settings exports.
+- Browse model counts, catalogs and details; scan, move or delete files when the server grants access. Counts-only servers retain their privacy restrictions.
+- Track server downloads and operations, including progress, cancellation and explicit transfer retry. Optional Civitai search selects an exact model version, file and destination; downloads run on the server and the Civitai key stays there.
+- Manage permitted extensions individually or in bulk, with confirmations, protected Bridge/built-in entries and separate current/next-start states. Changes require Forge's --enable-insecure-extension-access flag and the server's authorization.
+- View server status, request unload/restart and manage paired devices and scopes. A restart acknowledgment is distinguished from a ready server.
+
+### Changed
+- Bridge requests use their own client, bounded foreground polling and persistent request keys. An interrupted acknowledgment can be retried without creating another operation; Bridge errors do not change the Forge connection profile.
+
 ## 3.8.0
 **Feature** · a detailed gallery index bar and full-screen settings
 

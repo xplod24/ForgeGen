@@ -1,0 +1,240 @@
+[
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/info",
+    "request": "",
+    "response": "Info",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/openapi.json",
+    "request": "",
+    "response": "",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/pairing/exchange",
+    "request": "PairRequest",
+    "response": "PairResponse",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/devices/me",
+    "request": "",
+    "response": "Device",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/capabilities",
+    "request": "",
+    "response": "Capabilities",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/devices",
+    "request": "",
+    "response": "Page_Device_",
+    "status": 200
+  },
+  {
+    "method": "DELETE",
+    "path": "/forgegen/v1/devices/{device_id}",
+    "request": "",
+    "response": "Device",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/models/roots",
+    "request": "",
+    "response": "Page_RootInfo_",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/models/counts",
+    "request": "",
+    "response": "Page_ModelCount_",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/models",
+    "request": "",
+    "response": "Page_Model_",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/models/scan",
+    "request": "WaitRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/models/{model_id}",
+    "request": "",
+    "response": "Model",
+    "status": 200
+  },
+  {
+    "method": "DELETE",
+    "path": "/forgegen/v1/models/{model_id}",
+    "request": "",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/models/{model_id}/move",
+    "request": "MoveRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/downloads",
+    "request": "DownloadRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/downloads",
+    "request": "",
+    "response": "Page_Operation_",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/downloads/{operation_id}",
+    "request": "",
+    "response": "Operation",
+    "status": 200
+  },
+  {
+    "method": "DELETE",
+    "path": "/forgegen/v1/downloads/{operation_id}",
+    "request": "",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/downloads/{operation_id}/retry",
+    "request": "",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/civitai/models",
+    "request": "",
+    "response": "Page_CivitaiModel_",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/civitai/models/{model_id}",
+    "request": "",
+    "response": "CivitaiModel",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/civitai/versions/{version_id}",
+    "request": "",
+    "response": "CivitaiVersion",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/civitai/downloads",
+    "request": "CivitaiDownloadRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/extensions",
+    "request": "",
+    "response": "Page_Extension_",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/extensions",
+    "request": "InstallRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/extensions/bulk",
+    "request": "BulkRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "PATCH",
+    "path": "/forgegen/v1/extensions/{extension_id}",
+    "request": "ToggleRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "DELETE",
+    "path": "/forgegen/v1/extensions/{extension_id}",
+    "request": "",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/server/status",
+    "request": "",
+    "response": "ServerStatus",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/server/unload",
+    "request": "WaitRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/server/restart",
+    "request": "WaitRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/operations",
+    "request": "",
+    "response": "Page_Operation_",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/operations/{operation_id}",
+    "request": "",
+    "response": "Operation",
+    "status": 200
+  },
+  {
+    "method": "DELETE",
+    "path": "/forgegen/v1/operations/{operation_id}",
+    "request": "",
+    "response": "Accepted",
+    "status": 202
+  }
+]
