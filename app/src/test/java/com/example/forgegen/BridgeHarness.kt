@@ -44,7 +44,7 @@ internal class BridgeHarness(
     private val source = listOf(File("server/bridge-harness"), File("../server/bridge-harness")).first { File(it, "server.py").isFile }
     private val process =
         ProcessBuilder(
-            "python3",
+            System.getenv("FORGEGEN_TEST_PYTHON")?.takeIf { it.isNotBlank() } ?: "python3",
             "-u",
             "server.py",
             "--port",

@@ -42,6 +42,8 @@ data class BridgeCapabilities(
     val requiredFlags: Map<String, Boolean>? = null,
     @SerializedName("privacy_policy")
     val privacyPolicy: String? = null,
+    @SerializedName("server_mode")
+    val serverMode: String? = null,
 ) {
     override fun toString(): String = "BridgeCapabilities(redacted)"
 }
@@ -132,6 +134,8 @@ data class BridgeDevice(
     val createdAt: String? = null,
     @SerializedName("revoked_at")
     val revokedAt: String? = null,
+    @SerializedName("admin_access")
+    val adminAccess: Boolean? = null,
 ) {
     override fun toString(): String = "BridgeDevice(redacted)"
 }
@@ -209,6 +213,10 @@ data class BridgeInfo(
     val pairing: String? = null,
     @SerializedName("openapi_url")
     val openapiUrl: String? = null,
+    @SerializedName("server_mode")
+    val serverMode: String? = null,
+    @SerializedName("admin_pairing_supported")
+    val adminPairingSupported: Boolean? = null,
 ) {
     override fun toString(): String = "BridgeInfo(redacted)"
 }
@@ -396,6 +404,8 @@ data class BridgePairRequest(
     val code: String? = null,
     @SerializedName("device_name")
     val deviceName: String? = null,
+    @SerializedName("require_admin_access")
+    val requireAdminAccess: Boolean? = null,
 ) {
     override fun toString(): String = "BridgePairRequest(redacted)"
 }
@@ -418,6 +428,19 @@ data class BridgeRootInfo(
     val type: String? = null,
 ) {
     override fun toString(): String = "BridgeRootInfo(redacted)"
+}
+
+data class BridgeSelectedScanRequest(
+    @SerializedName("root_id")
+    val rootId: String? = null,
+    @SerializedName("relative_path")
+    val relativePath: String? = null,
+    @SerializedName("wait_for_idle")
+    val waitForIdle: Boolean? = null,
+    @SerializedName("lookup_civitai")
+    val lookupCivitai: Boolean? = null,
+) {
+    override fun toString(): String = "BridgeSelectedScanRequest(redacted)"
 }
 
 data class BridgeServerStatus(

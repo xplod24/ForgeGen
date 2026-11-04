@@ -49,8 +49,10 @@ class BridgeUiTest {
         countOnly: Boolean = false,
         paired: Boolean = true,
         dark: Boolean = true,
+        pairingOnly: Boolean = false,
+        adminAccess: Boolean = false,
     ) {
-        server = BridgeUiFixture(countOnly).apply { configure(paired) }
+        server = BridgeUiFixture(countOnly, pairingOnly, adminAccess).apply { configure(paired) }
         controller = BridgeController(scope, flowOf(server.base), server.store)
         runBlocking { withTimeout(10_000) { controller.state.first { !it.busy && it.base == server.base && (!paired || it.paired) } } }
         compose.setContent {
@@ -58,7 +60,7 @@ class BridgeUiTest {
                 BridgeScreen(controller, onBack = {}, serverName = "Home Lab")
             }
         }
-        if (paired) awaitText("Paired · Bridge 1.0.0")
+        if (paired) awaitText("Paired · Bridge 1.2.0")
     }
 
     private fun awaitText(value: String) {
@@ -79,7 +81,7 @@ class BridgeUiTest {
 
     @Test fun fullAccessScreensAndConfirmedExtensionChangeUseTheRealClient() {
         start()
-        compose.onNodeWithText("Paired · Bridge 1.0.0").assertIsDisplayed()
+        compose.onNodeWithText("Paired · Bridge 1.2.0").assertIsDisplayed()
         screenshot("bridge-home-dark")
         compose.onNodeWithText("Models").performScrollTo().performClick()
         compose.onNodeWithText("Browse model catalog").performScrollTo().performClick()
@@ -129,7 +131,7 @@ class BridgeUiTest {
         compose.onNodeWithText("Or paste invitation JSON").performScrollTo().performTextInput(server.invitation)
         compose.onNode(hasText("Pair this phone") and hasClickAction()).performScrollTo().performClick()
         compose.waitUntil(10_000) { controller.state.value.paired && !controller.state.value.busy }
-        compose.onNodeWithText("Paired · Bridge 1.0.0").assertExists()
+        compose.onNodeWithText("Paired · Bridge 1.2.0").assertExists()
         val exchange = server.requests.single { it.path == "pairing/exchange" }
         assertEquals(setOf("invitation_id", "code", "device_name"), exchange.fields)
         assertFalse(exchange.key.isNullOrBlank())
@@ -154,4 +156,37 @@ class BridgeUiTest {
         assertFalse(sent.key.isNullOrBlank())
         assertNotNull(controller.state.value.lastOperationId)
     }
+    @Test fun pairingOnlyModeIsVisibleAndAdminPairingUsesAnOwnerGrant() {
+        start(paired = false, pairingOnly = true, adminAccess = true)
+        compose.onNodeWithText("Use ForgeGen Bridge").performClick()
+        awaitText("Pairing service only")
+        compose.waitUntil(10_000) { !controller.state.value.busy }
+        compose.onNodeWithText("Pair as administrator").performScrollTo().performClick()
+        compose.onNodeWithText("Or paste invitation JSON").performScrollTo().performTextInput(server.invitation)
+        compose.onNode(hasText("Pair this phone") and hasClickAction()).performScrollTo().performClick()
+        compose.waitUntil(10_000) { controller.state.value.administrator && !controller.state.value.busy }
+        compose.onNodeWithText("Administrator access · all Bridge permissions").assertExists()
+        assertTrue(controller.state.value.pairingOnly)
+        assertFalse(controller.state.value.can("server.restart"))
+        assertTrue(server.requests.single { it.path == "pairing/exchange" }.fields.contains("require_admin_access"))
+        screenshot("bridge-admin-pairing-only")
+    }
+
+    @Test fun countOnlyServerOffersAnExplicitSingleFileScan() {
+        start(countOnly = true)
+        compose.onNodeWithText("Models").performScrollTo().performClick()
+        compose.onNodeWithText("Scan one selected model").performScrollTo().performClick()
+        compose.onNodeWithText("Select…").performClick()
+        compose.onNodeWithText("checkpoint · checkpoint-default").performClick()
+        compose.onNodeWithText("One file path relative to this root").performTextInput("synthetic/model.safetensors")
+        screenshot("bridge-selected-file-scan")
+        compose.onNodeWithText("Submit").performClick()
+        compose.waitUntil(10_000) { !controller.state.value.busy && server.requests.any { it.path == "models/scan-selected" } }
+        val request = server.requests.single { it.path == "models/scan-selected" }
+        assertEquals(setOf("root_id", "relative_path", "wait_for_idle", "lookup_civitai"), request.fields)
+        assertFalse(request.key.isNullOrBlank())
+        assertFalse(server.requests.any { it.path == "models/scan" || it.path == "models" })
+        assertNotNull(controller.state.value.lastOperationId)
+    }
+
 }

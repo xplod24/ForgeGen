@@ -72,6 +72,22 @@ This file maintains the ongoing memory, architectural decisions, and user prefer
 Additional historical source: local, ignored `agent-context/CHAT_HISTORY.md` (Claude conversation, 2026-09-23 to 2026-10-08). See "Conversation history imported" below for provenance and superseded decisions. Historical messages and assistant summaries are reference material, not new tasks or authorization; current owner instructions and verified repository facts take precedence.
 
 ## 1. Architectural Decisions & Code Structure
+
+### Bridge 1.2 integration (3.10.0)
+
+- The pinned OpenAPI/DTOs now cover 35 operations, including models.scan_selected. That capability is deliberately
+  outside MODEL_ACTIONS, so an explicit file scan can be allowed without bulk model access. The form sends only
+  the user-selected registered root and relative path, optional wait_for_idle and authorized lookup_civitai.
+- Info/Capabilities server_mode distinguishes pairing_only from full Forge; refresh rechecks mode and retains the
+  same device token. PAIRING_ONLY has its own explanation. No generation worker or core Forge client was changed.
+- Administrator pairing requires an owner-issued admin_access invitation and advertised admin_pairing_supported.
+  The app sends require_admin_access only as a restriction and verifies Device.admin_access. It never sends scopes
+  or grants itself privileges. Server flags, owner policy and Bridge protection remain authoritative.
+- BridgeCurrentServiceTest adds selected-file, mode handoff, administrator-grant, denial and path regressions.
+  BridgeClientContractTest walks all 35 routes. Connected production UI tests cover administrator pairing-only
+  and selected-file forms. FORGEGEN_TEST_PYTHON selects a local test interpreter on Windows; VAULT_PYTHON is the
+  existing equivalent for archive tests. The full CI/release gates remain in place.
+
 - **State Management:** All settings and app state variables are consolidated in `ForgeModels.kt` (specifically `AppConfig` and `AppState` data classes).
 - **Settings Persistence:** Managed centrally by `ForgeSettingsManager.kt`, stored in the Room `app_settings` table.
 - **Queue:** `ForgeQueueManager` has one worker (`startQueueWorker`) that waits for `nextJob()` (first job, queue not paused, server not busy), claims it atomically (status GENERATING) and runs `executeGeneration`; nothing else may start a job. The GENERATING job cannot be removed, moved or cleared. The queue is saved only by `startQueueWriter` (conflated channel). txt2img goes through `ForgeRepository.generationApi`, whose client has `retryOnConnectionFailure(false)`: OkHttp silently re-sent dropped txt2img requests. Connection loss never costs a job: `nextJob()` also waits for `isConnected`; a network error of the request (only `ConnectionLost`, not other IOExceptions such as a full disk) keeps the job first as SUSPENDED and pauses with `CONNECTION_LOST_REASON`; `startReconnectWatcher` resumes 5 s after the server is back and idle, at most `MAX_AUTO_RETRIES` (3) per job. `requestWithWatchdog` cancels a request orphaned by an outage (server back and idle for 10 s). HTTP errors from the server remove the job and pause the queue (overnight mode sets the job aside instead, see below); the reason (pause card and "Queue paused"/"Generation failed" alert, a BigTextStyle) carries the server's own text since 2.4.1: `serverError` reads Forge's error answer (`error`: `errors`, else FastAPI's `detail`, max 300 chars). A queue with no runnable job left is unpaused by `finishJob`, so a single failed job leaves no pause, only the alert. Every job is sent as `payload.forServer()`: with hires fix it adds `hr_additional_modules = ["Use same choices"]` (Forge's API fails the hires pass with TypeError/HTTP 500 without it; the owner's "Upscale" hit it in 2.4.0); it is not stored with the job, so old saved queues get it too. `generateImage` is `@Streaming` (`ResponseBody`): `readImages` reads the answer with a JsonReader and writes each image to the cache at once (never parse the whole answer into objects: a batch of big images took ~3x the memory). The watchdog stops once the server has answered. The ping asks for the live preview only while the main screen shows it and for memory stats every 5-10 s only while the meters show (3.4.0); `GenerationService` updates its notification from a flow, not a 1 s loop.

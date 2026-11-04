@@ -77,6 +77,13 @@
     "status": 202
   },
   {
+    "method": "POST",
+    "path": "/forgegen/v1/models/scan-selected",
+    "request": "SelectedScanRequest",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
     "method": "GET",
     "path": "/forgegen/v1/models/{model_id}",
     "request": "",

@@ -60,6 +60,18 @@ internal fun BridgeModelsView(
                 if (state.fullModels) "Names, metadata and file actions" else "Names and file actions are unavailable",
                 enabled = state.can("models.catalog"),
             ) { open("catalog") }
+            BridgeActionButton(state, "models.scan_selected", "Scan one selected model") {
+                form(BridgeForm(
+                    "Scan one selected model", "models.scan_selected", "POST", "models/scan-selected",
+                    fields = listOf(
+                        BridgeField("root_id", "Registered model root", choices = roots.map { it.id.orEmpty() to "${it.type} · ${it.id}" }),
+                        BridgeField("relative_path", "One file path relative to this root"),
+                    ),
+                    switches = if (state.can("civitai.search")) listOf("lookup_civitai" to "Identify this file on Civitai") else emptyList(),
+                    wait = true,
+                    explanation = "Reads only the file you explicitly select. No folder scan or catalog refresh is requested. The result appears in Operations.",
+                ))
+            }
             BridgeActionButton(state, "models.scan", "Scan and refresh models") {
                 form(BridgeForm("Scan models", "models.scan", "POST", "models/scan", wait = true))
             }

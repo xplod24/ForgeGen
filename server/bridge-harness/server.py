@@ -42,7 +42,7 @@ class State:
         self.drop_next = False
         self.delay = 0
         self.revoked = False
-        self.device = {"id": DID, "name": "Synthetic Android phone", "scopes": list(SCOPES), "created_at": now(), "revoked_at": None}
+        self.device = {"id": DID, "name": "Synthetic Android phone", "scopes": list(SCOPES), "created_at": now(), "revoked_at": None, "admin_access": scenario == "admin"}
         if scenario == "read-only": self.device["scopes"] = ["status.read", "models.read", "extensions.read"]
         self.extension = {"id": EID, "name": "Example Tools", "version": "1.0.0", "builtin": False, "protected": False,
                           "current_enabled": True, "next_enabled": True, "installed": True, "restart_required": False}
@@ -67,14 +67,20 @@ class State:
         elif self.scenario == "civitai-disabled":
             for key in ["civitai.search", "civitai.download"]:
                 caps["features"][key].update(enabled=False, reason_code="NOT_CONFIGURED")
+        caps['server_mode'] = 'pairing_only' if self.scenario == 'pairing-only' else 'forge'
+        if self.scenario == 'pairing-only':
+            for key, value in caps['features'].items():
+                if key not in {'devices.me', 'devices.list', 'devices.revoke'}:
+                    value.update(supported=False, enabled=False, reason_code='PAIRING_ONLY')
         return caps
 
     def info(self):
-        return {"bridge_id": "other" if self.scenario == "wrong-id" else "forgegen-bridge", "bridge_version": "1.0.0",
+        return {"bridge_id": "other" if self.scenario == "wrong-id" else "forgegen-bridge", "bridge_version": "1.2.0",
                 "api_version": {"major": 2 if self.scenario == "incompatible" else 1, "minor": 0},
                 "server_id": str(uuid.UUID(int=99)) if self.scenario == "server-changed" else SID,
                 "authentication": "bearer-device-token", "pairing": "administrator-issued-single-use-invitation",
-                "openapi_url": "/forgegen/v1/openapi.json"}
+                "openapi_url": "/forgegen/v1/openapi.json", "admin_pairing_supported": True,
+                "server_mode": "pairing_only" if self.scenario == "pairing-only" else "forge"}
 
     def save_credentials(self, base):
         invitation = {"format": "forgegen-pairing", "format_version": 1, "server_url": base, "server_id": SID,
@@ -179,6 +185,7 @@ def handler(state):
             elif short == "openapi.json": value = SPEC
             elif short == "pairing/exchange":
                 if body["invitation_id"] != state.invitation_id or body["code"] != state.code: return self.error(401, "PAIRING_INVALID")
+                if body.get('require_admin_access') and not state.device['admin_access']: return self.error(403, 'ADMIN_ACCESS_REQUIRED')
                 if state.exchange_key and state.exchange_key != key: return self.error(401, "PAIRING_INVALID")
                 state.exchange_key = key
                 state.device["name"] = body["device_name"]
@@ -212,7 +219,7 @@ def handler(state):
                 if value["status"] == "queued": state.operations[identifier].update(status="running", phase="working", progress=0.5)
                 elif value["status"] == "running": state.operations[identifier].update(status="completed", phase="finished", progress=1.0)
             else:
-                if short.startswith("models/"): capability = "models.scan" if short.endswith("scan") else "models.move" if short.endswith("move") else "models.delete"
+                if short.startswith("models/"): capability = "models.scan_selected" if short == "models/scan-selected" else "models.scan" if short.endswith("scan") else "models.move" if short.endswith("move") else "models.delete"
                 elif short == "downloads": capability = "downloads.create"
                 elif short == "civitai/downloads": capability = "civitai.download"
                 elif short.startswith("downloads/"): capability = "downloads.retry" if short.endswith("retry") else "downloads.cancel"
@@ -270,7 +277,7 @@ def handler(state):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--scenario", default="full", choices=["full", "read-only", "count-only", "missing-flag", "civitai-disabled", "revoked", "absent", "html", "timeout", "incompatible", "server-changed", "wrong-id"])
+    parser.add_argument("--scenario", default="full", choices=["full", "read-only", "count-only", "missing-flag", "civitai-disabled", "revoked", "absent", "html", "timeout", "incompatible", "server-changed", "wrong-id", "admin", "pairing-only"])
     parser.add_argument("--credential-file", type=Path, required=True)
     args = parser.parse_args()
     state = State(args.scenario, args.credential_file)

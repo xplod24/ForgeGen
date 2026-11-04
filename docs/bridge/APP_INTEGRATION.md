@@ -80,7 +80,7 @@ Each entry has independent booleans:
 For example, an extension mutation can be implemented and authorized but have
 `enabled: false` and `FLAG_REQUIRED`. Read-only devices retain listing while
 management has `authorized: false`. The local deployment reports
-`privacy_policy: "count_only"`; catalog, scan, move, delete and downloads are
+`privacy_policy: "count_only"`; catalog, bulk scan, move, delete and downloads are
 disabled with `PRIVACY_POLICY`. This is a real server-side denial, not a hidden
 button. Do not present the full synthetic harness capabilities as live support.
 
@@ -243,3 +243,51 @@ venv\Scripts\python.exe extensions\forgegen-bridge\tools\smoke_test.py --server-
 
 The smoke tool reads only discovery, OpenAPI and (if explicitly supplied a token)
 capabilities. It never reads prompts, models, images or runs administration.
+
+
+## Bridge 1.1 desktop / pairing-only additions
+
+The wire API version remains 1.0. Public info now includes `server_mode` with
+`forge` or `pairing_only`. The latter offers only discovery/OpenAPI, exchange,
+`devices/me`, capabilities and scoped device list/DELETE. Features outside that
+surface report unsupported/disabled with `PAIRING_ONLY`. The Android client must
+not mistake this for a generation-ready Forge server. Pairing uses the same
+server_id, private DB and token verifier as the normal Forge bridge. The launcher
+stops its listener before starting Forge on that port; reconnect and recheck mode.
+
+`POST /models/scan-selected` takes `root_id`, one `relative_path` and optional
+`wait_for_idle`. It requires `models.manage`, Idempotency-Key and the explicit
+selected-file policy grant. The accepted operation can be read/cancelled through
+`/operations/{id}` without full catalog access. Bulk privacy restrictions remain.
+Never invoke model operations as a discovery probe. The native UI is responsible
+for OS-owner password setup; no anonymous administrator setup endpoint exists.
+
+The exact subset schema is `pairing-openapi.json`. See `DESKTOP_AND_PAIRING.md`
+for lifetime, password recovery, native IPC, supported formats and testing limits.
+
+## Bridge 1.2 administrator pairing
+
+`GET /info` advertises `admin_pairing_supported: true`. The authenticated owner
+creates an invitation with **Administrator access (admin_access)** in WebUI or the
+native launcher. There is no HTTP endpoint that issues administrator invitations.
+The server stores the grant and all current scopes with the invitation. QR
+`admin_access` is only a display hint; modifying QR fields cannot change access.
+
+For administrator mode, `POST /pairing/exchange` may include the optional boolean
+`require_admin_access`. True requires an existing administrator grant; otherwise
+the response is HTTP 403 `ADMIN_ACCESS_REQUIRED` and the invitation is not consumed.
+The request cannot contain `scopes` or `admin_access`. Standard clients can omit
+the preference and remain compatible. Changing a preference under the same
+Idempotency-Key is an idempotency conflict, not a new grant.
+
+`Device.admin_access` is returned in pairing, `/devices/me` and device lists.
+It defaults to false for existing devices. Scopes remain server-assigned and must
+still be checked alongside capabilities. Administrator grants include all current
+scopes; they never bypass owner privacy policy, module configuration, required
+Forge flags, in-use checks or protected Bridge resources. The same grant survives
+the pairing-only/full Forge handoff and can be revoked using device DELETE.
+
+Selected-file scans additionally support `lookup_civitai: false` (default). True
+requires `civitai.search` and a configured optional provider; the client never
+handles the provider key. Always use the current generated SelectedScanRequest
+and Accepted schemas, including when bulk model access is prohibited.

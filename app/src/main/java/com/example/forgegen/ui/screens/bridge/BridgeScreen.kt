@@ -131,6 +131,12 @@ fun BridgeScreen(
                     )
                     SelectionContainer { BridgeNote(state.base.ifEmpty { "Configure a valid Forge server address first." }) }
                 }
+                if (state.pairingOnly) {
+                    BridgeCard {
+                        Text("Pairing service only", style = MaterialTheme.typography.titleMedium)
+                        BridgeNote("Pairing and device access are available. Start full Forge at this address, then tap Refresh for server tools.")
+                    }
+                }
                 state.message?.let { BridgeCard { Text(it) } }
                 if (state.pending != null && !state.busy) {
                     BridgeCard {
@@ -224,7 +230,7 @@ private fun BridgeConnectionCard(
     controller: BridgeController,
 ) {
     BridgeCard {
-        Text(bridgeConnectionLabel(state.connection), style = MaterialTheme.typography.titleLarge)
+        Text(bridgeConnectionLabel(state.connection, state.pairingOnly), style = MaterialTheme.typography.titleLarge)
         state.info?.let { BridgeNote("Bridge ${it.bridgeVersion}") }
         when (state.connection) {
             BridgeConnection.OFF -> BridgeNote("Enable this optional integration to discover Bridge on the selected server.")
@@ -252,6 +258,7 @@ private fun BridgePairingCard(
 ) {
     // Invitation secrets intentionally use remember, never rememberSaveable or persistent form storage.
     var invitation by remember(state.base) { mutableStateOf("") }
+    var requireAdmin by remember(state.base) { mutableStateOf(false) }
     var name by remember { mutableStateOf("${Build.MANUFACTURER} ${Build.MODEL}".take(100)) }
     val parsed = remember(invitation, state.base) { runCatching { BridgeProtocol.invitation(invitation, state.base) } }
     val scanner =
@@ -287,6 +294,14 @@ private fun BridgePairingCard(
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+        SwitchPreference(
+            "Pair as administrator",
+            "Requires an owner-issued admin_access invitation; the phone cannot grant itself permissions.",
+            requireAdmin,
+            onCheckedChange = { requireAdmin = it },
+            enabled = state.info?.adminPairingSupported == true && !state.busy,
+        )
+        if (state.info?.adminPairingSupported != true) BridgeNote("Administrator pairing requires Bridge 1.2.0 or newer.")
         parsed.getOrNull()?.let { invite ->
             BridgeNote("Server: ${invite.base}")
             BridgeNote("Identity: ${invite.serverId}")
@@ -294,7 +309,7 @@ private fun BridgePairingCard(
         }
         if (invitation.isNotBlank() && parsed.isFailure) BridgeNote(parsed.exceptionOrNull()?.message ?: "Invalid invitation.")
         Button(onClick = {
-            controller.pair(invitation, name)
+            controller.pair(invitation, name, requireAdmin)
         }, enabled = parsed.isSuccess && name.isNotBlank() && !state.busy) { Text("Pair this phone") }
     }
 }
@@ -309,13 +324,13 @@ private fun BridgeOverview(
         Text(serverName, style = MaterialTheme.typography.titleLarge)
         Text("Paired · Bridge ${state.info?.bridgeVersion}", color = MaterialTheme.colorScheme.primary)
         BridgeNote("This phone: ${state.device?.name ?: "Unknown device"}")
-        BridgeNote("Access is assigned by the server owner.")
+        BridgeNote(if (state.administrator) "Administrator access · all Bridge permissions" else "Access is assigned by the server owner.")
     }
     BridgeCard {
         TextPreference(
             "Models",
-            if (state.fullModels) "Catalog, counts and server files" else "Counts only · set by server owner",
-            enabled = state.can("models.count") || state.can("models.catalog"),
+            if (state.fullModels) "Catalog, counts and server files" else if (state.can("models.scan_selected")) "Counts and selected-file scans" else "Counts only · set by server owner",
+            enabled = state.can("models.count") || state.can("models.catalog") || state.can("models.scan_selected"),
         ) { open("models") }
         TextPreference("Downloads", "Server transfers and history", enabled = state.scoped("downloads.manage") && state.fullModels) {
             open("downloads")

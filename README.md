@@ -138,6 +138,13 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   A compact card below the main menu then opens its dedicated tools screen. All basic functions work without it.
 - Pair using an administrator-issued QR invitation or pasted JSON. The app verifies the server identity and
   keeps the device token encrypted outside backups and settings exports. The server owner assigns access.
+- Bridge 1.2.0 adds administrator pairing: enable **Administrator access (admin_access)** when the owner creates
+  an invitation in the server panel or Windows launcher, then select **Pair as administrator** on the phone.
+  All Bridge scopes are granted by the server; owner policies, required Forge flags and protected resources remain enforced.
+- Pairing-only mode is labelled separately and supports pairing while Forge is stopped. Start full Forge at the
+  same address and tap Refresh; the registered device token stays valid.
+- Scan one explicitly selected model by registered root and relative path. This works on counts-only servers
+  when `models.scan_selected` is enabled; optional Civitai identification additionally needs `civitai.search`.
 - Model counts/catalog/details, scan/move/delete, server downloads and operation history, permitted cancellation
   and explicit transfer retry. Counts-only servers keep names and file actions private.
 - Optional **Civitai search and server-side downloads**: choose the exact version, file and registered destination.

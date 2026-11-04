@@ -1,8 +1,8 @@
 # ForgeGen Bridge — endpointy, wymagania i body
 
-Wersja rozszerzenia: **1.0.0**. Wersja API: **1.0**.
+Wersja rozszerzenia: **1.1.0**. Wersja API: **1.0**.
 Dokument sprawdzony z lokalnym `openapi.json` i kodem routera 2026-11-04.
-Zawiera wszystkie **34 operacje: 18 GET, 10 POST, 5 DELETE i 1 PATCH**, oraz
+Zawiera wszystkie **35 operacji: 18 GET, 11 POST, 5 DELETE i 1 PATCH**, oraz
 obsługę `OPTIONS` dla znanych ścieżek. Poprawna nazwa metody to `OPTIONS`, nie `OPTION`.
 
 Ten dokument opisuje implementację. Nie potwierdza, że nowy pomost został już
@@ -54,10 +54,15 @@ endpoint pomostu nie omija dodatkowego logowania narzuconego przez hosta.
 
 Polityka właściciela to **`count_only`**. Pozwala udostępnić skonfigurowane
 identyfikatory katalogów i bezpośrednie liczniki modeli. Katalog modeli z nazwami,
-szczegóły, skanowanie/odświeżanie, przenoszenie, usuwanie i pobieranie są
+szczegóły, skanowanie całych katalogów/odświeżanie, przenoszenie, usuwanie i pobieranie są
 zablokowane z `403 PRIVACY_POLICY`. Mają implementację i testy na sztucznych
 zasobach, lecz dokumentacja nie stanowi zgody na użycie ich na istniejących modelach.
 Panel i API nie mogą zmienić tej polityki.
+
+Dodatkowe uprawnienie właściciela `selected_model_scan: true` pozwala na jawny
+skan jednego wskazanego pliku przez nowy endpoint opisany poniżej. Nie uruchamia
+przeglądania katalogów, odświeżania list Forge ani odczytu promptów/obrazów.
+Agent nie wykonywał tej funkcji na rzeczywistych modelach.
 
 Pobieranie i zarządzanie istniejącymi modelami oznaczono poniżej jako **P**.
 Warunki konfiguracyjne:
@@ -491,3 +496,79 @@ podstawowego klienta Forge ani istniejącej integracji Infinite Image Browsing.
 Dokument przygotowano wyłącznie na podstawie kodu i kontraktu. Nie wykonano
 opisanych operacji na działającym Forge, nie użyto computer-use i nie odczytano
 promptów, modeli ani wygenerowanych obrazów.
+
+
+## Nowe w 1.1: API parowania bez Forge
+
+W `.exe` wybierz **ForgeGen Bridge > Pair devices**. Tryb parowania używa tej samej
+prywatnej bazy i tokenów, bez uruchamiania Forge. `/info` zwraca dodatkowe pole
+`server_mode`: `forge` albo `pairing_only`.
+
+W trybie `pairing_only` dostępne są jedynie GET `/info`, `/openapi.json`,
+`/devices/me`, `/capabilities`, `/devices`, POST `/pairing/exchange`, DELETE
+`/devices/{device_id}` i OPTIONS znanych zasobów. Wymagania scope, tokenu,
+Idempotency-Key i body pozostają takie jak w powyższych tabelach. Pozostałe
+funkcje mają `supported: false`, `enabled: false`, `reason_code: PAIRING_ONLY`;
+ich tras nie ma w częściowym API. Jego rzeczywisty schemat to
+[pairing-openapi.json](pairing-openapi.json). Launcher zwalnia zajęty przez siebie
+port przed uruchomieniem Forge; urządzenia pozostają sparowane.
+
+Hasło ustawisz bez skryptu w **Password and access** w `.exe`. WebUI ma kartę
+**Password**, obsługującą aktualne hasło lub jednorazowy kod ustawienia hasła
+utworzony w launcherze. Nie istnieje anonimowy endpoint wydający administratora.
+
+## POST /forgegen/v1/models/scan-selected
+
+Wymagania: `models.manage`, token urządzenia, `Idempotency-Key`, włączony pomost
+oraz moduł modeli i uprawnienie polityki `selected_model_scan`. Nie wymaga flagi
+zarządzania rozszerzeniami. Po trwałym zapisaniu zadania zwraca **202 Accepted**.
+
+| Pole body | Typ | Wymagane | Znaczenie |
+| --- | --- | --- | --- |
+| `root_id` | String, 1–100 znaków | Tak | ID z `/models/roots` |
+| `relative_path` | String, 1–2048 znaków | Tak | Jeden plik względem skonfigurowanego katalogu; bez absolutnej ścieżki, traversal, output* i dowiązań |
+| `wait_for_idle` | Boolean | Nie | Domyślnie false; bez zgody na czekanie zajęty Forge daje 409 |
+| `lookup_civitai` | Boolean | Nie | Domyślnie false; true wymaga również `civitai.search`, włączonego Civitai i klucza po stronie serwera |
+
+```json
+{
+  "root_id": "checkpoint-default",
+  "relative_path": "fictional-selected.safetensors",
+  "wait_for_idle": true
+}
+```
+
+Wynik: SHA-256 całego wskazanego pliku, rozmiar i stabilny identyfikator, a dla
+safetensors/SFT także bezpieczne informacje o nagłówku, liczbie tensorów,
+parametrach i dtype. Formatów pickle nie deserializuje się — mają skan hash/size.
+Lista sąsiednich plików nie jest odczytywana. Skrypt nie odświeża katalogów Forge
+ani nie pobiera danych z Civitai przy domyślnym lokalnym skanie. Opcja
+`lookup_civitai: true` wysyła wyłącznie SHA-256 tego pliku i dołącza zweryfikowane
+ID źródła oraz licencję; błąd dostawcy nie unieważnia ukończonego lokalnego skanu. Szczegóły ograniczeń są w
+[DESKTOP_AND_PAIRING.md](DESKTOP_AND_PAIRING.md).
+
+Odczyt postępu: `GET /operations/{operation_id}`. Anulowanie: `DELETE
+/operations/{operation_id}`, bez body, ze scope `models.manage` i nowym
+Idempotency-Key. Dla `models.scan_selected` odczyt/anulowanie jest dozwolone mimo
+bazowej polityki count_only, gdy dodatkowe uprawnienie skanu jest aktywne.
+
+## Parowanie administratora — Bridge 1.2.0
+
+`GET /forgegen/v1/info` zawiera `admin_pairing_supported: true`.
+Administrator tworzący zaproszenie w panelu WebUI lub launcherze może zaznaczyć
+`Administrator access (admin_access)`. Serwer zapisuje zgodę wraz ze wszystkimi
+bieżącymi zakresami uprawnień mostu. Nie istnieje publiczny endpoint tworzący
+zaproszenie administratora.
+
+`POST /forgegen/v1/pairing/exchange` przyjmuje dodatkowe, opcjonalne pole body
+`require_admin_access` (boolean, domyślnie false). Wartość true jedynie wymaga
+istniejącej zgody administratora: zwykłe zaproszenie zwraca HTTP 403 z kodem
+`ADMIN_ACCESS_REQUIRED`, bez zużycia zaproszenia. Pola `scopes` i `admin_access`
+w body wymiany są zabronione. Nadal obowiązuje `Idempotency-Key`.
+
+Odpowiedź parowania, `GET /devices/me` i lista urządzeń zawierają
+`Device.admin_access`. Istniejące urządzenia zachowują tokeny i zakresy; nowa flaga
+domyślnie wynosi false. Grant działa także po przejściu z `pairing_only` do Forge.
+Jego odwołanie: `DELETE /devices/{device_id}`, bez body, `devices.manage` oraz
+`Idempotency-Key`. Pełne zakresy nie uchylają polityki prywatności, flag Forge,
+wyłączonych modułów, blokad zajętych zasobów i ochrony samego mostu.

@@ -3,7 +3,7 @@
   "info": {
     "title": "ForgeGen Bridge API",
     "description": "Optional Forge API. Device bearer authorization is separate from existing Forge and proxy authentication. Mutations require Idempotency-Key. Capability flags distinguish backend support, server policy, and device scopes.",
-    "version": "1.0.0"
+    "version": "1.2.0"
   },
   "paths": {
     "/forgegen/v1/info": {
@@ -1871,6 +1871,201 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/WaitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Content Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Upgrade Required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not Implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Bad Gateway",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Insufficient Storage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ForgeGenDeviceToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/forgegen/v1/models/scan-selected": {
+      "post": {
+        "summary": "Scan Selected",
+        "operationId": "scanSelectedModel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectedScanRequest"
               }
             }
           },
@@ -6610,6 +6805,15 @@
               "full"
             ],
             "title": "Privacy Policy"
+          },
+          "server_mode": {
+            "type": "string",
+            "enum": [
+              "forge",
+              "pairing_only"
+            ],
+            "title": "Server Mode",
+            "default": "forge"
           }
         },
         "additionalProperties": false,
@@ -6883,6 +7087,11 @@
               }
             ],
             "title": "Revoked At"
+          },
+          "admin_access": {
+            "type": "boolean",
+            "title": "Admin Access",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -7081,6 +7290,20 @@
             "type": "string",
             "title": "Openapi Url",
             "default": "/forgegen/v1/openapi.json"
+          },
+          "server_mode": {
+            "type": "string",
+            "enum": [
+              "forge",
+              "pairing_only"
+            ],
+            "title": "Server Mode",
+            "default": "forge"
+          },
+          "admin_pairing_supported": {
+            "type": "boolean",
+            "title": "Admin Pairing Supported",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -7659,6 +7882,11 @@
             "maxLength": 100,
             "minLength": 1,
             "title": "Device Name"
+          },
+          "require_admin_access": {
+            "type": "boolean",
+            "title": "Require Admin Access",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -7712,6 +7940,39 @@
           "type"
         ],
         "title": "RootInfo"
+      },
+      "SelectedScanRequest": {
+        "properties": {
+          "root_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Root Id"
+          },
+          "relative_path": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Relative Path"
+          },
+          "wait_for_idle": {
+            "type": "boolean",
+            "title": "Wait For Idle",
+            "default": false
+          },
+          "lookup_civitai": {
+            "type": "boolean",
+            "title": "Lookup Civitai",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "root_id",
+          "relative_path"
+        ],
+        "title": "SelectedScanRequest"
       },
       "ServerStatus": {
         "properties": {

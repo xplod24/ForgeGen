@@ -14,7 +14,7 @@ import java.util.UUID
 class BridgeClientContractTest {
     private fun objectBody(vararg pairs: Pair<String, String>) = JsonObject().apply { pairs.forEach { (k, v) -> addProperty(k, v) } }
 
-    @Test fun all34OpenApiOperationsUseTheDocumentedMethodBodyAndAuthorization() =
+    @Test fun all35OpenApiOperationsUseTheDocumentedMethodBodyAndAuthorization() =
         runBlocking {
             BridgeHarness().use { h ->
                 val initial =
@@ -32,7 +32,7 @@ class BridgeClientContractTest {
                         .asJsonArray
                         .map { it.asJsonObject }
                         .sortedBy { if (it.text("method") == "DELETE" && it.text("path").contains("devices/")) 1 else 0 }
-                assertEquals(34, routes.size)
+                assertEquals(35, routes.size)
                 for (route in routes) {
                     val method = route.text("method")
                     var path = route.text("path").removePrefix("/forgegen/v1/")
@@ -54,6 +54,7 @@ class BridgeClientContractTest {
                                     "device_name" to "Contract test phone",
                                 )
                             "WaitRequest" -> JsonObject()
+                            "SelectedScanRequest" -> objectBody("root_id" to "checkpoint-default", "relative_path" to "synthetic.safetensors")
                             "MoveRequest" -> objectBody("root_id" to "checkpoint-default", "name" to "Example XL.safetensors")
                             "DownloadRequest" ->
                                 objectBody(

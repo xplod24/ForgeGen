@@ -20,6 +20,7 @@ object BridgeProtocol {
             "models.count",
             "models.catalog",
             "models.scan",
+            "models.scan_selected",
             "models.move",
             "models.delete",
             "downloads.create",
@@ -166,6 +167,13 @@ object BridgeProtocol {
                 "Use positive Civitai version and file IDs."
             }
         }
+        if (path == "models/scan-selected") {
+            val relative = body.text("relative_path").replace('\\', '/')
+            require(relative.length in 1..2048 && relative.none { it == ':' || it == '\u0000' } &&
+                relative.split('/').none { it.isEmpty() || it == "." || it == ".." }) {
+                "Use one relative file path inside the registered root, without traversal or drive prefixes."
+            }
+        }
         if (path == "downloads") {
             val url = runCatching { body.text("url").toHttpUrl() }.getOrElse { throw IllegalArgumentException("Invalid source URL.") }
             require(
@@ -211,7 +219,10 @@ object BridgeProtocol {
         when (code) {
             "FLAG_REQUIRED" -> "The server needs --enable-insecure-extension-access for extension changes."
             "SCOPE_REQUIRED" -> "This phone has not been granted this permission by the server owner."
-            "PRIVACY_POLICY" -> "The server owner limits model access to counts."
+            "PRIVACY_POLICY" -> "The owner restricts bulk model access. Only explicitly allowed file operations are available."
+            "PAIRING_ONLY" -> "Only the pairing service is running. Start full Forge at this address, then refresh."
+            "ADMIN_ACCESS_REQUIRED" -> "This invitation does not grant administrator access. Ask the owner for an administrator invitation."
+            "ADMIN_PAIRING_UNSUPPORTED" -> "Administrator pairing requires ForgeGen Bridge 1.2.0 or newer."
             "NOT_CONFIGURED" -> "Configure this integration in the Bridge panel on your server."
             "MODULE_DISABLED", "BRIDGE_DISABLED" -> "This feature is switched off on the server."
             "FORGE_RESTRICTED" -> "Forge restricts this operation on the server."

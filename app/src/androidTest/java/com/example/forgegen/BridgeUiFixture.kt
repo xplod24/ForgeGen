@@ -16,6 +16,8 @@ import kotlin.concurrent.thread
 /** Fictional loopback backend, shared by instrumentation and the local native-graphics rendering rig. */
 internal class BridgeUiFixture(
     private val countOnly: Boolean = false,
+    private val pairingOnly: Boolean = false,
+    private val adminAccess: Boolean = false,
 ) : Closeable {
     private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
     val base = "http://127.0.0.1:${socket.localPort}/"
@@ -58,7 +60,7 @@ internal class BridgeUiFixture(
             "server.manage",
             "devices.manage",
         )
-    val device = BridgeDevice(deviceId, "Synthetic Android phone", scopes, "2026-11-04T12:00:00Z", null)
+    val device = BridgeDevice(deviceId, "Synthetic Android phone", scopes, "2026-11-04T12:00:00Z", null, adminAccess = adminAccess)
     val store =
         object : BridgeStore {
             private var local = BridgeSession()
@@ -125,6 +127,7 @@ internal class BridgeUiFixture(
                 "models.count",
                 "models.catalog",
                 "models.scan",
+                "models.scan_selected",
                 "models.move",
                 "models.delete",
                 "downloads.create",
@@ -146,14 +149,15 @@ internal class BridgeUiFixture(
                 "operations.cancel",
             )
         names.forEach { key ->
-            val restricted = countOnly && key in BridgeState.MODEL_ACTIONS + "downloads.cancel"
+            val pairingRestricted = pairingOnly && key !in setOf("devices.me", "devices.list", "devices.revoke")
+            val restricted = pairingRestricted || (countOnly && key in BridgeState.MODEL_ACTIONS + "downloads.cancel")
             caps.add(
                 key,
                 JsonObject().apply {
-                    addProperty("supported", true)
+                    addProperty("supported", !pairingRestricted)
                     addProperty("enabled", !restricted)
                     addProperty("authorized", true)
-                    add("reason_code", if (restricted) com.google.gson.JsonPrimitive("PRIVACY_POLICY") else JsonNull.INSTANCE)
+                    add("reason_code", if (restricted) com.google.gson.JsonPrimitive(if (pairingRestricted) "PAIRING_ONLY" else "PRIVACY_POLICY") else JsonNull.INSTANCE)
                 },
             )
         }
@@ -165,6 +169,7 @@ internal class BridgeUiFixture(
                 json("""{"enable_insecure_extension_access":true,"extension_access_allowed":true,"extensions_globally_allowed":true}"""),
             )
             addProperty("privacy_policy", if (countOnly) "count_only" else "full")
+            addProperty("server_mode", if (pairingOnly) "pairing_only" else "forge")
         }
     }
 
@@ -207,10 +212,11 @@ internal class BridgeUiFixture(
             when {
                 path == "info" ->
                     json(
-                        """{"bridge_id":"forgegen-bridge","bridge_version":"1.0.0","api_version":{"major":1,"minor":0},"server_id":"$serverId","authentication":"bearer-device-token","pairing":"administrator-issued-single-use-invitation","openapi_url":"/forgegen/v1/openapi.json"}""",
+                        """{"bridge_id":"forgegen-bridge","bridge_version":"1.2.0","api_version":{"major":1,"minor":0},"server_id":"$serverId","authentication":"bearer-device-token","pairing":"administrator-issued-single-use-invitation","openapi_url":"/forgegen/v1/openapi.json","admin_pairing_supported":true,"server_mode":"${if (pairingOnly) "pairing_only" else "forge"}"}""",
                     )
                 path == "pairing/exchange" -> {
                     check(body.text("code") == code && body.text("invitation_id") == invitationId)
+                    check(!body.flag("require_admin_access") || adminAccess)
                     JsonObject().apply {
                         add("device", fixtureGson.toJsonTree(device))
                         addProperty("token_type", "Bearer")
@@ -256,7 +262,7 @@ internal class BridgeUiFixture(
                     if (method == "PATCH") nextEnabled = body.flag("enabled")
                     status = 202
                     val id = UUID.randomUUID().toString()
-                    val kind = if (path == "civitai/downloads") "download.create" else "extensions.toggle"
+                    val kind = if (path == "models/scan-selected") "models.scan_selected" else if (path == "civitai/downloads") "download.create" else "extensions.toggle"
                     operations +=
                         json(
                             """{"id":"$id","kind":"$kind","status":"completed","phase":"finished","progress":null,"bytes_done":null,"bytes_total":null,"created_at":"2026-11-04T12:00:00Z","updated_at":"2026-11-04T12:00:01Z","result":{},"error":null,"restart_required":true}""",

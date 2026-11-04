@@ -48,6 +48,8 @@ data class BridgeState(
 ) {
     val paired get() = connection == BridgeConnection.CONNECTED && device != null
     val fullModels get() = capabilities?.privacyPolicy == "full"
+    val pairingOnly get() = (info?.serverMode ?: capabilities?.serverMode) == "pairing_only"
+    val administrator get() = paired && device?.adminAccess == true
 
     fun scoped(scope: String) = paired && scope in device?.scopes.orEmpty()
 
@@ -64,6 +66,7 @@ data class BridgeState(
         val flags = capabilities?.requiredFlags.orEmpty()
         return BridgeProtocol.explanation(
             when {
+                pairingOnly -> "PAIRING_ONLY"
                 !fullModels && feature in MODEL_ACTIONS -> "PRIVACY_POLICY"
                 extension && flags["enable_insecure_extension_access"] != true -> "FLAG_REQUIRED"
                 extension && extensionFlags.any { flags[it] != true } -> "FORGE_RESTRICTED"
@@ -104,6 +107,7 @@ class BridgeController(
     @Volatile private var work: Job? = null
     private var pairing: Pair<BridgeInvitation, String>? = null
     private var pairingName = ""
+    private var pairingRequiresAdmin = false
 
     init {
         scope.launch {
@@ -277,6 +281,7 @@ class BridgeController(
     fun pair(
         rawInvitation: String,
         deviceName: String,
+        requireAdminAccess: Boolean = false,
     ) {
         val snapshot = state.value
         if (!snapshot.enabled || snapshot.busy) return
@@ -292,9 +297,9 @@ class BridgeController(
                         require(
                             old?.first?.invitationId != invite.invitationId ||
                                 old.first.code != invite.code ||
-                                pairingName == deviceName.trim(),
+                                (pairingName == deviceName.trim() && pairingRequiresAdmin == requireAdminAccess),
                         ) {
-                            "Use the same device name when retrying this invitation, or create a new invitation."
+                            "Use the same device name and access mode when retrying this invitation, or create a new invitation."
                         }
                         val key =
                             if (old?.first?.invitationId == invite.invitationId && old.first.code == invite.code) {
@@ -304,8 +309,10 @@ class BridgeController(
                             }
                         pairing = invite to key
                         pairingName = deviceName.trim()
+                        pairingRequiresAdmin = requireAdminAccess
                         val api = apiFactory(snapshot.base)
                         val info = api.info()
+                        if (requireAdminAccess && info.adminPairingSupported != true) throw BridgeFailure(0, "ADMIN_PAIRING_UNSUPPORTED")
                         require(info.serverId == invite.serverId) { "The invitation does not match this server identity." }
                         val local = store.read(snapshot.base)
                         require(
@@ -316,6 +323,7 @@ class BridgeController(
                                 addProperty("invitation_id", invite.invitationId)
                                 addProperty("code", invite.code)
                                 addProperty("device_name", deviceName.trim())
+                                if (requireAdminAccess) addProperty("require_admin_access", true)
                             }
                         val pair = BridgeApi.decode<BridgePairResponse>(api.request("POST", "pairing/exchange", body = body, key = key))
                         require(pair.tokenType == "Bearer" && !pair.accessToken.isNullOrBlank() && BridgeProtocol.uuid(pair.device?.id)) {
@@ -323,6 +331,7 @@ class BridgeController(
                         }
                         val me = BridgeApi.decode<BridgeDevice>(api.request("GET", "devices/me", pair.accessToken!!))
                         require(me.id == pair.device?.id && me.revokedAt == null) { "The device could not be verified." }
+                        if (requireAdminAccess && me.adminAccess != true) throw BridgeFailure(403, "ADMIN_ACCESS_REQUIRED")
                         updateLocal(snapshot.base) { it.copy(serverId = invite.serverId, token = pair.accessToken, device = me) }
                         pairing = null
                         discover(run, snapshot.base)

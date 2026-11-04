@@ -1,3 +1,14 @@
+## 3.10.0
+**Feature** · selected-file scans and administrator pairing for ForgeGen Bridge
+
+### New
+- Scan one explicitly selected server model by registered root and relative path, including on counts-only servers that allow this operation. Optional Civitai identification uses only that file and requires server authorization.
+- Pair in administrator mode with an owner-issued admin_access invitation. The server grants all Bridge scopes; the phone cannot promote an ordinary invitation. Owner policies, Forge flags and protected resources still apply.
+
+### Changed
+- Show the pairing-only service separately from full Forge, with a clear explanation of unavailable server tools and the Refresh action after starting Forge.
+- Update the pinned contract, generated DTOs, request validation and test fixtures to Bridge 1.2.0 / API 1.0, covering all 35 operations.
+
 ## 3.9.0
 **Feature** · optional ForgeGen Bridge for paired server management
 

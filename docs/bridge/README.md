@@ -1,6 +1,6 @@
 # Optional ForgeGen Bridge integration
 
-ForgeGen 3.9.0 implements the supplied Bridge API 1.0 contract. The extension is optional and disabled by default
+ForgeGen 3.10.0 implements the supplied Bridge API 1.0 contract. The extension is optional and disabled by default
 for each Forge server address. Generation, the phone's queue and the IIB gallery continue to use their existing
 APIs. Enabling Bridge never replaces those clients or routes generation through the extension.
 
@@ -69,7 +69,7 @@ bash gradlew connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksI
 bash gradlew assembleDebug -Pforgegen.publish
 ```
 
-`BridgeClientContractTest` walks all 34 supplied OpenAPI operations and OPTIONS, validates request/response schemas,
+`BridgeClientContractTest` walks all 35 supplied OpenAPI operations and OPTIONS, validates request/response schemas,
 decodes every generated DTO and checks authorization, empty DELETE/retry bodies and idempotency.
 `BridgeControllerTest` exercises disabled isolation, pairing, identity changes, capabilities/privacy restrictions,
 lost acknowledgments, controller recreation, revocation and profile switching. `BridgeProtocolTest` checks
@@ -101,3 +101,17 @@ an unknown capability never unlocks a mutation.
 
 The offline scanner uses [ZXing Android Embedded 4.3.0](https://github.com/journeyapps/zxing-android-embedded)
 and ZXing core under Apache License 2.0; see [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## Bridge 1.2 additions
+
+The pinned contract includes selected-file scans, pairing-only mode and owner-granted administrator access.
+Administrator invitations are created in the server panel or native Windows launcher. Select Pair as administrator
+on the phone; require_admin_access is a requirement, never a client-issued grant. Device.admin_access reports the
+server decision. Existing paired devices are not promoted: revoke/forget and pair with a new owner-issued
+administrator invitation when changing access. Owner privacy, launch flags and protected resources still apply.
+
+Selected-file scans use POST /models/scan-selected and only the explicit root/path entered by the user. The
+capability is independent of bulk model access. Optional lookup_civitai requires server configuration and scope.
+
+For local Windows unit tests, set FORGEGEN_TEST_PYTHON and VAULT_PYTHON to an installed Python executable before
+running gradlew.bat testDebugUnitTest. CI uses python3. All fixtures are loopback-only and contain fictional data.

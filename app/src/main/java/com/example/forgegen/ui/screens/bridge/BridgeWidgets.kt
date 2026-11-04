@@ -90,7 +90,7 @@ fun BridgeHomeEntry(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(5.dp).clip(CircleShape).background(if (state.paired) Color(0xFF66BB6A) else Color(0xFFFFA726)))
                     Spacer(Modifier.width(5.dp))
-                    Text(bridgeConnectionLabel(state.connection), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(bridgeConnectionLabel(state.connection, state.pairingOnly), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Spacer(Modifier.width(8.dp))
@@ -99,13 +99,13 @@ fun BridgeHomeEntry(
     }
 }
 
-internal fun bridgeConnectionLabel(value: BridgeConnection): String =
+internal fun bridgeConnectionLabel(value: BridgeConnection, pairingOnly: Boolean = false): String =
     when (value) {
         BridgeConnection.OFF -> "Not enabled"
         BridgeConnection.CHECKING -> "Checking Bridge…"
         BridgeConnection.ABSENT -> "Bridge not found"
         BridgeConnection.PAIRING_REQUIRED -> "Pair this phone"
-        BridgeConnection.CONNECTED -> "Connected · server tools"
+        BridgeConnection.CONNECTED -> if (pairingOnly) "Connected · pairing only" else "Connected · server tools"
         BridgeConnection.AUTH_REQUIRED -> "Authentication required"
         BridgeConnection.REVOKED -> "Device access revoked"
         BridgeConnection.INCOMPATIBLE -> "Unsupported Bridge version"
@@ -142,6 +142,7 @@ internal data class BridgeForm(
     val fields: List<BridgeField> = emptyList(),
     val fixed: JsonObject = JsonObject(),
     val wait: Boolean = false,
+    val switches: List<Pair<String, String>> = emptyList(),
     val waitInQuery: Boolean = false,
     val noBody: Boolean = false,
     val destructive: Boolean = false,
@@ -157,6 +158,7 @@ internal fun BridgeActionDialog(
 ) {
     val values = remember(form) { mutableStateMapOf<String, String>().apply { form.fields.forEach { put(it.key, it.initial) } } }
     var wait by remember(form) { mutableStateOf(true) }
+    val switches = remember(form) { mutableStateMapOf<String, Boolean>() }
     var error by remember(form) { mutableStateOf<String?>(null) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(form.title) }, text = {
         Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -203,6 +205,12 @@ internal fun BridgeActionDialog(
                     )
                 }
             }
+            form.switches.forEach { (key, label) ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = switches[key] == true, onCheckedChange = { switches[key] = it })
+                    Text(label, modifier = Modifier.weight(1f))
+                }
+            }
             if (form.wait) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = wait, onCheckedChange = { wait = it })
@@ -230,6 +238,7 @@ internal fun BridgeActionDialog(
                         value.isNotEmpty() -> body.addProperty(field.key, value)
                     }
                 }
+                form.switches.forEach { (key, _) -> body.addProperty(key, switches[key] == true) }
                 if (form.wait && !form.waitInQuery) body.addProperty("wait_for_idle", wait)
                 val payload = if (form.noBody) null else body
                 BridgeProtocol.validateMutation(form.method, form.path, payload)

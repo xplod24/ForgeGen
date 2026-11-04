@@ -28,6 +28,12 @@
       "authorized": true,
       "reason_code": null
     },
+    "models.scan_selected": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
     "models.move": {
       "supported": true,
       "enabled": true,
@@ -148,5 +154,6 @@
     "extension_access_allowed": true,
     "extensions_globally_allowed": true
   },
-  "privacy_policy": "full"
+  "privacy_policy": "full",
+  "server_mode": "forge"
 }
