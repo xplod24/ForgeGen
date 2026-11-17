@@ -2,8 +2,8 @@
 <network-security-config>
     <base-config cleartextTrafficPermitted="true" />
     <domain-config>
-        <domain>diffusion.local</domain>
-        <domain>diffusion.home.arpa</domain>
+        <domain includeSubdomains="false">diffusion.local</domain>
+        <domain includeSubdomains="false">diffusion.home.arpa</domain>
         <trust-anchors>
             <certificates src="system" />
             <certificates src="user" />
