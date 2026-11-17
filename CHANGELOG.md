@@ -1,3 +1,15 @@
+## 3.11.0
+**Feature** · guided homelab HTTPS setup and expanded Bridge model tools
+
+### New
+- **Install Homelab CA** is available in the connection and server address dialogs. ForgeGen verifies the certificate's SHA-256 fingerprint, saves the file in Downloads and opens Android's security settings for installation.
+- Bridge administrators can create LoRA folders and edit a LoRA's Civitai Helper metadata.
+- Queue a download using an exact Civitai or public Hugging Face file link and choose a destination subfolder when the server supports it. Select `civitai.red` or `civitai.com` for downloads by Civitai version and file.
+
+### Changed
+- ForgeGen accepts user-installed CAs for `diffusion.local` and `diffusion.home.arpa`.
+- Update the integration contract to ForgeGen Bridge 1.4.0 / API 1.0. Model details show the path relative to the model root. The delete confirmation includes the model's Civitai Helper metadata.
+
 ## 3.10.0
 **Feature** · selected-file scans and administrator pairing for ForgeGen Bridge
 

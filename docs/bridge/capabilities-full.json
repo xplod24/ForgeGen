@@ -147,6 +147,30 @@
       "enabled": true,
       "authorized": true,
       "reason_code": null
+    },
+    "models.folders.read": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.folders.create": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.metadata.read": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
+    },
+    "models.metadata.edit": {
+      "supported": true,
+      "enabled": true,
+      "authorized": true,
+      "reason_code": null
     }
   },
   "required_flags": {

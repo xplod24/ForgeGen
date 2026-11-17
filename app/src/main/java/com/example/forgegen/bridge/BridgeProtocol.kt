@@ -23,6 +23,10 @@ object BridgeProtocol {
             "models.scan_selected",
             "models.move",
             "models.delete",
+            "models.folders.read",
+            "models.folders.create",
+            "models.metadata.read",
+            "models.metadata.edit",
             "downloads.create",
             "downloads.cancel",
             "downloads.retry",
@@ -128,7 +132,7 @@ object BridgeProtocol {
     fun scopeFor(feature: String): String? =
         when {
             feature == "status" -> "status.read"
-            feature in setOf("models.count", "models.catalog") -> "models.read"
+            feature in setOf("models.count", "models.catalog", "models.folders.read", "models.metadata.read") -> "models.read"
             feature.startsWith("models.") -> "models.manage"
             feature.startsWith("downloads.") || feature == "civitai.download" -> "downloads.manage"
             feature == "civitai.search" -> "civitai.search"
@@ -179,14 +183,17 @@ object BridgeProtocol {
             require(
                 url.scheme == "https" &&
                     url.port == 443 &&
-                    url.host in setOf("civitai.com", "civitai.red") &&
+                    url.host in setOf("civitai.com", "civitai.red", "huggingface.co") &&
                     url.username.isEmpty() &&
                     url.password.isEmpty() &&
                     url.fragment == null &&
                     url.queryParameterNames.none { it.lowercase() in setOf("token", "key", "api_key", "apikey", "authorization") },
             ) {
-                "Use a Civitai HTTPS URL without embedded credentials or API keys."
+                "Use a Civitai or Hugging Face HTTPS model URL without embedded credentials."
             }
+        }
+        if (path.endsWith("/metadata")) {
+            require(body.keySet().any { it != "wait_for_idle" }) { "Change at least one field." }
         }
         if (path == "extensions") {
             val url =

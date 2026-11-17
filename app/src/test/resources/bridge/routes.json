@@ -70,6 +70,20 @@
     "status": 200
   },
   {
+    "method": "GET",
+    "path": "/forgegen/v1/models/folders",
+    "request": "",
+    "response": "Page_ModelFolder_",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/forgegen/v1/models/folders",
+    "request": "CreateModelFolder",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
     "method": "POST",
     "path": "/forgegen/v1/models/scan",
     "request": "WaitRequest",
@@ -94,6 +108,20 @@
     "method": "DELETE",
     "path": "/forgegen/v1/models/{model_id}",
     "request": "",
+    "response": "Accepted",
+    "status": 202
+  },
+  {
+    "method": "GET",
+    "path": "/forgegen/v1/models/{model_id}/metadata",
+    "request": "",
+    "response": "LoraMetadataResponse",
+    "status": 200
+  },
+  {
+    "method": "PATCH",
+    "path": "/forgegen/v1/models/{model_id}/metadata",
+    "request": "LoraMetadataPatch",
     "response": "Accepted",
     "status": 202
   },

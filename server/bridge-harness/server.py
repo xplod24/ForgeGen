@@ -21,8 +21,8 @@ SPEC = json.loads((ROOT / "docs/bridge/openapi.json").read_text())
 FULL = json.loads((ROOT / "docs/bridge/capabilities-full.json").read_text())
 SID, DID, MID, EID, BID = [f"00000000-0000-4000-8000-{i:012d}" for i in range(1, 6)]
 SCOPES = ["status.read", "models.read", "models.manage", "downloads.manage", "civitai.search", "extensions.read", "extensions.manage", "server.manage", "devices.manage"]
-READ = {"status", "models.count", "models.catalog", "extensions.list", "devices.me", "operations.read"}
-PRIVATE = {"models.catalog", "models.scan", "models.move", "models.delete", "downloads.create", "downloads.cancel", "downloads.retry", "civitai.download"}
+READ = {"status", "models.count", "models.catalog", "models.folders.read", "models.metadata.read", "extensions.list", "devices.me", "operations.read"}
+PRIVATE = {"models.catalog", "models.scan", "models.move", "models.delete", "downloads.create", "downloads.cancel", "downloads.retry", "civitai.download", "models.folders.read", "models.folders.create", "models.metadata.read", "models.metadata.edit"}
 
 
 def now():
@@ -75,7 +75,7 @@ class State:
         return caps
 
     def info(self):
-        return {"bridge_id": "other" if self.scenario == "wrong-id" else "forgegen-bridge", "bridge_version": "1.2.0",
+        return {"bridge_id": "other" if self.scenario == "wrong-id" else "forgegen-bridge", "bridge_version": "1.4.0",
                 "api_version": {"major": 2 if self.scenario == "incompatible" else 1, "minor": 0},
                 "server_id": str(uuid.UUID(int=99)) if self.scenario == "server-changed" else SID,
                 "authentication": "bearer-device-token", "pairing": "administrator-issued-single-use-invitation",
@@ -199,6 +199,15 @@ def handler(state):
             elif short == "models/roots": value = [{"id": "checkpoint-default", "type": "checkpoint"}, {"id": "lora-default", "type": "lora"}]
             elif short == "models/counts": value = [{"root_id": "checkpoint-default", "type": "checkpoint", "count": 24, "recursive": False, "reason_code": None}]
             elif short == "models" and method == "get": capability = "models.catalog"; value = [state.model]
+            elif short == "models/folders" and method == "get":
+                capability = "models.folders.read"
+                value = [{"root_id": "lora-default", "name": "Example", "relative_path": "Example"}]
+            elif short.endswith("/metadata") and method == "get":
+                capability = "models.metadata.read"
+                value = {"model_id": short.split("/")[1], "metadata": {
+                    "display_name": "Synthetic LoRA", "version_name": None, "description": "Synthetic metadata",
+                    "base_model": None, "trigger_words": ["synthetic trigger"],
+                }}
             elif short.startswith("models/") and method == "get": capability = "models.catalog"; value = state.model
             elif short == "extensions" and method == "get":
                 value = [dict(state.extension, id=BID, name="ForgeGen Bridge", protected=True), state.extension]
@@ -219,7 +228,9 @@ def handler(state):
                 if value["status"] == "queued": state.operations[identifier].update(status="running", phase="working", progress=0.5)
                 elif value["status"] == "running": state.operations[identifier].update(status="completed", phase="finished", progress=1.0)
             else:
-                if short.startswith("models/"): capability = "models.scan_selected" if short == "models/scan-selected" else "models.scan" if short.endswith("scan") else "models.move" if short.endswith("move") else "models.delete"
+                if short == "models/folders": capability = "models.folders.create"
+                elif short.endswith("/metadata"): capability = "models.metadata.edit"
+                elif short.startswith("models/"): capability = "models.scan_selected" if short == "models/scan-selected" else "models.scan" if short.endswith("scan") else "models.move" if short.endswith("move") else "models.delete"
                 elif short == "downloads": capability = "downloads.create"
                 elif short == "civitai/downloads": capability = "civitai.download"
                 elif short.startswith("downloads/"): capability = "downloads.retry" if short.endswith("retry") else "downloads.cancel"
@@ -241,7 +252,7 @@ def handler(state):
                         "bytes_done": None, "bytes_total": None, "created_at": now(), "updated_at": now(), "result": None, "error": None,
                         "restart_required": short.startswith("extensions")}
                     if short == "server/restart": state.operations[identifier]["result"] = {"restart_requested": True, "requires_reconnect": True}
-                    if method == "patch": state.extension.update(next_enabled=body["enabled"], restart_required=True)
+                    if capability == "extensions.toggle": state.extension.update(next_enabled=body["enabled"], restart_required=True)
                 value = {"operation_id": identifier, "status_url": "/forgegen/v1/operations/" + identifier}
             feature = state.caps()["features"].get(capability)
             if feature and not all(feature[k] for k in ("supported", "enabled", "authorized")): return self.error(403, feature["reason_code"] or "SCOPE_REQUIRED")

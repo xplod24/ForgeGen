@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.forgegen.ui.components.GalleryKeyDialog
+import com.example.forgegen.ui.components.HomelabCaInstallButton
 import com.example.forgegen.ui.components.LicenseDialog
 import com.example.forgegen.ui.components.RestartForgeDialog
 import com.example.forgegen.ui.components.WhatsNewDialog
@@ -417,7 +418,12 @@ internal fun SettingsUiState.SettingsDialogs() {
         AlertDialog(
             onDismissRequest = { showUrlDialog = false },
             title = { Text("API URL") },
-            text = { OutlinedTextField(value = tempUrl, onValueChange = { tempUrl = it }, modifier = Modifier.fillMaxWidth()) },
+            text = {
+                Column {
+                    OutlinedTextField(value = tempUrl, onValueChange = { tempUrl = it }, modifier = Modifier.fillMaxWidth())
+                    HomelabCaInstallButton(tempUrl)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.saveConfig(config.copy(apiUrl = tempUrl))

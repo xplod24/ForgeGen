@@ -60,6 +60,23 @@ internal fun BridgeModelsView(
                 if (state.fullModels) "Names, metadata and file actions" else "Names and file actions are unavailable",
                 enabled = state.can("models.catalog"),
             ) { open("catalog") }
+            BridgeActionButton(state, "models.folders.create", "Create LoRA folder…") {
+                form(
+                    BridgeForm(
+                        "Create LoRA folder",
+                        "models.folders.create",
+                        "POST",
+                        "models/folders",
+                        fields =
+                            listOf(
+                                rootField(roots, "lora"),
+                                BridgeField("parent", "Parent folder (optional)", optional = true),
+                                BridgeField("name", "New folder name"),
+                            ),
+                        wait = true,
+                    ),
+                )
+            }
             BridgeActionButton(state, "models.scan_selected", "Scan one selected model") {
                 form(BridgeForm(
                     "Scan one selected model", "models.scan_selected", "POST", "models/scan-selected",
@@ -108,6 +125,7 @@ internal fun BridgeModelsView(
                         Text(model.text("type"))
                         BridgeNote(bridgeBytes(model.longValue("size_bytes")))
                         BridgeNote("Root: ${model.text("root_id")}")
+                        model.text("relative_path").takeIf(String::isNotBlank)?.let { BridgeNote(it) }
                         var details by remember { mutableStateOf(false) }
                         TextButton(onClick = { details = !details }) { Text("Metadata & source") }
                         if (details) {
@@ -119,6 +137,71 @@ internal fun BridgeModelsView(
                                     ?.toString()
                                     ?.take(4000) ?: "No source information",
                             )
+                        }
+                        if (details && model.text("type") == "lora" && state.can("models.metadata.read")) {
+                            val path = "models/${BridgeProtocol.id(model.text("id"))}/metadata"
+                            BridgeRemote(controller, state, path) { response ->
+                                val metadata = response.getAsJsonObject("metadata")
+                                metadata.text("display_name").takeIf(String::isNotBlank)?.let { BridgeNote(it) }
+                                metadata.text("description").takeIf(String::isNotBlank)?.let { BridgeNote(it) }
+                                BridgeActionButton(state, "models.metadata.edit", "Edit LoRA metadata…") {
+                                    val triggerWords =
+                                        metadata
+                                            .getAsJsonArray("trigger_words")
+                                            ?.joinToString("\n") { it.asString }
+                                            .orEmpty()
+                                    form(
+                                        BridgeForm(
+                                            "Edit LoRA metadata",
+                                            "models.metadata.edit",
+                                            "PATCH",
+                                            path,
+                                            fields =
+                                                listOf(
+                                                    BridgeField(
+                                                        "display_name",
+                                                        "Display name",
+                                                        metadata.text("display_name"),
+                                                        optional = true,
+                                                        sendIfChanged = true,
+                                                    ),
+                                                    BridgeField(
+                                                        "version_name",
+                                                        "Version name",
+                                                        metadata.text("version_name"),
+                                                        optional = true,
+                                                        sendIfChanged = true,
+                                                    ),
+                                                    BridgeField(
+                                                        "base_model",
+                                                        "Base model",
+                                                        metadata.text("base_model"),
+                                                        optional = true,
+                                                        sendIfChanged = true,
+                                                    ),
+                                                    BridgeField(
+                                                        "description",
+                                                        "Description",
+                                                        metadata.text("description"),
+                                                        optional = true,
+                                                        multiline = true,
+                                                        sendIfChanged = true,
+                                                    ),
+                                                    BridgeField(
+                                                        "trigger_words",
+                                                        "Trigger words, one per line",
+                                                        triggerWords,
+                                                        optional = true,
+                                                        multiline = true,
+                                                        sendIfChanged = true,
+                                                    ),
+                                                ),
+                                            wait = true,
+                                            explanation = "Update the Civitai Helper metadata for this LoRA.",
+                                        ),
+                                    )
+                                }
+                            }
                         }
                         BridgeActionButton(state, "models.move", "Move model…") {
                             form(
@@ -150,7 +233,9 @@ internal fun BridgeModelsView(
                                     waitInQuery = true,
                                     noBody = true,
                                     destructive = true,
-                                    explanation = "Delete ${model.text("name")} from your server. Unload it first if it is still resident.",
+                                    explanation =
+                                        "Delete ${model.text("name")} and its Civitai Helper metadata. " +
+                                            "Unload the model first if it is still resident.",
                                 ),
                             )
                         }
@@ -169,11 +254,11 @@ internal fun BridgeModelsView(
                         "downloads",
                         fields =
                             listOf(
-                                BridgeField("url", "Civitai HTTPS download URL"),
+                                BridgeField("url", "Civitai or Hugging Face model file URL"),
                                 rootField(roots),
                                 BridgeField("name", "File name"),
                                 BridgeField("expected_sha256", "SHA-256 (optional)", optional = true),
-                            ),
+                            ) + folderField(state),
                         wait = true,
                         explanation =
                             "The server downloads this file. For files requiring a provider key, " +
@@ -188,7 +273,9 @@ internal fun BridgeModelsView(
                         "civitai.download",
                         "POST",
                         "civitai/downloads",
-                        fields = listOf(BridgeField("version_id", "Version ID"), BridgeField("file_id", "File ID"), rootField(roots)),
+                        fields =
+                            listOf(BridgeField("version_id", "Version ID"), BridgeField("file_id", "File ID"), rootField(roots)) +
+                                folderField(state) + providerField(state),
                         wait = true,
                     ),
                 )
@@ -274,7 +361,7 @@ internal fun BridgeModelsView(
                                         "POST",
                                         "civitai/downloads",
                                         fixed = body,
-                                        fields = listOf(rootField(roots)),
+                                        fields = listOf(rootField(roots)) + folderField(state) + providerField(state),
                                         wait = true,
                                         explanation = "Download ${file.text(
                                             "name",
@@ -291,3 +378,20 @@ internal fun BridgeModelsView(
             }
     }
 }
+
+private fun folderField(state: BridgeState): List<BridgeField> =
+    if (state.can("models.folders.read")) listOf(BridgeField("folder", "Destination folder (optional)", optional = true)) else emptyList()
+
+private fun providerField(state: BridgeState): List<BridgeField> =
+    if (state.can("models.folders.read")) {
+        listOf(
+            BridgeField(
+                "provider_host",
+                "Civitai site",
+                optional = true,
+                choices = listOf("" to "Server default", "civitai.red" to "civitai.red", "civitai.com" to "civitai.com"),
+            ),
+        )
+    } else {
+        emptyList()
+    }

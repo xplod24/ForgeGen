@@ -100,7 +100,7 @@ internal fun SettingsUiState.serverSettings(
             }
         }
         // Adres serwera Forge; stuknięcie otwiera okno do wpisania nowego.
-        add(SettingsPage.SERVER, "Connection", "server address api url ip host ${config.apiUrl}") {
+        add(SettingsPage.SERVER, "Connection", "server address api url ip host https tls certificate ${config.apiUrl}") {
             TextPreference(title = "Server Address", subtitle = config.apiUrl) { showUrlDialog = true }
         }
         // Zgoda Androida 17 na LAN: ten sam wiersz ustawień i przycisk tonalny co pozostałe akcje połączenia.

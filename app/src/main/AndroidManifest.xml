@@ -38,6 +38,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ForgeGen"
+        android:networkSecurityConfig="@xml/forge_network_security"
         android:usesCleartextTraffic="true"
         >
 

@@ -14,7 +14,7 @@ import java.util.UUID
 class BridgeClientContractTest {
     private fun objectBody(vararg pairs: Pair<String, String>) = JsonObject().apply { pairs.forEach { (k, v) -> addProperty(k, v) } }
 
-    @Test fun all35OpenApiOperationsUseTheDocumentedMethodBodyAndAuthorization() =
+    @Test fun allOpenApiOperationsUseTheDocumentedMethodBodyAndAuthorization() =
         runBlocking {
             BridgeHarness().use { h ->
                 val initial =
@@ -32,7 +32,7 @@ class BridgeClientContractTest {
                         .asJsonArray
                         .map { it.asJsonObject }
                         .sortedBy { if (it.text("method") == "DELETE" && it.text("path").contains("devices/")) 1 else 0 }
-                assertEquals(35, routes.size)
+                assertEquals(39, routes.size)
                 for (route in routes) {
                     val method = route.text("method")
                     var path = route.text("path").removePrefix("/forgegen/v1/")
@@ -54,6 +54,8 @@ class BridgeClientContractTest {
                                     "device_name" to "Contract test phone",
                                 )
                             "WaitRequest" -> JsonObject()
+                            "CreateModelFolder" -> objectBody("root_id" to "lora-default", "name" to "Synthetic folder")
+                            "LoraMetadataPatch" -> objectBody("description" to "New synthetic description")
                             "SelectedScanRequest" -> objectBody("root_id" to "checkpoint-default", "relative_path" to "synthetic.safetensors")
                             "MoveRequest" -> objectBody("root_id" to "checkpoint-default", "name" to "Example XL.safetensors")
                             "DownloadRequest" ->
@@ -80,12 +82,11 @@ class BridgeClientContractTest {
                             else -> null
                         }
                     val query =
-                        if (method == "DELETE" &&
-                            (path.startsWith("models/") || path.startsWith("extensions/"))
-                        ) {
-                            mapOf("wait_for_idle" to "true")
-                        } else {
-                            emptyMap()
+                        when {
+                            method == "GET" && path == "models/folders" -> mapOf("root_id" to "lora-default")
+                            method == "DELETE" && (path.startsWith("models/") || path.startsWith("extensions/")) ->
+                                mapOf("wait_for_idle" to "true")
+                            else -> emptyMap()
                         }
                     val response =
                         try {

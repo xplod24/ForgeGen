@@ -147,8 +147,9 @@ progress and browses the results, at home on the same Wi-Fi or from anywhere thr
   when `models.scan_selected` is enabled; optional Civitai identification additionally needs `civitai.search`.
 - Model counts/catalog/details, scan/move/delete, server downloads and operation history, permitted cancellation
   and explicit transfer retry. Counts-only servers keep names and file actions private.
-- Optional **Civitai search and server-side downloads**: choose the exact version, file and registered destination.
-  Configure the Civitai API key only on the server; the phone neither collects nor stores it.
+- Bridge 1.4.0 lets administrators create LoRA folders and edit Civitai Helper metadata.
+- For server-side downloads, supply an exact Civitai or public Hugging Face file link, or use optional Civitai search
+  to select a version, file and destination. The Civitai API key stays on the server.
 - Extension installation/removal, next-start switches and bulk actions, with protected Bridge/built-in entries.
   Changes require `--enable-insecure-extension-access`, granted scopes and the server's own authorization.
 - Server status, unload/restart and paired-device access management. Confirmations and persistent request keys
@@ -234,6 +235,17 @@ Settings also takes the gallery favorites and the queue), install the new app, i
 Backup & Data > Import Settings), then uninstall the old app. The gallery asks for its key again. From an older
 version, update to 3.5.2-1 first, or export, install `ForgeGen.apk` by hand and import (favorites and the queue need
 3.5.2-1's export).
+
+### Homelab HTTPS
+
+For `https://diffusion.local` or `https://diffusion.home.arpa`, open the connection dialog or
+**Settings > Server > Server Address** and choose **Install Homelab CA**. ForgeGen checks the downloaded
+CA against the homelab fingerprint, saves the file in Downloads and opens Android's security settings.
+Choose **Encryption & credentials > Install a certificate > CA certificate**, select the downloaded
+file, then return to ForgeGen and retry the connection.
+
+Connect to the homelab Wi-Fi or WireGuard before downloading. If the hostname is unavailable,
+ForgeGen can fetch the same verified certificate from the WireGuard gateway at `10.8.0.1`.
 
 ## Building from source
 

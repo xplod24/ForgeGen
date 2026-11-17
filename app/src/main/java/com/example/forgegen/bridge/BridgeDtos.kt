@@ -70,6 +70,10 @@ data class BridgeCivitaiDownloadRequest(
     val fileId: Long? = null,
     @SerializedName("root_id")
     val rootId: String? = null,
+    @SerializedName("folder")
+    val folder: String? = null,
+    @SerializedName("provider_host")
+    val providerHost: String? = null,
 ) {
     override fun toString(): String = "BridgeCivitaiDownloadRequest(redacted)"
 }
@@ -123,6 +127,19 @@ data class BridgeCivitaiVersion(
     override fun toString(): String = "BridgeCivitaiVersion(redacted)"
 }
 
+data class BridgeCreateModelFolder(
+    @SerializedName("wait_for_idle")
+    val waitForIdle: Boolean? = null,
+    @SerializedName("root_id")
+    val rootId: String? = null,
+    @SerializedName("parent")
+    val parent: String? = null,
+    @SerializedName("name")
+    val name: String? = null,
+) {
+    override fun toString(): String = "BridgeCreateModelFolder(redacted)"
+}
+
 data class BridgeDevice(
     @SerializedName("id")
     val id: String? = null,
@@ -149,6 +166,8 @@ data class BridgeDownloadRequest(
     val rootId: String? = null,
     @SerializedName("name")
     val name: String? = null,
+    @SerializedName("folder")
+    val folder: String? = null,
     @SerializedName("expected_sha256")
     val expectedSha256: String? = null,
 ) {
@@ -232,6 +251,47 @@ data class BridgeInstallRequest(
     override fun toString(): String = "BridgeInstallRequest(redacted)"
 }
 
+data class BridgeLoraMetadata(
+    @SerializedName("display_name")
+    val displayName: String? = null,
+    @SerializedName("version_name")
+    val versionName: String? = null,
+    @SerializedName("description")
+    val description: String? = null,
+    @SerializedName("base_model")
+    val baseModel: String? = null,
+    @SerializedName("trigger_words")
+    val triggerWords: List<String>? = null,
+) {
+    override fun toString(): String = "BridgeLoraMetadata(redacted)"
+}
+
+data class BridgeLoraMetadataPatch(
+    @SerializedName("wait_for_idle")
+    val waitForIdle: Boolean? = null,
+    @SerializedName("display_name")
+    val displayName: String? = null,
+    @SerializedName("version_name")
+    val versionName: String? = null,
+    @SerializedName("description")
+    val description: String? = null,
+    @SerializedName("base_model")
+    val baseModel: String? = null,
+    @SerializedName("trigger_words")
+    val triggerWords: List<String>? = null,
+) {
+    override fun toString(): String = "BridgeLoraMetadataPatch(redacted)"
+}
+
+data class BridgeLoraMetadataResponse(
+    @SerializedName("model_id")
+    val modelId: String? = null,
+    @SerializedName("metadata")
+    val metadata: BridgeLoraMetadata? = null,
+) {
+    override fun toString(): String = "BridgeLoraMetadataResponse(redacted)"
+}
+
 data class BridgeModel(
     @SerializedName("id")
     val id: String? = null,
@@ -241,6 +301,8 @@ data class BridgeModel(
     val name: String? = null,
     @SerializedName("root_id")
     val rootId: String? = null,
+    @SerializedName("relative_path")
+    val relativePath: String? = null,
     @SerializedName("size_bytes")
     val sizeBytes: Long? = null,
     @SerializedName("metadata")
@@ -264,6 +326,17 @@ data class BridgeModelCount(
     val reasonCode: String? = null,
 ) {
     override fun toString(): String = "BridgeModelCount(redacted)"
+}
+
+data class BridgeModelFolder(
+    @SerializedName("root_id")
+    val rootId: String? = null,
+    @SerializedName("name")
+    val name: String? = null,
+    @SerializedName("relative_path")
+    val relativePath: String? = null,
+) {
+    override fun toString(): String = "BridgeModelFolder(redacted)"
 }
 
 data class BridgeMoveRequest(
@@ -356,6 +429,19 @@ data class BridgeModelCountPage(
     val total: Long? = null,
 ) {
     override fun toString(): String = "BridgeModelCountPage(redacted)"
+}
+
+data class BridgeModelFolderPage(
+    @SerializedName("items")
+    val items: List<BridgeModelFolder>? = null,
+    @SerializedName("offset")
+    val offset: Long? = null,
+    @SerializedName("limit")
+    val limit: Long? = null,
+    @SerializedName("total")
+    val total: Long? = null,
+) {
+    override fun toString(): String = "BridgeModelFolderPage(redacted)"
 }
 
 data class BridgeModelPage(

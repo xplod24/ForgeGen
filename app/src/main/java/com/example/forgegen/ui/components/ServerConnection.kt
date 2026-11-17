@@ -158,6 +158,7 @@ fun ServerConnectionDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                 )
+                HomelabCaInstallButton(address)
                 if (config.serverProfiles.isNotEmpty()) {
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
                         config.serverProfiles.forEach { profile ->

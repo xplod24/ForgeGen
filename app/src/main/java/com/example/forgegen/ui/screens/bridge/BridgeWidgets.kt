@@ -132,6 +132,7 @@ internal data class BridgeField(
     val optional: Boolean = false,
     val choices: List<Pair<String, String>> = emptyList(),
     val multiline: Boolean = false,
+    val sendIfChanged: Boolean = false,
 )
 
 internal data class BridgeForm(
@@ -186,7 +187,14 @@ internal fun BridgeActionDialog(
                         value = values[field.key].orEmpty(),
                         onValueChange = {
                             values[field.key] =
-                                it.take(if (field.key == "url") 8192 else 2048)
+                                it.take(
+                                    when (field.key) {
+                                        "url" -> 8192
+                                        "description" -> 20_000
+                                        "trigger_words" -> 38_400
+                                        else -> 2048
+                                    },
+                                )
                         },
                         label = { Text(field.label) },
                         singleLine = !field.multiline,
@@ -225,6 +233,7 @@ internal fun BridgeActionDialog(
                 val body = form.fixed.deepCopy()
                 form.fields.forEach { field ->
                     val value = values[field.key].orEmpty().trim()
+                    if (field.sendIfChanged && value == field.initial.trim()) return@forEach
                     require(field.optional || value.isNotBlank()) { "Complete all required fields." }
                     when {
                         field.key in setOf("version_id", "file_id") -> {
@@ -235,7 +244,21 @@ internal fun BridgeActionDialog(
                             require(value.matches(Regex("[A-Fa-f0-9]{64}"))) { "SHA-256 must contain 64 hexadecimal digits." }
                             body.addProperty(field.key, value)
                         }
-                        value.isNotEmpty() -> body.addProperty(field.key, value)
+                        field.key == "trigger_words" -> {
+                            val words =
+                                value
+                                    .lineSequence()
+                                    .map(String::trim)
+                                    .filter(String::isNotEmpty)
+                                    .toList()
+                            require(words.size <= 150 && words.all { it.length <= 256 }) {
+                                "Use at most 150 trigger words of up to 256 characters."
+                            }
+                            val array = com.google.gson.JsonArray()
+                            words.forEach { array.add(it) }
+                            body.add(field.key, array)
+                        }
+                        value.isNotEmpty() || field.sendIfChanged -> body.addProperty(field.key, value)
                     }
                 }
                 form.switches.forEach { (key, _) -> body.addProperty(key, switches[key] == true) }
