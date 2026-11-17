@@ -1,3 +1,9 @@
+## 3.11.1
+**Bugfix** · trust the homelab CA directly in ForgeGen
+
+### Fixed
+- Connect to `diffusion.local` and `diffusion.home.arpa` with the verified homelab CA bundled in the app. HTTPS still verifies the certificate chain and server name.
+
 ## 3.11.0
 **Feature** · guided homelab HTTPS setup and expanded Bridge model tools
 

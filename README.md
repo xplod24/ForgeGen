@@ -238,9 +238,10 @@ version, update to 3.5.2-1 first, or export, install `ForgeGen.apk` by hand and 
 
 ### Homelab HTTPS
 
-For `https://diffusion.local` or `https://diffusion.home.arpa`, open the connection dialog or
-**Settings > Server > Server Address** and choose **Install Homelab CA**. ForgeGen checks the downloaded
-CA against the homelab fingerprint, saves the file in Downloads and opens Android's security settings.
+ForgeGen includes the public homelab CA for `https://diffusion.local` and `https://diffusion.home.arpa`.
+To add the same CA to Android's user store, open the connection dialog or
+**Settings > Server > Server Address** and choose **Install Homelab CA**. ForgeGen verifies the
+downloaded CA, saves it in Downloads and opens Android's security settings.
 Choose **Encryption & credentials > Install a certificate > CA certificate**, select the downloaded
 file, then return to ForgeGen and retry the connection.
 

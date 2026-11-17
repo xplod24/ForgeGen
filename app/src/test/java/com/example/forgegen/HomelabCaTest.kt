@@ -9,12 +9,55 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
+import org.w3c.dom.Element
+import java.io.File
 import java.net.InetSocketAddress
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicInteger
+import javax.xml.parsers.DocumentBuilderFactory
 
 class HomelabCaTest {
     private val fixture = "abc".toByteArray()
     private val fixtureSha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+    @Test
+    fun bundledRootIsTheCaAcceptedByTheInstaller() {
+        val bytes = File("src/main/res/raw/forgegen_homelab_ca.der").readBytes()
+        val ca = CertificateFactory.getInstance("X.509").generateCertificate(bytes.inputStream()) as X509Certificate
+        assertEquals(ca.subjectX500Principal, ca.issuerX500Principal)
+        org.junit.Assert.assertTrue(ca.basicConstraints >= 0)
+        ca.verify(ca.publicKey)
+
+        withServer({ it.sendFixture(bytes) }) { origin ->
+            assertArrayEquals(bytes, HomelabCa.download(origin, origin))
+        }
+    }
+
+    @Test
+    fun bundledRootIsOnlyTrustedForTheTwoExactHomelabNames() {
+        val xml =
+            DocumentBuilderFactory
+                .newInstance()
+                .newDocumentBuilder()
+                .parse(File("src/main/res/xml/forge_network_security.xml"))
+        val anchors = xml.getElementsByTagName("certificates")
+        val bundled =
+            (0 until anchors.length)
+                .map { anchors.item(it) as Element }
+                .single { it.getAttribute("src") == "@raw/forgegen_homelab_ca" }
+        val hostConfig = bundled.parentNode.parentNode as Element
+        assertEquals("domain-config", hostConfig.tagName)
+
+        val domains = hostConfig.getElementsByTagName("domain")
+        val names =
+            (0 until domains.length).map { index ->
+                val domain = domains.item(index) as Element
+                assertEquals("false", domain.getAttribute("includeSubdomains"))
+                domain.textContent.trim()
+            }
+        assertEquals(listOf("diffusion.local", "diffusion.home.arpa"), names)
+    }
 
     @Test
     fun knownHttpsHostsUseOnlyTheFixedPublicCertificatePath() {
